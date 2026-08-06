@@ -113,6 +113,20 @@
   }
 }
 
+/*
+ * iOS Safari auto-zooms the page when a focused form control renders under
+ * 16px, leaving the layout zoomed with stray scroll behind modals like the
+ * ⌘K palette. A 16px floor on touch devices prevents the zoom entirely.
+ * Deliberately un-layered so it outranks text-* utilities in the cascade.
+ */
+@media (hover: none) and (pointer: coarse) {
+  input,
+  select,
+  textarea {
+    font-size: max(16px, 1em);
+  }
+}
+
 @layer utilities {
   /* The signature engineering grid + faint vignette, layered behind content. */
   .bg-instrument {

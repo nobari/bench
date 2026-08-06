@@ -100,7 +100,7 @@ function CommandMenu({
           <Search size={16} className="text-faint" />
           <Command.Input
             autoFocus
-            placeholder="Search 9 tools — try “base64”, “gif”, “json”…"
+            placeholder={`Search ${TOOLS.length} tools — try “base64”, “gif”, “json”…`}
             className="h-14 flex-1 bg-transparent font-mono text-sm text-ink outline-none placeholder:text-faint"
           />
           <kbd className="readout rounded border border-edge px-1.5 py-0.5">
