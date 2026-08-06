@@ -13,6 +13,7 @@ export type QrKind =
   | "geo"
   | "contact"
   | "event"
+  | "product"
   | "text";
 
 export interface QrField {
@@ -279,4 +280,30 @@ export function classifyQr(input: string): QrClassified {
   }
 
   return { kind: "text", label: "Plain text", fields: [] };
+}
+
+/**
+ * Classify any scanned symbol given its decoded text and ZXing symbology
+ * group (e.g. "EANUPC" for EAN/UPC retail codes, "QRCode" for QR family).
+ * Retail barcodes are product numbers, not text payloads — ISBNs get a
+ * lookup link; everything else falls through to the payload classifier.
+ */
+export function classifyScan(text: string, symbology?: string): QrClassified {
+  if (symbology === "EANUPC") {
+    const digits = text.replace(/\D/g, "");
+    if (/^97[89]\d{10}$/.test(digits)) {
+      return {
+        kind: "product",
+        label: "ISBN",
+        fields: [{ label: "ISBN-13", value: digits }],
+        href: `https://openlibrary.org/isbn/${digits}`,
+      };
+    }
+    return {
+      kind: "product",
+      label: "Product code",
+      fields: [{ label: "Number", value: text }],
+    };
+  }
+  return classifyQr(text);
 }
