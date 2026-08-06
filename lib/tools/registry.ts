@@ -19,6 +19,7 @@ import {
   Pipette,
   QrCode,
   Replace,
+  ScanQrCode,
   Ruler,
   Shuffle,
   Signature,
@@ -359,6 +360,39 @@ export const TOOLS: ToolDef[] = [
     aliases: ["png to jpg", "convert to webp", "image format converter"],
   },
   {
+    slug: "qr-scanner",
+    category: "image",
+    title: "QR Code Scanner",
+    tagline: "Scan a QR code with your camera or read one from an image",
+    description:
+      "Scan QR codes with your webcam or decode them from a screenshot or photo — entirely in your browser. Reads URLs, Wi-Fi credentials, contact cards and more; nothing is uploaded.",
+    keywords: [
+      "qr code scanner",
+      "qr code reader",
+      "scan qr code",
+      "read qr code from image",
+      "decode qr code",
+      "qr scanner online",
+      "wifi qr code reader",
+      "qr code reader from screenshot",
+    ],
+    icon: ScanQrCode,
+    status: "stable",
+    widget: "qr-scanner",
+    howItWorks:
+      "Point your camera at a QR code, or drop in a screenshot or photo — you can also paste an image straight from the clipboard. Every frame is decoded locally by a JavaScript QR decoder, so no image or video ever leaves your device. The decoded payload is classified automatically: URLs become clickable links, Wi-Fi codes reveal the network name and password, and vCard, MECARD, calendar, email, phone, SMS and geo payloads are broken into labeled fields you can copy. One click turns any result back into a new QR code with the generator.",
+    faq: [
+      { q: "Is my camera feed or image uploaded?", a: "No. Decoding runs entirely in your browser using JavaScript — camera frames and images are processed locally and never sent to a server." },
+      { q: "Why doesn't the camera start?", a: "Your browser asks for camera permission the first time; if it was denied, re-enable it in the site settings for this page. Camera access also requires a secure HTTPS connection. You can always scan from a screenshot instead." },
+      { q: "Which QR contents are recognized?", a: "URLs, Wi-Fi credentials (WIFI:), contact cards (vCard and MECARD), calendar events, email (mailto: and MATMSG), phone numbers, SMS, geo coordinates and plain text." },
+      { q: "Can I read a QR code from a screenshot?", a: "Yes — click Image to browse, drag and drop a file onto the tool, or paste an image from your clipboard with Ctrl/Cmd+V." },
+    ],
+    examples: [],
+    related: ["generators/qr-code", "image/converter"],
+    aliases: ["qr reader", "read qr code", "decode qr", "qr code decoder", "wifi qr reader"],
+    added: "2026-08-06",
+  },
+  {
     slug: "hash",
     category: "crypto",
     title: "Hash Generator",
@@ -499,7 +533,7 @@ export const TOOLS: ToolDef[] = [
     examples: [
       { label: "QR for a URL", query: "i=https%3A%2F%2Fbench.tools&ec=M" },
     ],
-    related: ["generators/uuid", "text/url-encode"],
+    related: ["image/qr-scanner", "generators/uuid", "text/url-encode"],
     aliases: ["qr generator", "make qr code"],
   },
 

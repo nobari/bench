@@ -51,6 +51,7 @@ export type WidgetKey =
   | "image-converter"
   | "diff-checker"
   | "qr-code"
+  | "qr-scanner"
   | "date-converter"
   | "day-calculator"
   | "password-generator"

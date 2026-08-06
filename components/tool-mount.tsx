@@ -56,6 +56,10 @@ const WIDGETS: Record<WidgetKey, React.ComponentType<Record<string, unknown>>> =
     () => import("@/components/widgets/qr-code").then((m) => m.QrCodeWidget),
     { ssr: false, loading: Skeleton },
   ),
+  "qr-scanner": dynamic(
+    () => import("@/components/widgets/qr-scanner").then((m) => m.QrScannerWidget),
+    { ssr: false, loading: Skeleton },
+  ),
   "date-converter": dynamic(
     () => import("@/components/widgets/date-converter").then((m) => m.DateConverterWidget),
     { ssr: false, loading: Skeleton },
