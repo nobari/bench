@@ -60,6 +60,10 @@ const WIDGETS: Record<WidgetKey, React.ComponentType<Record<string, unknown>>> =
     () => import("@/components/widgets/qr-scanner").then((m) => m.QrScannerWidget),
     { ssr: false, loading: Skeleton },
   ),
+  "comic-reader": dynamic(
+    () => import("@/components/widgets/comic-reader").then((m) => m.ComicReaderWidget),
+    { ssr: false, loading: Skeleton },
+  ),
   "date-converter": dynamic(
     () => import("@/components/widgets/date-converter").then((m) => m.DateConverterWidget),
     { ssr: false, loading: Skeleton },

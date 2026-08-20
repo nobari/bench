@@ -52,6 +52,7 @@ export type WidgetKey =
   | "diff-checker"
   | "qr-code"
   | "qr-scanner"
+  | "comic-reader"
   | "date-converter"
   | "day-calculator"
   | "password-generator"

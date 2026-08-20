@@ -37,7 +37,7 @@ yarn-error.log*
 # vercel
 .vercel
 
-# vendored binaries copied on postinstall (scripts/copy-zxing-wasm.mjs)
+# vendored binaries copied on postinstall (scripts/copy-vendor.mjs)
 /public/vendor/
 
 # typescript
