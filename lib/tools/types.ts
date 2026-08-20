@@ -54,6 +54,7 @@ export type WidgetKey =
   | "qr-code"
   | "qr-scanner"
   | "comic-reader"
+  | "tgs-studio"
   | "text-compress"
   | "archive-extract"
   | "archive-create"
