@@ -219,24 +219,34 @@ export function TgsStudioWidget() {
 
   /* ------------------------------------------------------------ exports */
 
+  /**
+   * Offscreen player drawing straight into a 2d context. `container` must be
+   * OMITTED: the canvas renderer then sizes itself from the canvas element,
+   * while a detached container measures 0×0 and renders nothing. The type
+   * declarations wrongly require `container`, hence the cast. `dpr: 1` keeps
+   * the output at exact pixel size on high-DPI screens.
+   */
+  const offscreenPlayer = (data: LottieJson, ctx: CanvasRenderingContext2D): AnimationItem =>
+    lottie.loadAnimation({
+      renderer: "canvas",
+      loop: false,
+      autoplay: false,
+      animationData: structuredClone(data),
+      rendererSettings: {
+        context: ctx,
+        clearCanvas: true,
+        preserveAspectRatio: "xMidYMid meet",
+        dpr: 1,
+      },
+    } as unknown as Parameters<typeof lottie.loadAnimation>[0]);
+
   /** Render one frame onto a fresh canvas at the given width. */
   const renderFrame = (frame: number, width: number): { canvas: HTMLCanvasElement; done: () => void } => {
     if (!anim || !info) throw new Error("nothing loaded");
     const canvas = document.createElement("canvas");
     canvas.width = width;
     canvas.height = Math.max(1, Math.round((width * info.height) / info.width));
-    const instance = lottie.loadAnimation<"canvas">({
-      container: document.createElement("div"),
-      renderer: "canvas",
-      loop: false,
-      autoplay: false,
-      animationData: structuredClone(anim),
-      rendererSettings: {
-        context: canvas.getContext("2d")!,
-        clearCanvas: true,
-        preserveAspectRatio: "xMidYMid meet",
-      },
-    });
+    const instance = offscreenPlayer(anim, canvas.getContext("2d")!);
     instance.goToAndStop(frame, true);
     return {
       canvas,
@@ -301,18 +311,7 @@ export function TgsStudioWidget() {
       const ctx = compose.getContext("2d")!;
       const frames: ArrayBuffer[] = [];
       // Drive a hidden instance frame by frame on its own canvas.
-      const off = lottie.loadAnimation<"canvas">({
-        container: document.createElement("div"),
-        renderer: "canvas",
-        loop: false,
-        autoplay: false,
-        animationData: structuredClone(anim),
-        rendererSettings: {
-          context: canvas.getContext("2d")!,
-          clearCanvas: true,
-          preserveAspectRatio: "xMidYMid meet",
-        },
-      });
+      const off = offscreenPlayer(anim, canvas.getContext("2d")!);
       for (let i = 0; i < total; i++) {
         off.goToAndStop(i * step, true);
         ctx.fillStyle = "#ffffff"; // GIF has no real alpha — composite on white
