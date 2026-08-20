@@ -64,6 +64,18 @@ const WIDGETS: Record<WidgetKey, React.ComponentType<Record<string, unknown>>> =
     () => import("@/components/widgets/comic-reader").then((m) => m.ComicReaderWidget),
     { ssr: false, loading: Skeleton },
   ),
+  "text-compress": dynamic(
+    () => import("@/components/widgets/text-compress").then((m) => m.TextCompressWidget),
+    { ssr: false, loading: Skeleton },
+  ),
+  "archive-extract": dynamic(
+    () => import("@/components/widgets/archive-tool").then((m) => m.ArchiveExtractWidget),
+    { ssr: false, loading: Skeleton },
+  ),
+  "archive-create": dynamic(
+    () => import("@/components/widgets/archive-tool").then((m) => m.ArchiveCreateWidget),
+    { ssr: false, loading: Skeleton },
+  ),
   "date-converter": dynamic(
     () => import("@/components/widgets/date-converter").then((m) => m.DateConverterWidget),
     { ssr: false, loading: Skeleton },

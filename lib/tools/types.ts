@@ -10,6 +10,7 @@ export type CategorySlug =
   | "time"
   | "color"
   | "math"
+  | "files"
   | "web";
 
 export interface Category {
@@ -53,6 +54,9 @@ export type WidgetKey =
   | "qr-code"
   | "qr-scanner"
   | "comic-reader"
+  | "text-compress"
+  | "archive-extract"
+  | "archive-create"
   | "date-converter"
   | "day-calculator"
   | "password-generator"

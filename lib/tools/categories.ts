@@ -8,6 +8,7 @@ import {
   Palette,
   Globe,
   Calculator,
+  Archive,
 } from "lucide-react";
 import type { Category, CategorySlug } from "./types";
 
@@ -39,6 +40,15 @@ export const CATEGORIES: Category[] = [
       "Turn image sequences into optimized GIFs, convert between formats and resize — all processed in your browser with no uploads.",
     icon: ImageIcon,
     accentVar: "--cat-image",
+  },
+  {
+    slug: "files",
+    name: "Files & Archives",
+    tagline: "Pack, unpack and read archives",
+    description:
+      "Create ZIP and TAR archives, extract ZIP, RAR, 7z and TAR files, and read comic book archives — all unpacked locally in your browser with WebAssembly, no uploads.",
+    icon: Archive,
+    accentVar: "--cat-files",
   },
   {
     slug: "crypto",

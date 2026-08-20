@@ -51,6 +51,7 @@
   --cat-color: #ff8a5c;
   --cat-math: #e7c84a;
   --cat-web: #5ce08a;
+  --cat-files: #48c8f2;
 
   /* Default page accent (overridden on category/tool pages). */
   --accent: var(--color-signal);
