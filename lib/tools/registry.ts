@@ -726,7 +726,7 @@ export const TOOLS: ToolDef[] = [
       { q: "Is the content sent anywhere?", a: "No. The QR code is rendered locally in your browser." },
     ],
     examples: [
-      { label: "QR for a URL", query: "i=https%3A%2F%2Fbench.tools&ec=M" },
+      { label: "QR for a URL", query: "i=https%3A%2F%2Fbench.bozmoz.com&ec=M" },
     ],
     related: ["image/qr-scanner", "generators/uuid", "text/url-encode"],
     aliases: ["qr generator", "make qr code"],
@@ -1148,7 +1148,7 @@ export const TOOLS: ToolDef[] = [
     short: "URL shortener",
     tagline: "Turn a URL of up to 10,000 characters into a short link — best-effort, made for handing off, not forever",
     description:
-      "Shorten very long URLs (up to 10,000 characters) into a short bench.tools link. Links are stored on Vercel's free tier and cleared oldest-and-largest first when space runs out — ideal for sharing a huge URL briefly, not for permanent references.",
+      "Shorten very long URLs (up to 10,000 characters) into a short bench.bozmoz.com link. Links are stored on Vercel's free tier and cleared oldest-and-largest first when space runs out — ideal for sharing a huge URL briefly, not for permanent references.",
     keywords: [
       "url shortener",
       "shorten long url",
@@ -1175,7 +1175,7 @@ export const TOOLS: ToolDef[] = [
       { q: "Do the Share buttons use it?", a: "Yes. When a tool's share link is longer than 2,000 characters, Share copies a short link instead of the full URL (shift-click to copy the full URL). Short links are best-effort, so the full URL — which still carries the entire state — remains the durable form." },
     ],
     examples: [
-      { label: "Shorten a Bench deep link", query: "i=https%3A%2F%2Fbench.tools%2Ftext%2Ftransform%3Ft%3Dbase64-encode%26i%3DHello%252C%2Bworld" },
+      { label: "Shorten a Bench deep link", query: "i=https%3A%2F%2Fbench.bozmoz.com%2Ftext%2Ftransform%3Ft%3Dbase64-encode%26i%3DHello%252C%2Bworld" },
     ],
     related: ["generators/qr-code", "text/url-encode", "text/gzip"],
     aliases: ["link shortener", "shorten link", "short url", "tinyurl", "bitly alternative"],

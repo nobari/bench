@@ -48,7 +48,7 @@ function textToDataUrl(text: string, color: string): string {
 export function QrCodeWidget() {
   const [content, setContent] = useQueryState(
     "i",
-    parseAsString.withDefault("https://bench.tools").withOptions({ history: "replace", throttleMs: 300 }),
+    parseAsString.withDefault("https://bench.bozmoz.com").withOptions({ history: "replace", throttleMs: 300 }),
   );
   const [ec, setEc] = useQueryState(
     "ec",

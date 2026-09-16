@@ -1,18 +1,21 @@
 <div align="center">
 
-![Bench — a precision toolkit for the web](docs/banner.svg)
+<a href="https://bench.bozmoz.com">![Bench — everyday tools for text, data, images and the web](docs/banner.svg)</a>
 
 <p>
-  <a href="#tools"><img alt="37 tools" src="https://img.shields.io/badge/tools-37-c8f135?style=flat-square&labelColor=08090a"></a>
-  <a href="https://nextjs.org"><img alt="Next.js 16" src="https://img.shields.io/badge/Next.js-16-08090a?style=flat-square&logo=nextdotjs&logoColor=white&labelColor=08090a"></a>
-  <a href="https://react.dev"><img alt="React 19" src="https://img.shields.io/badge/React-19-149eca?style=flat-square&logo=react&logoColor=white&labelColor=08090a"></a>
-  <a href="https://www.typescriptlang.org"><img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-5-3178c6?style=flat-square&logo=typescript&logoColor=white&labelColor=08090a"></a>
-  <a href="https://tailwindcss.com"><img alt="Tailwind CSS 4" src="https://img.shields.io/badge/Tailwind-4-38bdf8?style=flat-square&logo=tailwindcss&logoColor=white&labelColor=08090a"></a>
-  <a href="#license"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-8b958d?style=flat-square&labelColor=08090a"></a>
+  <a href="https://bench.bozmoz.com"><img alt="bench.bozmoz.com" src="https://img.shields.io/badge/live-bench.bozmoz.com-5b8a3c?style=flat-square&labelColor=1e2419"></a>
+  <a href="#tools"><img alt="37 tools" src="https://img.shields.io/badge/tools-37-5b8a3c?style=flat-square&labelColor=1e2419"></a>
+  <a href="https://nextjs.org"><img alt="Next.js 16" src="https://img.shields.io/badge/Next.js-16-1e2419?style=flat-square&logo=nextdotjs&logoColor=white&labelColor=1e2419"></a>
+  <a href="https://react.dev"><img alt="React 19" src="https://img.shields.io/badge/React-19-149eca?style=flat-square&logo=react&logoColor=white&labelColor=1e2419"></a>
+  <a href="https://www.typescriptlang.org"><img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-5-3178c6?style=flat-square&logo=typescript&logoColor=white&labelColor=1e2419"></a>
+  <a href="https://tailwindcss.com"><img alt="Tailwind CSS 4" src="https://img.shields.io/badge/Tailwind-4-38bdf8?style=flat-square&logo=tailwindcss&logoColor=white&labelColor=1e2419"></a>
+  <a href="#license"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-8b958d?style=flat-square&labelColor=1e2419"></a>
 </p>
 
 **A growing collection of fast, private developer utilities — every tool runs 100% in your browser.**<br/>
 No uploads. No accounts. No rate limits. No tracking.
+<br/>
+**Live at [bench.bozmoz.com](https://bench.bozmoz.com)**
 
 </div>
 
@@ -111,7 +114,7 @@ Copy `.env.example` to `.env.local`. All are optional — the app runs fully wit
 
 | Variable | Purpose |
 | --- | --- |
-| `NEXT_PUBLIC_SITE_URL` | Canonical URL for metadata/sitemap/OG (auto-derived on Vercel). |
+| `NEXT_PUBLIC_SITE_URL` | Overrides the canonical URL for metadata/sitemap/OG. Production defaults to `https://bench.bozmoz.com`; previews use their own host. |
 | `GITHUB_REPO` | `owner/repo` that receives "Suggest a tool" issues. |
 | `GITHUB_TOKEN` | Fine-grained PAT with **Issues: write**. Without it, the suggest form falls back to opening a prefilled GitHub issue. |
 

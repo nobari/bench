@@ -5,6 +5,8 @@
 
 export const SITE = {
   name: "Bench",
+  /** Canonical production URL. */
+  url: "https://bench.bozmoz.com",
   /** Used in <title> templates and wordmark. */
   wordmark: "Bench",
   tagline: "Everyday tools for text, data, images and the web",
@@ -26,14 +28,14 @@ export const SITE = {
 
 /**
  * Resolve the canonical base URL across environments.
- * Priority: explicit env → Vercel production domain → Vercel preview → localhost.
+ * Priority: explicit env → production domain (SITE.url) → Vercel preview → localhost.
  */
 export function getBaseUrl(): string {
   if (process.env.NEXT_PUBLIC_SITE_URL) {
     return stripTrailingSlash(process.env.NEXT_PUBLIC_SITE_URL);
   }
-  if (process.env.VERCEL_PROJECT_PRODUCTION_URL) {
-    return `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`;
+  if (process.env.VERCEL_ENV === "production") {
+    return SITE.url;
   }
   if (process.env.VERCEL_URL) {
     return `https://${process.env.VERCEL_URL}`;
