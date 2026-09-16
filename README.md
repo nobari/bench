@@ -23,7 +23,7 @@ Bench is the kind of small tools you reach for a dozen times a day — encode so
 ## Highlights
 
 - 🔒 **Private by default** — tools execute entirely in the browser (Web Workers / WASM where needed). Your data is never uploaded, logged, or tracked.
-- 🔗 **Shareable by URL** — inputs and settings live in the address bar (or a compressed hash for large payloads), so any result is one copy-paste away.
+- 🔗 **Shareable by URL** — inputs and settings live in the address bar (or a compressed hash for large payloads), so any result is one copy-paste away. Share links longer than 2,000 characters are shortened automatically.
 - ⌘ **Minimum-action access** — a global **⌘K** command palette searches and jumps to any tool from anywhere.
 - 🔎 **SEO / GEO / LLM-ready** — static generation, per-tool metadata, JSON-LD (`SoftwareApplication`, `BreadcrumbList`, `FAQPage`), `sitemap.xml`, `robots.txt`, and machine-readable [`/llms.txt`](https://llmstxt.org) + `/llms-full.txt`.
 - 🧩 **Registry-driven** — one typed array generates routes, navigation, command palette, sitemap, OG images, and AI-discovery files.

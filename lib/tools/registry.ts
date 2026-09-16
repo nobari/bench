@@ -1150,6 +1150,7 @@ export const TOOLS: ToolDef[] = [
       { q: "What happens if I shorten the same URL twice?", a: "You get the same short link. The code is derived from a SHA-256 fingerprint of the URL, so repeating a request never creates duplicates." },
       { q: "Why does the redirect use 302?", a: "Because links can expire. A temporary (302) redirect tells browsers and crawlers not to cache the mapping permanently, and the redirect responses are marked noindex." },
       { q: "Can I delete a link?", a: "Not yet. Links are cleared automatically as the store fills. If you need one gone sooner, open an issue on GitHub with the code." },
+      { q: "Do the Share buttons use it?", a: "Yes. When a tool's share link is longer than 2,000 characters, Share copies a short link instead of the full URL (shift-click to copy the full URL). Short links are best-effort, so the full URL — which still carries the entire state — remains the durable form." },
     ],
     examples: [
       { label: "Shorten a Bench deep link", query: "i=https%3A%2F%2Fbench.tools%2Ftext%2Ftransform%3Ft%3Dbase64-encode%26i%3DHello%252C%2Bworld" },

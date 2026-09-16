@@ -31,6 +31,7 @@ import {
   type JsonValue,
 } from "@/lib/tools/json/utils";
 import { cn } from "@/lib/utils";
+import { copyShareLink } from "@/components/share-button";
 
 const SAMPLE = `{
   "name": "Bench",
@@ -145,7 +146,7 @@ export function JsonViewerWidget() {
     const c = compressToEncodedURIComponent(text);
     const url = `${window.location.origin}${window.location.pathname}#doc=${c}`;
     window.history.replaceState(null, "", url);
-    await navigator.clipboard.writeText(url);
+    await copyShareLink(url);
     setShared(true);
     setTimeout(() => setShared(false), 1600);
   };
