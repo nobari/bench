@@ -11,7 +11,7 @@ export const SITE = {
   wordmark: "Bench",
   tagline: "Everyday tools for text, data, images and the web",
   description:
-    "Fast, private utilities for text, JSON, images, files, hashing, time, color, math and the web. Every tool runs in your browser — no uploads, no accounts, no tracking.",
+    "Fast, private utilities for text, JSON, images, files, hashing, time, color, math and the web. Every tool runs in your browser — no uploads, no accounts, no tracking of what you paste.",
   /** GitHub repo used by the “Suggest a tool” server action + footer link. */
   repo: "nobari/bench",
   links: {

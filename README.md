@@ -13,7 +13,7 @@
 </p>
 
 **A growing collection of fast, private developer utilities — every tool runs 100% in your browser.**<br/>
-No uploads. No accounts. No rate limits. No tracking.
+No uploads. No accounts. No rate limits. Only anonymous page-view counts.
 <br/>
 **Live at [bench.bozmoz.com](https://bench.bozmoz.com)**
 
@@ -25,7 +25,7 @@ Bench is the kind of small tools you reach for a dozen times a day — encode so
 
 ## Highlights
 
-- 🔒 **Private by default** — tools execute entirely in the browser (Web Workers / WASM where needed). Your data is never uploaded, logged, or tracked.
+- 🔒 **Private by default** — tools execute entirely in the browser (Web Workers / WASM where needed). Your data is never uploaded or logged; only anonymous page views are counted (no query strings, no ad features).
 - 🔗 **Shareable by URL** — inputs and settings live in the address bar (or a compressed hash for large payloads), so any result is one copy-paste away. Share links longer than 2,000 characters are shortened automatically.
 - ⌘ **Minimum-action access** — a global **⌘K** command palette searches and jumps to any tool from anywhere.
 - 🔎 **SEO / GEO / LLM-ready** — static generation, per-tool metadata, JSON-LD (`SoftwareApplication`, `BreadcrumbList`, `FAQPage`), `sitemap.xml`, `robots.txt`, and machine-readable [`/llms.txt`](https://llmstxt.org) + `/llms-full.txt`.
@@ -115,6 +115,7 @@ Copy `.env.example` to `.env.local`. All are optional — the app runs fully wit
 | Variable | Purpose |
 | --- | --- |
 | `NEXT_PUBLIC_SITE_URL` | Overrides the canonical URL for metadata/sitemap/OG. Production defaults to `https://bench.bozmoz.com`; previews use their own host. |
+| `NEXT_PUBLIC_GA_ID` | Google Analytics 4 measurement ID. Unset = no analytics. Page views are sent without query strings; DNT/GPC browsers are excluded. |
 | `GITHUB_REPO` | `owner/repo` that receives "Suggest a tool" issues. |
 | `GITHUB_TOKEN` | Fine-grained PAT with **Issues: write**. Without it, the suggest form falls back to opening a prefilled GitHub issue. |
 
