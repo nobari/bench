@@ -54,6 +54,7 @@ export type WidgetKey =
   | "timestamp-converter"
   | "color-converter"
   | "image-converter"
+  | "slow-mo"
   | "diff-checker"
   | "jwt"
   | "qr-code"

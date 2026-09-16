@@ -64,6 +64,10 @@ const WIDGETS: Record<WidgetKey, React.ComponentType<Record<string, unknown>>> =
     () => import("@/components/widgets/image-converter").then((m) => m.ImageConverterWidget),
     { ssr: false, loading: Skeleton },
   ),
+  "slow-mo": dynamic(
+    () => import("@/components/widgets/slow-mo").then((m) => m.SlowMoWidget),
+    { ssr: false, loading: Skeleton },
+  ),
   "diff-checker": dynamic(
     () => import("@/components/widgets/diff-checker").then((m) => m.DiffCheckerWidget),
     { ssr: false, loading: Skeleton },
