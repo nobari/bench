@@ -55,6 +55,7 @@ export type WidgetKey =
   | "color-converter"
   | "image-converter"
   | "diff-checker"
+  | "jwt"
   | "qr-code"
   | "qr-scanner"
   | "comic-reader"

@@ -4,7 +4,7 @@
 
 <p>
   <a href="https://bench.bozmoz.com"><img alt="bench.bozmoz.com" src="https://img.shields.io/badge/live-bench.bozmoz.com-5b8a3c?style=flat-square&labelColor=1e2419"></a>
-  <a href="#tools"><img alt="38 tools" src="https://img.shields.io/badge/tools-38-5b8a3c?style=flat-square&labelColor=1e2419"></a>
+  <a href="#tools"><img alt="39 tools" src="https://img.shields.io/badge/tools-39-5b8a3c?style=flat-square&labelColor=1e2419"></a>
   <a href="https://nextjs.org"><img alt="Next.js 16" src="https://img.shields.io/badge/Next.js-16-1e2419?style=flat-square&logo=nextdotjs&logoColor=white&labelColor=1e2419"></a>
   <a href="https://react.dev"><img alt="React 19" src="https://img.shields.io/badge/React-19-149eca?style=flat-square&logo=react&logoColor=white&labelColor=1e2419"></a>
   <a href="https://www.typescriptlang.org"><img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-5-3178c6?style=flat-square&logo=typescript&logoColor=white&labelColor=1e2419"></a>
@@ -34,7 +34,7 @@ Bench is the kind of small tools you reach for a dozen times a day — encode so
 
 ## Tools
 
-> 38 tools across 10 categories — and counting.
+> 39 tools across 10 categories — and counting.
 
 | Category | Tools |
 | --- | --- |
@@ -46,9 +46,9 @@ Bench is the kind of small tools you reach for a dozen times a day — encode so
 | **Time & Date** | Unix Timestamp · Date Converter (12 calendars + timezones) · Day Calculator |
 | **Color & Design** | Color Converter (HEX/RGB/HSL/OKLCH/CMYK · picker · gradients · contrast) |
 | **Math & Units** | Loan & Mortgage Simulator · Number Base Converter · Unit Converter |
-| **Web & Dev** | Diff Checker (line/word/char, side by side, patches) · URL Shortener (server-backed, best-effort) |
+| **Web & Dev** | Diff Checker (line/word/char, side by side, patches) · JWT Decoder, Verifier & Encoder · URL Shortener (server-backed, best-effort) |
 
-Categories that aren't full yet (Regex, JWT, Markdown, …) are scaffolded and ready for tools to drop in.
+Categories that aren't full yet (Regex, Markdown, …) are scaffolded and ready for tools to drop in.
 
 ## Tech stack
 

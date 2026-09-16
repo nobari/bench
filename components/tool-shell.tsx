@@ -103,12 +103,14 @@ export function ToolShell({ tool }: { tool: ToolDef }) {
               <ul className="mt-2 space-y-1">
                 {tool.examples.map((ex) => (
                   <li key={ex.query}>
-                    <Link
+                    {/* A plain anchor: widgets read large inputs from the URL once on mount, so an
+                        example must remount the page rather than soft-navigate within it. */}
+                    <a
                       href={`${base}?${ex.query}`}
                       className="block rounded-[var(--radius-sm)] border border-edge bg-surface px-3 py-2 text-[13px] text-ink transition-colors hover:border-accent"
                     >
                       {ex.label}
-                    </Link>
+                    </a>
                   </li>
                 ))}
               </ul>

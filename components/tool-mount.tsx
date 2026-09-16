@@ -68,6 +68,10 @@ const WIDGETS: Record<WidgetKey, React.ComponentType<Record<string, unknown>>> =
     () => import("@/components/widgets/diff-checker").then((m) => m.DiffCheckerWidget),
     { ssr: false, loading: Skeleton },
   ),
+  jwt: dynamic(
+    () => import("@/components/widgets/jwt").then((m) => m.JwtWidget),
+    { ssr: false, loading: Skeleton },
+  ),
   "qr-code": dynamic(
     () => import("@/components/widgets/qr-code").then((m) => m.QrCodeWidget),
     { ssr: false, loading: Skeleton },
