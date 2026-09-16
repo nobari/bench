@@ -3,6 +3,7 @@ import {
   BookOpen,
   Braces,
   FileCheck,
+  FileText,
   FolderArchive,
   PackageOpen,
   Shrink,
@@ -433,6 +434,47 @@ export const TOOLS: ToolDef[] = [
     added: "2026-08-20",
   },
 
+  {
+    slug: "markdown",
+    category: "text",
+    title: "Markdown Editor & Previewer",
+    short: "Markdown Editor",
+    tagline: "Write Markdown with a live GitHub-flavoured preview, a formatting toolbar, and export to HTML or PDF",
+    description:
+      "A Markdown editor with live preview: GitHub-flavoured tables, task lists, strikethrough and highlighted code, a toolbar with ⌘B/⌘I/⌘K shortcuts, synchronised scrolling, word count, autosaved drafts, and export as .md, standalone .html or PDF via print. Runs in your browser.",
+    keywords: [
+      "markdown editor",
+      "markdown editor online",
+      "markdown previewer",
+      "markdown to html",
+      "markdown live preview",
+      "github flavored markdown editor",
+      "md editor",
+      "markdown table editor",
+      "markdown to pdf",
+      "online markdown viewer",
+    ],
+    icon: FileText,
+    status: "stable",
+    widget: "markdown-editor",
+    howItWorks:
+      "Write in the left pane and the right pane renders as you type, using GitHub-flavoured Markdown: headings with anchor ids, emphasis, links, images, block quotes, ordered, bulleted and task lists, tables with alignment, footnote-free autolinks, and fenced code blocks highlighted for JavaScript, TypeScript, JSON, Python, Go, Rust, Java, C, SQL, Bash, CSS, HTML/XML, YAML, Markdown and diffs. The toolbar wraps or prefixes the current selection — bold, italic, strikethrough, headings, quote, lists, task list, link, image, code, table, rule — and ⌘B, ⌘I, ⌘K and Tab/Shift-Tab work in the editor. Scrolling is synchronised between the panes; an Outline lists the headings and jumps to them. Raw HTML in the source is sanitised before rendering, so pasted documents can't run scripts. The draft is saved in your browser as you type and restored on your next visit; Load sample and Clear are one click. Export the Markdown, the rendered HTML fragment, a standalone .html file with styles, or print to PDF. Share carries the whole document compressed in the link.",
+    faq: [
+      { q: "Which Markdown features are supported?", a: "CommonMark plus GitHub extensions: tables with column alignment, task lists, strikethrough, autolinked URLs, fenced code blocks with language highlighting, and headings that get anchor ids. Raw HTML is allowed but sanitised (no scripts, no event handlers)." },
+      { q: "Where is my document stored?", a: "Only in your browser. The draft is autosaved to local storage on this device and restored when you come back; nothing is uploaded. Clear removes the draft. Share puts the document, compressed, into the link itself." },
+      { q: "How do I get a PDF?", a: "Use Print / PDF — it opens the rendered document in a print view; choose “Save as PDF” in the print dialog. Download .html gives the same styled document as a file." },
+      { q: "Are there keyboard shortcuts?", a: "⌘B / Ctrl+B for bold, ⌘I / Ctrl+I for italic, ⌘K / Ctrl+K to insert a link, Tab and Shift+Tab to indent or outdent the selected lines. Toolbar buttons toggle: applying bold to bold text removes it." },
+      { q: "Can I paste HTML into the source?", a: "Yes, Markdown allows inline HTML and it will render, but it is sanitised first — script tags, inline event handlers and javascript: links are removed, and external links open in a new tab with rel=\"noopener\"." },
+    ],
+    examples: [
+      { label: "A small document", query: "i=%23%20Release%20notes%0A%0A-%20%5Bx%5D%20Ship%20the%20**editor**%0A-%20%5B%20%5D%20Write%20docs%0A%0A%7C%20Area%20%7C%20Status%20%7C%0A%7C%20---%20%7C%20---%20%7C%0A%7C%20Preview%20%7C%20done%20%7C" },
+      { label: "Preview only", query: "v=preview&i=%23%23%20Hello%0A%0ASome%20*Markdown*%20with%20%60code%60%20and%20a%20%5Blink%5D(https%3A%2F%2Fbench.bozmoz.com)." },
+    ],
+    related: ["text/transform", "web/diff", "json/viewer"],
+    aliases: ["md", "markdown preview", "markdown viewer", "readme editor", "markdown to html converter"],
+    added: "2026-09-16",
+  },
+
   /* ============================== JSON & DATA ============================== */
   {
     slug: "viewer",
@@ -573,13 +615,13 @@ export const TOOLS: ToolDef[] = [
     status: "beta",
     widget: "slow-mo",
     howItWorks:
-      "Action cameras and phones record slow motion at 120 or 240 frames per second and save the file to play at 30 fps, so every second of real life takes four or eight seconds on screen — and every real frame is still in the file. This tool reads the clip with your browser's video decoder, then rebuilds it at real speed: choose the factor (120 fps → 4×, 240 fps → 8×) and an output frame rate, and the converter samples the source at exactly even real-time intervals — the same step every frame — so motion stays as smooth as the camera captured it. Naive tools that drop frames unevenly or write variable timestamps are what cause the stutter people notice; here the output is a constant-frame-rate MP4 with precise timestamps. Blend skipped frames averages the frames between samples for natural motion blur. Reduce camera shake tracks the frame-to-frame movement, smooths the camera path over a window you pick, and cancels the difference, zooming about 5% to hide the edges — a translation-only stabiliser that tames handheld jitter (it does not correct rotation or rolling-shutter wobble). Encoding uses hardware H.264 through WebCodecs where the browser offers it; audio is dropped, since a sped-up slow-motion track is never useful. Nothing is uploaded.",
+      "Action cameras and phones record slow motion at 120 or 240 frames per second and save the file to play at 30 fps, so every second of real life takes four or eight seconds on screen — and every real frame is still in the file. This tool reads the clip with your browser's video decoder, then rebuilds it at real speed: choose the factor (120 fps → 4×, 240 fps → 8×) and an output frame rate, and the converter samples the source at exactly even real-time intervals — the same step every frame — so motion stays as smooth as the camera captured it. Naive tools that drop frames unevenly or write variable timestamps are what cause the stutter people notice; here the output is a constant-frame-rate MP4 with precise timestamps. Blend skipped frames averages the frames between samples for natural motion blur. Reduce camera shake tracks the frame-to-frame movement, smooths the camera path over a window you pick, and cancels the difference, zooming about 5% to hide the edges — a translation-only stabiliser that tames handheld jitter (it does not correct rotation or rolling-shutter wobble). Encoding uses hardware H.264 through WebCodecs where the browser offers it, and in Chrome or Edge the MP4 is streamed to a file you choose as it is produced, so clips of any length fit; audio is dropped, since a sped-up slow-motion track is never useful. Nothing is uploaded.",
     faq: [
       { q: "Which speed factor should I use?", a: "Divide the recording frame rate by the file's playback rate. DJI Osmo Action and GoPro slow-mo at 120 fps saved as 30 fps → 4×; 240 fps → 8×; a 60 fps recording shown at 30 fps → 2×. The tool shows the file's playback rate and what the real capture rate works out to for the factor you pick." },
       { q: "Why doesn't this introduce judder?", a: "Because the source is resampled at a perfectly regular interval and written as a constant-frame-rate file. Judder comes from uneven frame selection or variable timestamps; every output frame here is exactly one step apart in real time. Choosing an output rate that divides the real rate evenly (e.g. 240 → 60 keeps every 4th frame) is ideal, and Blend skipped frames adds motion blur if you prefer a filmic look." },
       { q: "What does “Reduce camera shake” do?", a: "It estimates how much each frame moved relative to the previous one, smooths that camera path over the chosen window (light, medium, strong) and shifts frames to cancel the jitter, cropping about 5% so the edges stay filled. It handles handheld translation well; rotation and rolling-shutter distortion are beyond it." },
       { q: "Which formats and browsers work?", a: "MP4, MOV, WebM and MKV inputs with H.264, HEVC (where the OS supports it), VP8, VP9 or AV1 video, in browsers with WebCodecs — current Chrome, Edge, Safari and Firefox. Output is an MP4 with H.264 (or HEVC if H.264 encoding isn't available for the size). If your browser can't decode the clip, the tool says so before you start." },
-      { q: "Is there a file size limit?", a: "The file is processed on your device and the result is assembled in memory, so very long or 4K clips depend on your machine. Choose 1080p or 720p output to speed things up; a few minutes of 4K is fine on a modern laptop." },
+      { q: "Is there a file size limit?", a: "The input is read straight from disk, so a 17 GB clip is fine. In Chrome and Edge the result is streamed to a file you choose while it encodes, so its size is limited only by disk space. Other browsers have to assemble the MP4 in memory, where a single buffer is capped at roughly 2 GB — the tool estimates the output size and warns before starting; pick 1080p or medium quality to fit, or use Chrome/Edge for long 4K clips." },
       { q: "What happens to the audio?", a: "It is removed. Slow-motion clips usually have no usable sound, and speeding audio up 4–8× only produces noise." },
     ],
     examples: [],

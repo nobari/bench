@@ -156,6 +156,11 @@ export function targetBitrate(width: number, height: number, fps: number, qualit
   return Math.round(Math.min(80e6, Math.max(1.5e6, width * height * fps * bpp)));
 }
 
+/** Rough output size in bytes for a given duration at the target bitrate. */
+export function estimateOutputBytes(width: number, height: number, fps: number, quality: "high" | "medium", duration: number): number {
+  return Math.round((targetBitrate(width, height, fps, quality) * duration) / 8);
+}
+
 /** Scale (w, h) so the longest side is at most `max` (0 = keep), keeping even dimensions. */
 export function fitSize(width: number, height: number, max: number): { width: number; height: number } {
   let w = width, h = height;

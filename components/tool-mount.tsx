@@ -96,6 +96,10 @@ const WIDGETS: Record<WidgetKey, React.ComponentType<Record<string, unknown>>> =
     () => import("@/components/widgets/tgs-studio").then((m) => m.TgsStudioWidget),
     { ssr: false, loading: Skeleton },
   ),
+  "markdown-editor": dynamic(
+    () => import("@/components/widgets/markdown-editor").then((m) => m.MarkdownEditorWidget),
+    { ssr: false, loading: Skeleton },
+  ),
   "text-compress": dynamic(
     () => import("@/components/widgets/text-compress").then((m) => m.TextCompressWidget),
     { ssr: false, loading: Skeleton },

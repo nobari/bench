@@ -2,10 +2,29 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, Download, FastForward, Film, Loader2, Square, Upload, X } from "lucide-react";
+import type { StreamTargetChunk } from "mediabunny";
 import { probeVideo, retimeVideo, webCodecsSupported, type RetimeResult, type VideoInfo } from "@/lib/tools/image/retime";
-import { outputFpsChoices } from "@/lib/tools/image/retime-core";
+import { estimateOutputBytes, fitSize, outputFpsChoices } from "@/lib/tools/image/retime-core";
 import { formatBytes } from "@/lib/tools/bytes";
 import { cn } from "@/lib/utils";
+
+/** File System Access API (Chrome/Edge): lets the MP4 stream to disk instead of memory. */
+interface SaveHandle {
+  name: string;
+  createWritable(): Promise<FileSystemWritableFileStream>;
+  getFile(): Promise<File>;
+}
+declare global {
+  interface Window {
+    showSaveFilePicker?: (options: {
+      suggestedName?: string;
+      types?: { description?: string; accept: Record<string, string[]> }[];
+    }) => Promise<SaveHandle>;
+  }
+}
+
+/** Browsers cap a single ArrayBuffer at ~2 GB; stay well under it when assembling in memory. */
+const MEMORY_LIMIT = 1.5e9;
 
 const SPEEDS = [2, 4, 8, 16] as const;
 const PRESETS: { label: string; speed: number; hint: string }[] = [
@@ -57,7 +76,7 @@ export function SlowMoWidget() {
   const [quality, setQuality] = useState<"high" | "medium">("high");
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState<Progress | null>(null);
-  const [result, setResult] = useState<(RetimeResult & { url: string; name: string }) | null>(null);
+  const [result, setResult] = useState<(RetimeResult & { url: string; name: string; bytes: number; savedAs?: string }) | null>(null);
   const [dragging, setDragging] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -101,14 +120,43 @@ export function SlowMoWidget() {
     }
   };
 
+  const outName = file ? `${file.name.replace(/\.[^.]+$/, "")}-normal-speed.mp4` : "video-normal-speed.mp4";
+  const canStream = typeof window !== "undefined" && typeof window.showSaveFilePicker === "function";
+  const outSize = info ? fitSize(info.width, info.height, maxSize) : { width: 0, height: 0 };
+  const estimate = info ? estimateOutputBytes(outSize.width, outSize.height, outputFps, quality, info.duration / speed) : 0;
+
   const convert = async () => {
     if (!file || !info) return;
-    setBusy(true);
     setError(null);
     setResult(null);
+    if (!canStream && estimate > MEMORY_LIMIT) {
+      setError(
+        `The result would be about ${formatBytes(estimate)}, more than this browser can assemble in memory (about 1.5 GB). Use Chrome or Edge, which save straight to disk, or choose a smaller size or lower quality.`,
+      );
+      return;
+    }
+
+    // Pick the destination first (it needs the click), then stream the MP4 to it while encoding.
+    let handle: SaveHandle | null = null;
+    let writable: WritableStream<StreamTargetChunk> | null = null;
+    if (canStream) {
+      try {
+        handle = await window.showSaveFilePicker!({
+          suggestedName: outName,
+          types: [{ description: "MP4 video", accept: { "video/mp4": [".mp4"] } }],
+        });
+        writable = (await handle.createWritable()) as unknown as WritableStream<StreamTargetChunk>;
+      } catch (e) {
+        if (e instanceof DOMException && e.name === "AbortError") return; // dialog dismissed
+        handle = null;
+        writable = null; // fall back to memory
+      }
+    }
+
+    setBusy(true);
     const controller = new AbortController();
     abortRef.current = controller;
-    const started = Date.now();
+    let started: number | null = null; // set on the first progress tick (the lint rule dislikes Date.now() here)
     try {
       const r = await retimeVideo(file, {
         speed,
@@ -118,8 +166,10 @@ export function SlowMoWidget() {
         stabilizeWindow: stabWindow,
         maxSize,
         quality,
+        output: writable ? { writable } : undefined,
         signal: controller.signal,
         onProgress: (p) => {
+          started ??= Date.now();
           const elapsed = (Date.now() - started) / 1000;
           const frac = p.total ? p.done / p.total : 0;
           // The analysis pass (when stabilising) is roughly a third of the work.
@@ -128,10 +178,20 @@ export function SlowMoWidget() {
         },
       });
       if (urlRef.current) URL.revokeObjectURL(urlRef.current);
-      const url = URL.createObjectURL(r.blob);
+      // Streamed output is read back from disk for the preview; the File streams, nothing is loaded into memory.
+      const blob = r.blob ?? (handle ? await handle.getFile() : null);
+      if (!blob) throw new Error("The conversion finished but no output was produced.");
+      const url = URL.createObjectURL(blob);
       urlRef.current = url;
-      setResult({ ...r, url, name: `${file.name.replace(/\.[^.]+$/, "")}-normal-speed.mp4` });
+      setResult({ ...r, url, name: outName, bytes: blob.size, savedAs: handle?.name });
     } catch (e) {
+      if (writable) {
+        try {
+          await writable.abort();
+        } catch {
+          /* already closed */
+        }
+      }
       if (!(e instanceof DOMException && e.name === "AbortError")) setError(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(false);
@@ -347,6 +407,12 @@ export function SlowMoWidget() {
             {info.width > 1920 && maxSize === 0 && (
               <p className="text-[12.5px] text-faint">4K encoding can be slow on some machines — choose 1080p if it drags.</p>
             )}
+            <p className={cn("text-[12.5px]", !canStream && estimate > MEMORY_LIMIT ? "text-danger" : "text-faint")}>
+              ≈ {formatBytes(estimate)} output ·{" "}
+              {canStream
+                ? "saved straight to a file you choose, so even hour-long 4K clips fit"
+                : `assembled in memory — this browser holds about 1.5 GB; Chrome or Edge save to disk instead`}
+            </p>
 
             <div className="flex flex-wrap items-center gap-3">
               {!busy ? (
@@ -387,19 +453,25 @@ export function SlowMoWidget() {
             <span className="readout">Result</span>
             <span className="text-[12.5px] text-muted">
               {result.width}×{result.height} · {result.fps} fps · {result.frames.toLocaleString()} frames · {fmtDuration(result.duration)} ·{" "}
-              {formatBytes(result.blob.size)} · {result.codec === "avc" ? "H.264" : "H.265"} MP4
+              {formatBytes(result.bytes)} · {result.codec === "avc" ? "H.264" : "H.265"} MP4
             </span>
             <div className="ml-auto flex items-center gap-2">
               <button onClick={() => setResult(null)} className={GHOST}>
                 Adjust & redo
               </button>
-              <a
-                href={result.url}
-                download={result.name}
-                className="inline-flex h-8 items-center gap-1.5 rounded-[var(--radius-sm)] bg-accent px-3 text-[13px] font-medium text-on-accent hover:bg-[var(--color-accent-hover)]"
-              >
-                <Download size={14} /> Download
-              </a>
+              {result.savedAs ? (
+                <span className="inline-flex h-8 items-center gap-1.5 rounded-[var(--radius-sm)] border border-positive/50 px-3 text-[13px] text-positive">
+                  <Download size={14} /> Saved as {result.savedAs}
+                </span>
+              ) : (
+                <a
+                  href={result.url}
+                  download={result.name}
+                  className="inline-flex h-8 items-center gap-1.5 rounded-[var(--radius-sm)] bg-accent px-3 text-[13px] font-medium text-on-accent hover:bg-[var(--color-accent-hover)]"
+                >
+                  <Download size={14} /> Download
+                </a>
+              )}
             </div>
           </div>
           <video src={result.url} controls playsInline className="max-h-[480px] w-full bg-black" />

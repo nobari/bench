@@ -63,6 +63,7 @@ export type WidgetKey =
   | "comic-reader"
   | "tgs-studio"
   | "text-compress"
+  | "markdown-editor"
   | "archive-extract"
   | "archive-create"
   | "date-converter"

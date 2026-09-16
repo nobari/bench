@@ -15,9 +15,11 @@ import {
   Input,
   Mp4OutputFormat,
   Output,
+  StreamTarget,
   VideoSampleSink,
   canEncodeVideo,
   type Rotation,
+  type StreamTargetChunk,
   type VideoCodec,
   type VideoSample,
 } from "mediabunny";
@@ -81,12 +83,20 @@ export interface RetimeOptions {
   /** Longest output side (0 keeps the source size). */
   maxSize: number;
   quality: "high" | "medium";
+  /**
+   * Where the MP4 goes. A writable stream (e.g. a FileSystemWritableFileStream
+   * from showSaveFilePicker) is written to as encoding proceeds, so output
+   * size is bounded by disk, not memory. Without it the file is assembled in
+   * memory — browsers cap a single ArrayBuffer at about 2 GB.
+   */
+  output?: { writable: WritableStream<StreamTargetChunk> };
   onProgress?: (p: { phase: "analyse" | "render" | "finalize"; done: number; total: number }) => void;
   signal?: AbortSignal;
 }
 
 export interface RetimeResult {
-  blob: Blob;
+  /** The file when assembled in memory; null when it was streamed to `output`. */
+  blob: Blob | null;
   width: number;
   height: number;
   fps: number;
@@ -217,8 +227,10 @@ export async function retimeVideo(file: File, opts: RetimeOptions): Promise<Reti
     }
 
     /* ---- pass 2: render + encode ---- */
-    const target = new BufferTarget();
-    const output = new Output({ format: new Mp4OutputFormat({ fastStart: "in-memory" }), target });
+    // No in-memory fast start: it would hold every sample until the end. The moov box is
+    // written last with positioned writes, which both targets support.
+    const target = opts.output ? new StreamTarget(opts.output.writable, { chunked: true }) : new BufferTarget();
+    const output = new Output({ format: new Mp4OutputFormat({ fastStart: false }), target });
     const source = new CanvasSource(canvas, { codec, bitrate, keyFrameInterval: 2 });
     output.addVideoTrack(source, { frameRate: opts.outputFps });
     await output.start();
@@ -267,7 +279,7 @@ export async function retimeVideo(file: File, opts: RetimeOptions): Promise<Reti
       throw e;
     }
 
-    const blob = new Blob([target.buffer!], { type: "video/mp4" });
+    const blob = target instanceof BufferTarget && target.buffer ? new Blob([target.buffer], { type: "video/mp4" }) : null;
     return { blob, width, height, fps: opts.outputFps, frames: plan.count, duration: plan.duration, codec };
   } finally {
     input.dispose();
