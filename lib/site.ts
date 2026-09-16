@@ -18,7 +18,7 @@ export const SITE = {
   },
   /** Optional ways to support the project, shown in the footer. */
   support: {
-    bitcoin: "bc1qawue0yw963rx82cpl5l0y6tf7l4v8de7a9x0w5",
+    bitcoin: "bc1quh9e83s8je65j5lr9jnew2r3et72874wdgj2lf",
   },
   author: "Bench",
   locale: "en_US",
