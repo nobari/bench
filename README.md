@@ -3,7 +3,7 @@
 ![Bench — a precision toolkit for the web](docs/banner.svg)
 
 <p>
-  <a href="#tools"><img alt="28 tools" src="https://img.shields.io/badge/tools-28-c8f135?style=flat-square&labelColor=08090a"></a>
+  <a href="#tools"><img alt="37 tools" src="https://img.shields.io/badge/tools-37-c8f135?style=flat-square&labelColor=08090a"></a>
   <a href="https://nextjs.org"><img alt="Next.js 16" src="https://img.shields.io/badge/Next.js-16-08090a?style=flat-square&logo=nextdotjs&logoColor=white&labelColor=08090a"></a>
   <a href="https://react.dev"><img alt="React 19" src="https://img.shields.io/badge/React-19-149eca?style=flat-square&logo=react&logoColor=white&labelColor=08090a"></a>
   <a href="https://www.typescriptlang.org"><img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-5-3178c6?style=flat-square&logo=typescript&logoColor=white&labelColor=08090a"></a>
@@ -31,11 +31,11 @@ Bench is the kind of small tools you reach for a dozen times a day — encode so
 
 ## Tools
 
-> 28 tools across 9 categories — and counting.
+> 37 tools across 10 categories — and counting.
 
 | Category | Tools |
 | --- | --- |
-| **Text & Encoding** | Text Transformer (45+ transforms) · Base64 · URL · HTML Entities · Case Converter · EIP-55 Checksum · Full-width ↔ Half-width · Katakana ↔ Hiragana · ASCII Table & Codes |
+| **Text & Encoding** | Text Transformer (45+ transforms) · Base64 · URL · HTML Entities · Case Converter · EIP-55 Checksum · Full-width ↔ Half-width · Katakana ↔ Hiragana · ASCII Table & Codes · Finglish → Farsi · Romaji ↔ Hiragana / Katakana |
 | **JSON & Data** | JSON Viewer & Formatter (tree, search, validate, convert) |
 | **Image & Media** | GIF Maker · Image Converter (PNG/JPG/WebP + resize) |
 | **Crypto & Hashing** | Hash Generator (MD5 · SHA-1/256/384/512 · SHA-3 · Keccak) · ECDSA Sign & Verify · Wallet Generator (BIP39 / BIP44) |
@@ -43,7 +43,7 @@ Bench is the kind of small tools you reach for a dozen times a day — encode so
 | **Time & Date** | Unix Timestamp · Date Converter (12 calendars + timezones) · Day Calculator |
 | **Color & Design** | Color Converter (HEX/RGB/HSL/OKLCH/CMYK · picker · gradients · contrast) |
 | **Math & Units** | Loan & Mortgage Simulator · Number Base Converter · Unit Converter |
-| **Web & Dev** | Diff Checker |
+| **Web & Dev** | Diff Checker · URL Shortener (server-backed, best-effort) |
 
 Categories that aren't full yet (Regex, JWT, Markdown, …) are scaffolded and ready for tools to drop in.
 

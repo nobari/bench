@@ -20,6 +20,18 @@ const WIDGETS: Record<WidgetKey, React.ComponentType<Record<string, unknown>>> =
     () => import("@/components/widgets/text-transform").then((m) => m.TextTransformWidget),
     { ssr: false, loading: Skeleton },
   ),
+  "finglish-converter": dynamic(
+    () => import("@/components/widgets/finglish-converter").then((m) => m.FinglishConverterWidget),
+    { ssr: false, loading: Skeleton },
+  ),
+  "romaji-converter": dynamic(
+    () => import("@/components/widgets/romaji-converter").then((m) => m.RomajiConverterWidget),
+    { ssr: false, loading: Skeleton },
+  ),
+  "short-url": dynamic(
+    () => import("@/components/widgets/short-url").then((m) => m.ShortUrlWidget),
+    { ssr: false, loading: Skeleton },
+  ),
   "json-viewer": dynamic(
     () => import("@/components/widgets/json-viewer").then((m) => m.JsonViewerWidget),
     { ssr: false, loading: Skeleton },

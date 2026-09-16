@@ -1,4 +1,6 @@
 import { keccak256 } from "js-sha3";
+import { romajiToKana, kanaToRomaji } from "./romaji";
+import { finglishToPersian } from "./finglish";
 
 /**
  * Text transform engine. Each transform is a pure `string -> string` function so
@@ -12,7 +14,8 @@ export type TransformGroup =
   | "width"
   | "lines"
   | "address"
-  | "fun";
+  | "fun"
+  | "script";
 
 export interface Transform {
   id: string;
@@ -31,6 +34,7 @@ export const GROUP_LABELS: Record<TransformGroup, string> = {
   lines: "Lines & Whitespace",
   address: "Addresses & Checksums",
   fun: "Ciphers & Fun",
+  script: "Scripts & Transliteration",
 };
 
 /* ------------------------------------------------------------------ helpers */
@@ -141,8 +145,12 @@ export const TRANSFORMS: Transform[] = [
   // ---- Width ----
   { id: "to-fullwidth", label: "Half-width → Full-width", group: "width", summary: "ASCII → 全角 (zenkaku)", fn: (s) => s.replace(/[!-~]/g, (c) => String.fromCharCode(c.charCodeAt(0) + 0xfee0)).replace(/ /g, "　").replace(/[｡-ﾟ]/g, (c) => KATA_H2Z[c] ?? c), inverse: "to-halfwidth" },
   { id: "to-halfwidth", label: "Full-width → Half-width", group: "width", summary: "全角 (zenkaku) → ASCII", fn: (s) => s.replace(/[！-～]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0)).replace(/　/g, " ").replace(/[、。「」、・ァ-ー]/g, (c) => KATA_Z2H[c] ?? c), inverse: "to-fullwidth" },
-  { id: "hiragana-to-katakana", label: "Hiragana → Katakana", group: "width", summary: "ひらがな → カタカナ", fn: (s) => s.replace(/[ぁ-ゖ]/g, (c) => String.fromCharCode(c.charCodeAt(0) + 0x60)), inverse: "katakana-to-hiragana" },
-  { id: "katakana-to-hiragana", label: "Katakana → Hiragana", group: "width", summary: "カタカナ → ひらがな", fn: (s) => s.replace(/[ァ-ヶ]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0x60)), inverse: "hiragana-to-katakana" },
+  { id: "hiragana-to-katakana", label: "Hiragana → Katakana", group: "script", summary: "ひらがな → カタカナ", fn: (s) => s.replace(/[ぁ-ゖ]/g, (c) => String.fromCharCode(c.charCodeAt(0) + 0x60)), inverse: "katakana-to-hiragana" },
+  { id: "katakana-to-hiragana", label: "Katakana → Hiragana", group: "script", summary: "カタカナ → ひらがな", fn: (s) => s.replace(/[ァ-ヶ]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0x60)), inverse: "hiragana-to-katakana" },
+  { id: "romaji-to-hiragana", label: "Romaji → Hiragana", group: "script", summary: "konnichiwa → こんにちは", fn: (s) => romajiToKana(s, "hiragana"), inverse: "kana-to-romaji" },
+  { id: "romaji-to-katakana", label: "Romaji → Katakana", group: "script", summary: "ko-hi- → コーヒー", fn: (s) => romajiToKana(s, "katakana"), inverse: "kana-to-romaji" },
+  { id: "kana-to-romaji", label: "Kana → Romaji (Hepburn)", group: "script", summary: "とうきょう → tōkyō", fn: (s) => kanaToRomaji(s, "hepburn"), inverse: "romaji-to-hiragana" },
+  { id: "finglish-to-persian", label: "Finglish → Persian", group: "script", summary: "salam → سلام", fn: (s) => finglishToPersian(s) },
 
   // ---- Lines & Whitespace ----
   { id: "trim-lines", label: "Trim Lines", group: "lines", summary: "Strip leading/trailing spaces per line", fn: (s) => s.split("\n").map((l) => l.trim()).join("\n") },

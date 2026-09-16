@@ -43,6 +43,9 @@ export interface ToolExample {
  */
 export type WidgetKey =
   | "text-transform"
+  | "finglish-converter"
+  | "romaji-converter"
+  | "short-url"
   | "json-viewer"
   | "gif-maker"
   | "hash-generator"
