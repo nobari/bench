@@ -1,0 +1,58 @@
+{
+  "name": "bench",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A precision toolkit for the web — fast, private, client-side developer utilities.",
+  "license": "MIT",
+  "homepage": "https://github.com/nobari/bench",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/nobari/bench.git"
+  },
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "postinstall": "node scripts/copy-vendor.mjs",
+    "start": "next start",
+    "lint": "eslint"
+  },
+  "dependencies": {
+    "@noble/curves": "^2.2.0",
+    "@scure/bip32": "^2.2.0",
+    "@scure/bip39": "^2.2.0",
+    "@vercel/analytics": "^2.0.1",
+    "@vercel/blob": "^2.8.0",
+    "@vercel/speed-insights": "^2.0.0",
+    "clsx": "^2.1.1",
+    "cmdk": "^1.1.1",
+    "gifenc": "^1.0.3",
+    "js-md5": "^0.8.3",
+    "js-sha3": "^0.9.3",
+    "libarchive.js": "^2.0.2",
+    "lottie-web": "^5.13.0",
+    "lucide-react": "^1.21.0",
+    "lz-string": "^1.5.0",
+    "motion": "^12.40.0",
+    "next": "16.2.9",
+    "nuqs": "^2.8.9",
+    "qr-code-styling": "^1.9.2",
+    "qrcode": "^1.5.4",
+    "react": "19.2.4",
+    "react-dom": "19.2.4",
+    "tailwind-merge": "^3.6.0",
+    "zod": "^4.4.3",
+    "zxing-wasm": "^3.1.2"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4",
+    "@types/js-md5": "^0.8.0",
+    "@types/node": "^20",
+    "@types/qrcode": "^1.5.6",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "eslint": "^9",
+    "eslint-config-next": "16.2.9",
+    "tailwindcss": "^4",
+    "typescript": "^5"
+  }
+}

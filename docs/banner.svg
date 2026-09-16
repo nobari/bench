@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 340" width="1280" height="340" font-family="'IBM Plex Sans', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif">
+  <rect width="1280" height="340" rx="18" fill="#f3f5ee"/>
+  <rect x="0.5" y="0.5" width="1279" height="339" rx="17.5" fill="none" stroke="#d6dccb"/>
+
+  <!-- bench mark -->
+  <g transform="translate(88,104)">
+    <rect width="132" height="132" rx="28" fill="#5b8a3c"/>
+    <g fill="#ffffff">
+      <rect x="21" y="42" width="90" height="18" rx="4"/>
+      <rect x="35" y="60" width="14" height="36"/>
+      <rect x="83" y="60" width="14" height="36"/>
+    </g>
+  </g>
+
+  <text x="264" y="152" font-size="64" font-weight="600" fill="#1e2419" letter-spacing="-1.5">Bench</text>
+  <text x="264" y="206" font-size="26" fill="#5c6854">Everyday tools for text, data, images and the web.</text>
+  <text x="264" y="246" font-size="20" fill="#8a9682">Every tool runs in your browser. Every result has a link you can share.</text>
+</svg>

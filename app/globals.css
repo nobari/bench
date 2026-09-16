@@ -1,0 +1,346 @@
+@import "tailwindcss";
+
+/* =========================================================================
+   BENCH — design tokens
+   Matcha palette: warm off-white "tea bowl" surfaces, one matcha-green
+   accent for actions and the current location, category hues for icons only.
+   Dark scheme (steeped tea) follows the OS. Everything is driven by these variables.
+   ========================================================================= */
+
+@theme {
+  /* Surfaces & lines */
+  --color-canvas: #f3f5ee;
+  --color-base: #fafbf7;
+  --color-base-2: #f0f3ea;
+  --color-surface: #ffffff;
+  --color-raised: #eef2e6;
+  --color-edge: #d6dccb;
+  --color-edge-bright: #bec8ae;
+  --color-scrim: rgba(30, 36, 25, 0.45);
+
+  /* Text */
+  --color-ink: #1e2419;
+  --color-muted: #5c6854;
+  --color-faint: #8a9682;
+
+  /* Accent — matcha */
+  --color-accent: #5b8a3c;
+  --color-accent-hover: #4d7632;
+  --color-accent-soft: #e7f0db;
+  --color-on-accent: #ffffff;
+
+  /* Legacy aliases still referenced by a few widgets */
+  --color-signal: var(--color-accent);
+  --color-signal-dim: var(--color-accent-hover);
+
+  /* Status */
+  --color-positive: #1f8a70;
+  --color-warn: #b0862b;
+  --color-danger: #c0392b;
+
+  /* Fonts (wired to next/font in layout.tsx) */
+  --font-sans: var(--font-plex-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-display: var(--font-plex-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-plex-mono), ui-monospace, "SFMono-Regular", Menlo, monospace;
+
+  /* Radii */
+  --radius-sm: 4px;
+  --radius: 6px;
+  --radius-lg: 8px;
+}
+
+:root {
+  color-scheme: light;
+
+  /* Category hues (icon tints). */
+  --cat-text: #c2410c;
+  --cat-json: #b45309;
+  --cat-image: #be185d;
+  --cat-files: #0e7490;
+  --cat-crypto: #0f766e;
+  --cat-gen: #6d28d9;
+  --cat-time: #0369a1;
+  --cat-color: #dc2626;
+  --cat-math: #4d7c0f;
+  --cat-web: #15803d;
+
+  /* Page accent — actions always use the app accent, never a category hue. */
+  --accent: var(--color-accent);
+
+  --shadow-pop: 0 12px 32px -12px rgba(30, 36, 25, 0.28), 0 0 0 1px rgba(30, 36, 25, 0.04);
+  --shadow-dialog: 0 24px 64px -24px rgba(30, 36, 25, 0.45);
+
+  --checker-a: #d3dac6;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+
+    --color-canvas: #12160f;
+    --color-base: #171c13;
+    --color-base-2: #141810;
+    --color-surface: #1b2117;
+    --color-raised: #232b1e;
+    --color-edge: #2e3828;
+    --color-edge-bright: #3d4a35;
+    --color-scrim: rgba(0, 0, 0, 0.6);
+
+    --color-ink: #e9eee1;
+    --color-muted: #a2ae97;
+    --color-faint: #6f7b66;
+
+    --color-accent: #a8c973;
+    --color-accent-hover: #b9d689;
+    --color-accent-soft: #2a3822;
+    --color-on-accent: #111709;
+
+    --color-positive: #4fcf9a;
+    --color-warn: #e2b84b;
+    --color-danger: #ef6f63;
+
+    --cat-text: #fb923c;
+    --cat-json: #fbbf24;
+    --cat-image: #f472b6;
+    --cat-files: #22d3ee;
+    --cat-crypto: #2dd4bf;
+    --cat-gen: #a78bfa;
+    --cat-time: #38bdf8;
+    --cat-color: #f87171;
+    --cat-math: #a3e635;
+    --cat-web: #4ade80;
+
+    --shadow-pop: 0 12px 32px -12px rgba(0, 0, 0, 0.7), 0 0 0 1px rgba(255, 255, 255, 0.04);
+    --shadow-dialog: 0 24px 64px -24px rgba(0, 0, 0, 0.8);
+
+    --checker-a: #2e3828;
+  }
+}
+
+@layer base {
+  * {
+    border-color: var(--color-edge);
+  }
+
+  html {
+    -webkit-text-size-adjust: 100%;
+    scrollbar-gutter: stable;
+  }
+
+  body {
+    background-color: var(--color-canvas);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    font-size: 14px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    overflow-x: hidden;
+  }
+
+  ::selection {
+    background: var(--color-accent);
+    color: var(--color-on-accent);
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+    border-radius: 2px;
+  }
+
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: var(--color-edge-bright);
+    border: 3px solid transparent;
+    background-clip: padding-box;
+    border-radius: 999px;
+  }
+
+  h1, h2, h3, h4 {
+    font-family: var(--font-display);
+    letter-spacing: -0.01em;
+  }
+}
+
+/*
+ * iOS Safari auto-zooms the page when a focused form control renders under
+ * 16px. A 16px floor on touch devices prevents the zoom entirely.
+ * Deliberately un-layered so it outranks text-* utilities in the cascade.
+ */
+@media (hover: none) and (pointer: coarse) {
+  input,
+  select,
+  textarea {
+    font-size: max(16px, 1em);
+  }
+}
+
+@layer utilities {
+  /* Kept as class names used across widgets; now plain and quiet. */
+  .bg-instrument {
+    background-color: var(--color-canvas);
+  }
+  .bg-ticks {
+    background-image: none;
+  }
+  .grain::before {
+    content: none;
+  }
+  .glow {
+    text-shadow: none;
+  }
+  .rise,
+  .blink {
+    animation: none;
+  }
+
+  .text-balance {
+    text-wrap: balance;
+  }
+
+  .panel {
+    background-color: var(--color-surface);
+    border: 1px solid var(--color-edge);
+    border-radius: var(--radius);
+  }
+
+  .hairline {
+    border: 1px solid var(--color-edge);
+  }
+
+  /* Accent helpers — the page accent is the app accent everywhere. */
+  .text-accent { color: var(--accent); }
+  .border-accent { border-color: var(--accent); }
+  .bg-accent { background-color: var(--accent); }
+  .bg-accent-soft { background-color: var(--color-accent-soft); }
+  .text-on-accent { color: var(--color-on-accent); }
+  .shadow-accent { box-shadow: 0 0 0 1px var(--accent); }
+  .shadow-pop { box-shadow: var(--shadow-pop); }
+  .shadow-dialog { box-shadow: var(--shadow-dialog); }
+
+  /* Small label used in panel headers and stat bars. Sentence case. */
+  .readout {
+    font-family: var(--font-sans);
+    font-size: 12px;
+    font-weight: 500;
+    line-height: 1.2;
+    color: var(--color-muted);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+
+  .input {
+    width: 100%;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--color-edge);
+    background: var(--color-base);
+    padding: 0.5rem 0.65rem;
+    font-family: var(--font-mono);
+    font-size: 13px;
+    line-height: 1.5;
+    color: var(--color-ink);
+    transition: border-color 0.15s;
+  }
+  .input::placeholder {
+    color: var(--color-faint);
+  }
+  .input:hover {
+    border-color: var(--color-edge-bright);
+  }
+  .input:focus {
+    border-color: var(--accent);
+    outline: none;
+    box-shadow: 0 0 0 3px var(--color-accent-soft);
+  }
+
+  select.input {
+    -webkit-appearance: none;
+    -moz-appearance: none;
+    appearance: none;
+    min-width: 0;
+    max-width: 100%;
+    cursor: pointer;
+    line-height: normal;
+    padding-right: 1.9rem;
+    text-overflow: ellipsis;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%235b6670' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 0.6rem center;
+    background-size: 12px 12px;
+  }
+  select.input option,
+  select.input optgroup {
+    background-color: var(--color-surface);
+    color: var(--color-ink);
+  }
+
+  /* Framed elements used to carry corner marks; they are plain now. */
+  .registered {
+    position: relative;
+  }
+  .registered::before,
+  .registered::after {
+    content: none;
+  }
+}
+
+@layer utilities {
+  /* JSON syntax highlighting */
+  .tok-key { color: #0550ae; }
+  .tok-str { color: #116329; }
+  .tok-num { color: #953800; }
+  .tok-bool { color: #6639ba; }
+  .tok-null { color: #6e7781; }
+  .tok-mark { background: var(--color-accent); color: var(--color-on-accent); border-radius: 2px; }
+
+  @media (prefers-color-scheme: dark) {
+    .tok-key { color: #7fb0ff; }
+    .tok-str { color: #9fe0a6; }
+    .tok-num { color: #ffce6b; }
+    .tok-bool { color: #c0a8ff; }
+    .tok-null { color: #7d8790; }
+  }
+}
+
+@keyframes gradient-pan {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+@layer utilities {
+  /* Alpha checkerboard backdrop for colour swatches. */
+  .checker {
+    background-image:
+      linear-gradient(45deg, var(--checker-a) 25%, transparent 25%),
+      linear-gradient(-45deg, var(--checker-a) 25%, transparent 25%),
+      linear-gradient(45deg, transparent 75%, var(--checker-a) 75%),
+      linear-gradient(-45deg, transparent 75%, var(--checker-a) 75%);
+    background-size: 14px 14px;
+    background-position: 0 0, 0 7px, 7px -7px, -7px 0;
+  }
+  .gradient-animate {
+    background-size: 300% 300% !important;
+    animation: gradient-pan 6s ease infinite;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
