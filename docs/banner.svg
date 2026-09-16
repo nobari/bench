@@ -1,60 +1,18 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 340" width="1280" height="340" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif">
-  <defs>
-    <linearGradient id="bloom" x1="1" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="#c8f135" stop-opacity="0.20"/>
-      <stop offset="60%" stop-color="#c8f135" stop-opacity="0"/>
-    </linearGradient>
-    <pattern id="grid" width="44" height="44" patternUnits="userSpaceOnUse">
-      <path d="M44 0H0V44" fill="none" stroke="#ffffff" stroke-opacity="0.03" stroke-width="1"/>
-    </pattern>
-  </defs>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 340" width="1280" height="340" font-family="'IBM Plex Sans', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif">
+  <rect width="1280" height="340" rx="18" fill="#f3f5ee"/>
+  <rect x="0.5" y="0.5" width="1279" height="339" rx="17.5" fill="none" stroke="#d6dccb"/>
 
-  <rect width="1280" height="340" rx="18" fill="#08090a"/>
-  <rect width="1280" height="340" rx="18" fill="url(#grid)"/>
-  <rect width="1280" height="340" rx="18" fill="url(#bloom)"/>
-  <rect x="0.5" y="0.5" width="1279" height="339" rx="17.5" fill="none" stroke="#1d2426"/>
-
-  <!-- corner registration marks -->
-  <g stroke="#c8f135" stroke-width="2" stroke-opacity="0.8" fill="none">
-    <path d="M24 40V24h16"/>
-    <path d="M1256 300v16h-16"/>
-  </g>
-
-  <!-- bracket mark -->
-  <g transform="translate(88,118)" stroke="#c8f135" stroke-width="6" fill="none" stroke-linecap="round">
-    <path d="M0 0V104"/>
-    <path d="M0 0H50a26 26 0 0 1 0 52H0"/>
-    <path d="M0 52H54a26 26 0 0 1 0 52H0"/>
-  </g>
-  <rect x="190" y="116" width="7" height="108" rx="3.5" fill="#c8f135"/>
-
-  <!-- readout -->
-  <text x="232" y="112" fill="#8b958d" font-size="15" letter-spacing="5" font-family="ui-monospace, SFMono-Regular, monospace">SYSTEM ONLINE · 28 INSTRUMENTS · 100% LOCAL</text>
-
-  <!-- wordmark -->
-  <text x="230" y="196" fill="#e9efe9" font-size="92" font-weight="800" letter-spacing="-3">BENCH</text>
-  <rect x="566" y="118" width="11" height="74" fill="#c8f135"/>
-
-  <!-- tagline -->
-  <text x="232" y="248" fill="#8b958d" font-size="26">A precision toolkit for the web — fast, private, in your browser.</text>
-
-  <!-- chips -->
-  <g font-family="ui-monospace, SFMono-Regular, monospace" font-size="14" fill="#8b958d">
-    <g>
-      <rect x="232" y="278" width="96" height="30" rx="6" fill="none" stroke="#1d2426"/>
-      <text x="248" y="298">ENCODE</text>
-    </g>
-    <g>
-      <rect x="340" y="278" width="104" height="30" rx="6" fill="none" stroke="#1d2426"/>
-      <text x="356" y="298">CONVERT</text>
-    </g>
-    <g>
-      <rect x="456" y="278" width="96" height="30" rx="6" fill="none" stroke="#1d2426"/>
-      <text x="472" y="298">INSPECT</text>
-    </g>
-    <g>
-      <rect x="564" y="278" width="116" height="30" rx="6" fill="none" stroke="#1d2426"/>
-      <text x="580" y="298">GENERATE</text>
+  <!-- bench mark -->
+  <g transform="translate(88,104)">
+    <rect width="132" height="132" rx="28" fill="#5b8a3c"/>
+    <g fill="#ffffff">
+      <rect x="21" y="42" width="90" height="18" rx="4"/>
+      <rect x="35" y="60" width="14" height="36"/>
+      <rect x="83" y="60" width="14" height="36"/>
     </g>
   </g>
+
+  <text x="264" y="152" font-size="64" font-weight="600" fill="#1e2419" letter-spacing="-1.5">Bench</text>
+  <text x="264" y="206" font-size="26" fill="#5c6854">Everyday tools for text, data, images and the web.</text>
+  <text x="264" y="246" font-size="20" fill="#8a9682">Every tool runs in your browser. Every result has a link you can share.</text>
 </svg>

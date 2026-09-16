@@ -16,6 +16,10 @@ export const SITE = {
     github: "https://github.com/nobari/bench",
     suggest: "/suggest",
   },
+  /** Optional ways to support the project, shown in the footer. */
+  support: {
+    bitcoin: "bc1qawue0yw963rx82cpl5l0y6tf7l4v8de7a9x0w5",
+  },
   author: "Bench",
   locale: "en_US",
 } as const;

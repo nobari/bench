@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { SITE } from "@/lib/site";
+import { CopyButton } from "@/components/copy-button";
 
 export function SiteFooter() {
   return (
@@ -23,6 +24,14 @@ export function SiteFooter() {
             GitHub
           </a>
         </nav>
+      </div>
+
+      <div className="mt-4 flex flex-wrap items-center gap-x-2 gap-y-1.5 border-t border-edge pt-4 text-[12.5px] text-faint">
+        <span>If {SITE.name} saves you time, you can support it with bitcoin:</span>
+        <code className="break-all font-mono text-[12px] text-muted" title="Bitcoin address">
+          {SITE.support.bitcoin}
+        </code>
+        <CopyButton value={SITE.support.bitcoin} label="Copy address" className="h-6 px-2 text-[11px]" />
       </div>
     </footer>
   );
