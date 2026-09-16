@@ -47,6 +47,7 @@ export type WidgetKey =
   | "romaji-converter"
   | "short-url"
   | "json-viewer"
+  | "json-schema"
   | "gif-maker"
   | "hash-generator"
   | "id-generator"

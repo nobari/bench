@@ -36,6 +36,10 @@ const WIDGETS: Record<WidgetKey, React.ComponentType<Record<string, unknown>>> =
     () => import("@/components/widgets/json-viewer").then((m) => m.JsonViewerWidget),
     { ssr: false, loading: Skeleton },
   ),
+  "json-schema": dynamic(
+    () => import("@/components/widgets/json-schema").then((m) => m.JsonSchemaWidget),
+    { ssr: false, loading: Skeleton },
+  ),
   "gif-maker": dynamic(
     () => import("@/components/widgets/gif-maker").then((m) => m.GifMakerWidget),
     { ssr: false, loading: Skeleton },
