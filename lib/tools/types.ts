@@ -56,6 +56,7 @@ export type WidgetKey =
   | "image-converter"
   | "slow-mo"
   | "diff-checker"
+  | "regex-tester"
   | "jwt"
   | "qr-code"
   | "qr-scanner"

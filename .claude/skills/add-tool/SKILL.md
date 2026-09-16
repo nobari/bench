@@ -126,7 +126,8 @@ For CPU-heavy work (encoding, large transforms) use a worker so the UI stays
 responsive. Pattern (see `components/widgets/gif.worker.ts` + `gif-maker.tsx`):
 
 ```ts
-const worker = new Worker(new URL("./my.worker.ts", import.meta.url), { type: "module" });
+// Classic worker — Turbopack's worker bootstrap uses importScripts, which `type: "module"` forbids.
+const worker = new Worker(new URL("./my.worker.ts", import.meta.url));
 ```
 
 Transfer large `ArrayBuffer`s (don't copy). If the worker imports an untyped

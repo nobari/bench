@@ -160,9 +160,8 @@ export function GifMakerWidget() {
       buffers.push(ctx.getImageData(0, 0, W, H).data.buffer);
     }
 
-    const worker = new Worker(new URL("./gif.worker.ts", import.meta.url), {
-      type: "module",
-    });
+    // A classic worker: Turbopack's worker bootstrap loads chunks with importScripts, which module workers forbid.
+    const worker = new Worker(new URL("./gif.worker.ts", import.meta.url));
 
     worker.onmessage = (e: MessageEvent) => {
       const msg = e.data;
