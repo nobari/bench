@@ -31,7 +31,9 @@ export default function AboutPage() {
             <Link href="/web/short-url" className="text-accent hover:underline">
               URL shortener
             </Link>
-            , which has to store the destination on a server; it says so on its page.
+            , which has to store the destination on a server; it says so on its page. Page views are
+            counted anonymously with Google Analytics — without query strings, so your inputs never reach
+            it, and not at all for browsers that send Do Not Track or Global Privacy Control.
           </p>
           <p className="mt-2">
             The state of a tool lives in its URL, so the Share button on any page gives you a link that

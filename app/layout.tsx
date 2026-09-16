@@ -6,6 +6,7 @@ import { SITE, absoluteUrl, getBaseUrl } from "@/lib/site";
 import { SiteHeader } from "@/components/site-header";
 import { SiteFooter } from "@/components/site-footer";
 import { ToolNav } from "@/components/tool-nav";
+import { GoogleAnalytics } from "@/components/google-analytics";
 import { Providers } from "./providers";
 import "./globals.css";
 
@@ -85,6 +86,7 @@ export default function RootLayout({
         </Providers>
         <Analytics />
         <SpeedInsights />
+        <GoogleAnalytics />
       </body>
     </html>
   );
