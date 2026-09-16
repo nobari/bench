@@ -5,7 +5,6 @@ import { useQueryState, parseAsString } from "nuqs";
 import { X } from "lucide-react";
 import { computeHashes, type HashResult } from "@/lib/tools/crypto/hash";
 import { CopyButton } from "@/components/copy-button";
-import { ShareButton } from "@/components/share-button";
 import { cn } from "@/lib/utils";
 
 export function HashGeneratorWidget() {
@@ -34,7 +33,6 @@ export function HashGeneratorWidget() {
         <div className="flex items-center justify-between border-b border-edge px-3 py-2">
           <span className="readout">Input</span>
           <div className="flex items-center gap-2">
-            <ShareButton />
             {input && (
               <button
                 onClick={() => setInput("")}

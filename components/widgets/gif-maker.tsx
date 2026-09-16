@@ -362,7 +362,7 @@ export function GifMakerWidget() {
           <button
             onClick={encode}
             disabled={!frames.length || busy}
-            className="inline-flex h-11 items-center justify-center gap-2 rounded-[var(--radius)] bg-accent font-mono text-sm font-semibold text-[#070806] transition-[filter] hover:brightness-110 disabled:pointer-events-none disabled:opacity-40"
+            className="inline-flex h-11 items-center justify-center gap-2 rounded-[var(--radius)] bg-accent font-mono text-sm font-semibold text-on-accent transition-[filter] hover:brightness-110 disabled:pointer-events-none disabled:opacity-40"
           >
             {busy ? (
               <>
@@ -488,7 +488,7 @@ function Segmented({
             onClick={() => onChange(val)}
             className={cn(
               "h-7 flex-1 rounded-[3px] font-mono text-xs transition-colors",
-              value === val ? "bg-accent text-[#070806]" : "text-muted hover:text-ink",
+              value === val ? "bg-accent text-on-accent" : "text-muted hover:text-ink",
             )}
           >
             {lbl}

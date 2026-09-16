@@ -1,29 +1,25 @@
 import type { Metadata, Viewport } from "next";
-import { Bricolage_Grotesque, JetBrains_Mono, Hanken_Grotesk } from "next/font/google";
+import { IBM_Plex_Sans, IBM_Plex_Mono } from "next/font/google";
 import { Analytics } from "@vercel/analytics/next";
 import { SpeedInsights } from "@vercel/speed-insights/next";
 import { SITE, absoluteUrl, getBaseUrl } from "@/lib/site";
 import { SiteHeader } from "@/components/site-header";
 import { SiteFooter } from "@/components/site-footer";
+import { ToolNav } from "@/components/tool-nav";
 import { Providers } from "./providers";
 import "./globals.css";
 
-const display = Bricolage_Grotesque({
-  variable: "--font-bricolage",
+const sans = IBM_Plex_Sans({
+  variable: "--font-plex-sans",
   subsets: ["latin"],
-  weight: ["400", "600", "700", "800"],
+  weight: ["400", "500", "600"],
   display: "swap",
 });
 
-const mono = JetBrains_Mono({
-  variable: "--font-jetbrains",
+const mono = IBM_Plex_Mono({
+  variable: "--font-plex-mono",
   subsets: ["latin"],
-  display: "swap",
-});
-
-const sans = Hanken_Grotesk({
-  variable: "--font-hanken",
-  subsets: ["latin"],
+  weight: ["400", "500"],
   display: "swap",
 });
 
@@ -64,24 +60,28 @@ export const metadata: Metadata = {
 };
 
 export const viewport: Viewport = {
-  themeColor: "#08090a",
-  colorScheme: "dark",
+  themeColor: [
+    { media: "(prefers-color-scheme: light)", color: "#fafbfc" },
+    { media: "(prefers-color-scheme: dark)", color: "#141719" },
+  ],
+  colorScheme: "light dark",
 };
 
 export default function RootLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html
-      lang="en"
-      className={`${display.variable} ${mono.variable} ${sans.variable} h-full`}
-      suppressHydrationWarning
-    >
-      <body className="grain bg-instrument relative flex min-h-full flex-col">
+    <html lang="en" className={`${sans.variable} ${mono.variable} h-full`} suppressHydrationWarning>
+      <body className="flex min-h-full flex-col">
         <Providers>
           <SiteHeader />
-          <main className="relative z-[2] flex-1">{children}</main>
-          <SiteFooter />
+          <div className="mx-auto flex w-full max-w-[1440px] flex-1">
+            <ToolNav className="hidden lg:block" />
+            <div className="flex min-w-0 flex-1 flex-col">
+              <main className="flex-1">{children}</main>
+              <SiteFooter />
+            </div>
+          </div>
         </Providers>
         <Analytics />
         <SpeedInsights />

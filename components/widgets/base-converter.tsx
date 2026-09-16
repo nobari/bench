@@ -9,7 +9,6 @@ import {
   isValidBase,
 } from "@/lib/tools/math/base";
 import { CopyButton } from "@/components/copy-button";
-import { ShareButton } from "@/components/share-button";
 import { cn } from "@/lib/utils";
 
 const QUICK_BASES = [2, 8, 10, 16] as const;
@@ -55,7 +54,6 @@ export function BaseConverterWidget() {
       <div className="panel registered p-3 space-y-3">
         <div className="flex items-center justify-between">
           <span className="readout">Value (base {fromBase})</span>
-          <ShareButton />
         </div>
 
         <input
@@ -84,7 +82,7 @@ export function BaseConverterWidget() {
                 className={cn(
                   "h-8 rounded-[var(--radius-sm)] border px-3 font-mono text-xs transition-colors",
                   fromBase === b
-                    ? "border-accent bg-accent text-[#070806] font-semibold"
+                    ? "border-accent bg-accent text-on-accent font-semibold"
                     : "border-edge text-muted hover:border-accent hover:text-accent",
                 )}
               >

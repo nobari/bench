@@ -5,7 +5,6 @@ import { useQueryState, parseAsString } from "nuqs";
 import { Clock, X } from "lucide-react";
 import { parseTime, breakdown } from "@/lib/tools/time/timestamp";
 import { CopyButton } from "@/components/copy-button";
-import { ShareButton } from "@/components/share-button";
 
 export function TimestampConverterWidget() {
   const [input, setInput] = useQueryState(
@@ -56,7 +55,6 @@ export function TimestampConverterWidget() {
           >
             <Clock size={14} /> Now
           </button>
-          <ShareButton />
           {input && (
             <button
               onClick={() => setInput("")}

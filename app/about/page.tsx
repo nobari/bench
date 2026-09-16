@@ -1,66 +1,63 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { ChevronRight, Lock, Link2, Zap, Layers } from "lucide-react";
 import { SITE } from "@/lib/site";
 import { TOOLS } from "@/lib/tools/registry";
 
 export const metadata: Metadata = {
   title: "About",
-  description: `About ${SITE.name} — a fast, private, client-side toolkit for everyday text, data and image tasks.`,
+  description: `About ${SITE.name} — a fast, private, browser-based toolkit for everyday text, data, image and file tasks.`,
   alternates: { canonical: "/about" },
 };
 
-const PRINCIPLES = [
-  { icon: Lock, title: "Private by default", body: "Tools run entirely in your browser. Your data is never uploaded, logged or tracked." },
-  { icon: Link2, title: "Shareable state", body: "Inputs and settings live in the URL, so a result is always one link away." },
-  { icon: Zap, title: "Fast & static", body: "Pages are statically generated and served from the edge for instant loads." },
-  { icon: Layers, title: "Always growing", body: "New instruments are added to the bench regularly — and you can suggest them." },
-];
-
 export default function AboutPage() {
   return (
-    <div className="mx-auto max-w-3xl px-4 py-10 sm:px-6 sm:py-16">
-      <nav aria-label="Breadcrumb" className="flex items-center gap-1.5 font-mono text-xs text-faint">
-        <Link href="/" className="hover:text-ink">Home</Link>
-        <ChevronRight size={12} />
-        <span className="text-muted">About</span>
-      </nav>
+    <div className="px-4 py-6 sm:px-5 lg:px-8 lg:py-8">
+      <div className="max-w-prose space-y-8 text-[14px] leading-relaxed text-muted">
+        <div>
+          <h1 className="text-[22px] font-semibold text-ink">About {SITE.name}</h1>
+          <p className="mt-3">
+            {SITE.name} is a collection of {TOOLS.length} small utilities you reach for during a normal
+            working day: encode or decode text, inspect JSON, hash a string, convert a date, resize an
+            image, unpack an archive, shorten a link. Open the tool, do the task, get back to work.
+          </p>
+        </div>
 
-      <h1 className="mt-6 font-display text-3xl font-extrabold tracking-tight text-ink sm:text-4xl">
-        A workbench, not a web app.
-      </h1>
-      <p className="mt-4 max-w-prose text-base leading-relaxed text-muted">
-        {SITE.name} is a growing collection of {TOOLS.length}+ precise, private
-        utilities for the web — the kind of small tools you reach for a dozen
-        times a day. Encode something, inspect some JSON, turn a few images into
-        a GIF, and get back to work. No sign-up, no clutter, no nonsense.
-      </p>
+        <section>
+          <h2 className="text-[15px] font-semibold text-ink">How it works</h2>
+          <p className="mt-2">
+            Every tool runs in your browser. Your text, files and images are processed on your device
+            and never uploaded — the pages are static and there is no account, no quota and no tracking of
+            what you paste. The one exception is the{" "}
+            <Link href="/web/short-url" className="text-accent hover:underline">
+              URL shortener
+            </Link>
+            , which has to store the destination on a server; it says so on its page.
+          </p>
+          <p className="mt-2">
+            The state of a tool lives in its URL, so the Share button on any page gives you a link that
+            reopens the same input and settings. Long links are shortened automatically.
+          </p>
+        </section>
 
-      <div className="mt-10 grid gap-3 sm:grid-cols-2">
-        {PRINCIPLES.map((p) => {
-          const Icon = p.icon;
-          return (
-            <div key={p.title} className="panel p-5">
-              <Icon size={18} className="text-signal" />
-              <h2 className="mt-3 font-display text-base font-semibold text-ink">
-                {p.title}
-              </h2>
-              <p className="mt-1.5 text-sm leading-relaxed text-muted">{p.body}</p>
-            </div>
-          );
-        })}
-      </div>
-
-      <div className="mt-10 panel registered flex flex-col items-start gap-3 p-6 sm:flex-row sm:items-center sm:justify-between">
-        <p className="text-sm text-muted">
-          Built something you wish existed here?
-        </p>
-        <Link
-          href="/suggest"
-          className="inline-flex h-10 items-center gap-2 rounded-[var(--radius)] bg-signal px-4 font-mono text-sm font-semibold text-[#070806] transition-[filter] hover:brightness-110"
-        >
-          Suggest a tool
-        </Link>
+        <section>
+          <h2 className="text-[15px] font-semibold text-ink">Open source</h2>
+          <p className="mt-2">
+            The code is on{" "}
+            <a
+              href={SITE.links.github}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-accent hover:underline"
+            >
+              GitHub
+            </a>{" "}
+            under the MIT license. Adding a tool is a small, well-documented change — contributions and{" "}
+            <Link href="/suggest" className="text-accent hover:underline">
+              suggestions
+            </Link>{" "}
+            are welcome.
+          </p>
+        </section>
       </div>
     </div>
   );

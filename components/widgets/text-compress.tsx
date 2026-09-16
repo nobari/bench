@@ -15,7 +15,6 @@ import {
 } from "@/lib/tools/text/compress";
 import { formatBytes } from "@/lib/tools/bytes";
 import { CopyButton } from "@/components/copy-button";
-import { ShareButton } from "@/components/share-button";
 import { cn } from "@/lib/utils";
 
 const MODES = ["c", "d"] as const;
@@ -160,7 +159,7 @@ export function TextCompressWidget() {
               onClick={() => setMode(id)}
               className={cn(
                 "h-8 rounded-[3px] px-3 font-mono text-xs transition-colors",
-                mode === id ? "bg-accent text-[#070806] font-semibold" : "text-muted hover:text-ink",
+                mode === id ? "bg-accent text-on-accent font-semibold" : "text-muted hover:text-ink",
               )}
             >
               {label}
@@ -178,7 +177,7 @@ export function TextCompressWidget() {
                 className={cn(
                   "shrink-0 rounded-[var(--radius-sm)] px-2.5 py-1.5 font-mono text-xs transition-colors",
                   format === f.id
-                    ? "bg-accent text-[#070806]"
+                    ? "bg-accent text-on-accent"
                     : "text-muted hover:bg-raised hover:text-ink",
                 )}
               >
@@ -256,7 +255,6 @@ export function TextCompressWidget() {
                   <Download size={12} /> Save
                 </button>
               )}
-              <ShareButton />
               <CopyButton value={result && !error ? result.output : ""} />
             </div>
           </div>

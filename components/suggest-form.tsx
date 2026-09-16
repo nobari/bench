@@ -26,7 +26,7 @@ export function SuggestForm() {
             href={link}
             target="_blank"
             rel="noopener noreferrer"
-            className="mt-5 inline-flex h-10 items-center gap-2 rounded-[var(--radius)] border border-edge px-4 font-mono text-sm text-ink transition-colors hover:border-signal hover:text-signal"
+            className="mt-5 inline-flex h-10 items-center gap-2 rounded-[var(--radius)] border border-edge px-4 font-mono text-sm text-ink transition-colors hover:border-accent hover:text-accent"
           >
             {state.url ? "View on GitHub" : "Open prefilled issue"}
             <ArrowUpRight size={15} />
@@ -89,7 +89,7 @@ export function SuggestForm() {
       <button
         type="submit"
         disabled={pending}
-        className="inline-flex h-11 items-center justify-center gap-2 rounded-[var(--radius)] bg-signal px-5 font-mono text-sm font-semibold text-[#070806] transition-[filter] hover:brightness-110 disabled:opacity-50"
+        className="inline-flex h-11 items-center justify-center gap-2 rounded-[var(--radius)] bg-accent px-5 text-sm font-medium text-on-accent transition-[filter] hover:brightness-110 disabled:opacity-50"
       >
         {pending ? (
           <>

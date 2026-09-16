@@ -5,7 +5,6 @@ import { useQueryState, parseAsString, parseAsInteger } from "nuqs";
 import { RefreshCw } from "lucide-react";
 import { generateIds, type IdKind } from "@/lib/tools/generators/ids";
 import { CopyButton } from "@/components/copy-button";
-import { ShareButton } from "@/components/share-button";
 import { cn } from "@/lib/utils";
 
 const KINDS: [IdKind, string][] = [
@@ -64,7 +63,7 @@ export function IdGeneratorWidget() {
               onClick={() => setKind(val)}
               className={cn(
                 "h-8 flex-1 rounded-[3px] font-mono text-xs transition-colors",
-                kind === val ? "bg-accent text-[#070806]" : "text-muted hover:text-ink",
+                kind === val ? "bg-accent text-on-accent" : "text-muted hover:text-ink",
               )}
             >
               {lbl}
@@ -113,7 +112,7 @@ export function IdGeneratorWidget() {
 
         <button
           onClick={regenerate}
-          className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-[var(--radius)] bg-accent font-mono text-sm font-semibold text-[#070806] transition-[filter] hover:brightness-110"
+          className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-[var(--radius)] bg-accent font-mono text-sm font-semibold text-on-accent transition-[filter] hover:brightness-110"
         >
           <RefreshCw size={15} /> Regenerate
         </button>
@@ -124,7 +123,6 @@ export function IdGeneratorWidget() {
         <div className="flex items-center justify-between border-b border-edge px-3 py-2">
           <span className="readout">Output · {ids.length}</span>
           <div className="flex items-center gap-2">
-            <ShareButton />
             <CopyButton value={ids.join("\n")} label="Copy all" />
           </div>
         </div>

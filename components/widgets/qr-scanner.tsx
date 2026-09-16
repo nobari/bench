@@ -336,7 +336,7 @@ export function QrScannerWidget() {
                 <div key={i} className="flex flex-col">
                   <div className="flex flex-wrap items-center gap-2 px-3 pt-2.5">
                     {items.length > 1 && (
-                      <span className="flex h-5 w-5 items-center justify-center rounded-full bg-accent font-mono text-[10px] font-bold text-[#070806]">
+                      <span className="flex h-5 w-5 items-center justify-center rounded-full bg-accent font-mono text-[10px] font-bold text-on-accent">
                         {i + 1}
                       </span>
                     )}
@@ -369,7 +369,7 @@ export function QrScannerWidget() {
                         href={c.href}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="inline-flex h-9 flex-1 items-center justify-center gap-1.5 rounded-[var(--radius-sm)] bg-accent px-3 font-mono text-xs font-semibold text-[#070806] transition-[filter] hover:brightness-110"
+                        className="inline-flex h-9 flex-1 items-center justify-center gap-1.5 rounded-[var(--radius-sm)] bg-accent px-3 font-mono text-xs font-semibold text-on-accent transition-[filter] hover:brightness-110"
                       >
                         <ExternalLink size={13} /> Open
                       </a>

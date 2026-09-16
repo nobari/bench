@@ -9,7 +9,6 @@ import QRCodeStyling, {
   type Options,
 } from "qr-code-styling";
 import { Download, ImageUp, Type, X } from "lucide-react";
-import { ShareButton } from "@/components/share-button";
 import { cn } from "@/lib/utils";
 
 const LEVELS = ["L", "M", "Q", "H"] as const;
@@ -126,7 +125,6 @@ export function QrCodeWidget() {
         <div className="flex items-center justify-between border-b border-edge px-3 py-2">
           <span className="readout">Content</span>
           <div className="flex items-center gap-2">
-            <ShareButton />
             {content && (
               <button onClick={() => setContent("")} className="inline-flex items-center gap-1 font-mono text-xs text-faint hover:text-danger">
                 <X size={12} /> Clear
@@ -150,7 +148,7 @@ export function QrCodeWidget() {
             <p className="readout mb-1.5">Error correction {hasCenter && "· forced H"}</p>
             <div className={cn("flex rounded-[var(--radius-sm)] border border-edge p-0.5", hasCenter && "opacity-50")}>
               {LEVELS.map((l) => (
-                <button key={l} disabled={hasCenter} onClick={() => setEc(l)} className={cn("h-8 flex-1 rounded-[3px] font-mono text-xs transition-colors", (hasCenter ? "H" : ec) === l ? "bg-accent text-[#070806]" : "text-muted hover:text-ink")}>
+                <button key={l} disabled={hasCenter} onClick={() => setEc(l)} className={cn("h-8 flex-1 rounded-[3px] font-mono text-xs transition-colors", (hasCenter ? "H" : ec) === l ? "bg-accent text-on-accent" : "text-muted hover:text-ink")}>
                   {l}
                 </button>
               ))}
@@ -215,7 +213,7 @@ export function QrCodeWidget() {
         </div>
         {content && (
           <div className="mt-3 flex gap-2">
-            <button onClick={() => download("png")} className="inline-flex h-9 flex-1 items-center justify-center gap-1.5 rounded-[var(--radius-sm)] bg-accent font-mono text-xs font-semibold text-[#070806] transition-[filter] hover:brightness-110">
+            <button onClick={() => download("png")} className="inline-flex h-9 flex-1 items-center justify-center gap-1.5 rounded-[var(--radius-sm)] bg-accent font-mono text-xs font-semibold text-on-accent transition-[filter] hover:brightness-110">
               <Download size={13} /> PNG
             </button>
             <button onClick={() => download("svg")} className="inline-flex h-9 flex-1 items-center justify-center gap-1.5 rounded-[var(--radius-sm)] border border-edge font-mono text-xs text-ink transition-colors hover:border-accent hover:text-accent">

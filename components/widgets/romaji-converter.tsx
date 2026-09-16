@@ -10,7 +10,6 @@ import {
   katakanaToHiragana,
 } from "@/lib/tools/text/romaji";
 import { CopyButton } from "@/components/copy-button";
-import { ShareButton } from "@/components/share-button";
 import { cn } from "@/lib/utils";
 
 const MODES = ["hira", "kata", "romaji"] as const;
@@ -78,7 +77,7 @@ export function RomajiConverterWidget() {
               lang="ja"
               className={cn(
                 "h-8 rounded-[3px] px-3 font-mono text-xs transition-colors",
-                mode === id ? "bg-accent text-[#070806] font-semibold" : "text-muted hover:text-ink",
+                mode === id ? "bg-accent text-on-accent font-semibold" : "text-muted hover:text-ink",
               )}
             >
               {MODE_LABEL[id]}
@@ -100,7 +99,7 @@ export function RomajiConverterWidget() {
                 title={hint}
                 className={cn(
                   "shrink-0 rounded-[var(--radius-sm)] px-2.5 py-1.5 font-mono text-xs transition-colors",
-                  style === id ? "bg-accent text-[#070806]" : "text-muted hover:bg-raised hover:text-ink",
+                  style === id ? "bg-accent text-on-accent" : "text-muted hover:bg-raised hover:text-ink",
                 )}
               >
                 {label}
@@ -162,7 +161,6 @@ export function RomajiConverterWidget() {
               {mode === "hira" ? "ひらがな" : mode === "kata" ? "カタカナ" : "Romaji"}
             </span>
             <div className="flex items-center gap-2">
-              <ShareButton />
               <CopyButton value={output} />
             </div>
           </div>

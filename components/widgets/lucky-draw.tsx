@@ -12,7 +12,6 @@ import {
   dedupeEntries,
 } from "@/lib/tools/generators/draw";
 import { CopyButton } from "@/components/copy-button";
-import { ShareButton } from "@/components/share-button";
 import { cn } from "@/lib/utils";
 
 const SAMPLE = "Alice\nBob\nCharlie\nDana\nEli\nFatima\nGrace\nHiro";
@@ -239,7 +238,7 @@ export function LuckyDrawWidget() {
               disabled={spinning}
               className={cn(
                 "h-8 flex-1 rounded-[3px] font-mono text-xs transition-colors disabled:opacity-50",
-                m === val ? "bg-accent text-[#070806]" : "text-muted hover:text-ink",
+                m === val ? "bg-accent text-on-accent" : "text-muted hover:text-ink",
               )}
             >
               {lbl}
@@ -368,7 +367,7 @@ export function LuckyDrawWidget() {
         <button
           onClick={run}
           disabled={entryCount === 0 || spinning}
-          className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-[var(--radius)] bg-accent font-mono text-sm font-semibold text-[#070806] transition-[filter] hover:brightness-110 disabled:pointer-events-none disabled:opacity-40"
+          className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-[var(--radius)] bg-accent font-mono text-sm font-semibold text-on-accent transition-[filter] hover:brightness-110 disabled:pointer-events-none disabled:opacity-40"
         >
           <Sparkles size={16} className={spinning ? "blink" : undefined} />
           {spinning
@@ -393,7 +392,6 @@ export function LuckyDrawWidget() {
           <div className="flex items-center justify-between border-b border-edge px-3 py-2">
             <span className="readout">{stageLabel}</span>
             <div className="flex items-center gap-2">
-              <ShareButton />
               <CopyButton value={copyValue} label="Copy" disabled={!hasResult} />
             </div>
           </div>

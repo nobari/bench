@@ -9,7 +9,6 @@ import {
   type FinglishToken,
 } from "@/lib/tools/text/finglish";
 import { CopyButton } from "@/components/copy-button";
-import { ShareButton } from "@/components/share-button";
 import { cn } from "@/lib/utils";
 
 const FA_FONT =
@@ -144,7 +143,6 @@ export function FinglishConverterWidget() {
           <div className="flex items-center justify-between border-b border-edge px-3 py-2">
             <span className="readout">فارسی</span>
             <div className="flex items-center gap-2">
-              <ShareButton />
               <CopyButton value={output} />
             </div>
           </div>
@@ -220,7 +218,7 @@ export function FinglishConverterWidget() {
                 className={cn(
                   "rounded-[var(--radius-sm)] px-2.5 py-1 text-[15px] transition-colors",
                   ci === current.choice
-                    ? "bg-accent text-[#070806]"
+                    ? "bg-accent text-on-accent"
                     : "text-muted hover:bg-raised hover:text-ink",
                 )}
               >

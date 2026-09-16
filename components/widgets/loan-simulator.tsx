@@ -5,7 +5,6 @@ import { useQueryState, parseAsString, parseAsStringEnum } from "nuqs";
 import { ChevronRight, TrendingDown } from "lucide-react";
 import { computeLoan, type AmortizationRow, type RepaymentType } from "@/lib/tools/math/loan";
 import { CopyButton } from "@/components/copy-button";
-import { ShareButton } from "@/components/share-button";
 import { cn } from "@/lib/utils";
 
 /* ------------------------------------------------------------------ currency */
@@ -170,7 +169,6 @@ export function LoanSimulatorWidget() {
       <div className="panel registered space-y-5 p-4">
         <div className="flex items-center justify-between">
           <span className="readout">Loan terms</span>
-          <ShareButton />
         </div>
 
         {/* price */}
@@ -283,7 +281,7 @@ export function LoanSimulatorWidget() {
                   onClick={() => setUnit(u)}
                   className={cn(
                     "h-7 w-12 rounded-[3px] font-mono text-xs transition-colors",
-                    unit === u ? "bg-accent text-[#070806]" : "text-muted hover:text-ink",
+                    unit === u ? "bg-accent text-on-accent" : "text-muted hover:text-ink",
                   )}
                 >
                   {u === "y" ? "Years" : "Mo"}

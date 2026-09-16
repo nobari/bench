@@ -13,7 +13,6 @@ import {
   type Charset,
 } from "@/lib/tools/generators/random";
 import { CopyButton } from "@/components/copy-button";
-import { ShareButton } from "@/components/share-button";
 import { cn } from "@/lib/utils";
 
 type Mode = "integers" | "decimals" | "strings" | "bytes" | "dice" | "coin";
@@ -126,7 +125,7 @@ export function RandomGeneratorWidget() {
               className={cn(
                 "h-8 rounded-[3px] font-mono text-xs transition-colors",
                 mode === val
-                  ? "bg-accent text-[#070806]"
+                  ? "bg-accent text-on-accent"
                   : "text-muted hover:text-ink",
               )}
             >
@@ -217,7 +216,7 @@ export function RandomGeneratorWidget() {
 
         <button
           onClick={run}
-          className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-[var(--radius)] bg-accent font-mono text-sm font-semibold text-[#070806] transition-[filter] hover:brightness-110"
+          className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-[var(--radius)] bg-accent font-mono text-sm font-semibold text-on-accent transition-[filter] hover:brightness-110"
         >
           <Dices size={15} /> {mode === "dice" || mode === "coin" ? "Roll" : "Generate"}
         </button>
@@ -230,7 +229,6 @@ export function RandomGeneratorWidget() {
             Output{result ? ` · ${result.lines.length}` : ""}
           </span>
           <div className="flex items-center gap-2">
-            <ShareButton />
             <CopyButton value={result?.copyText ?? ""} label="Copy all" />
           </div>
         </div>

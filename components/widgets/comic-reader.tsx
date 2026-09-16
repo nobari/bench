@@ -336,7 +336,7 @@ export function ComicReaderWidget() {
             <button
               type="submit"
               disabled={!password}
-              className="inline-flex h-10 items-center rounded-[var(--radius)] bg-accent px-4 font-mono text-sm font-semibold text-[#070806] transition-[filter] hover:brightness-110 disabled:opacity-40"
+              className="inline-flex h-10 items-center rounded-[var(--radius)] bg-accent px-4 font-mono text-sm font-semibold text-on-accent transition-[filter] hover:brightness-110 disabled:opacity-40"
             >
               Unlock
             </button>
@@ -387,7 +387,7 @@ export function ComicReaderWidget() {
                   onClick={() => setFit(f)}
                   className={cn(
                     "h-7 rounded-[3px] px-2.5 font-mono text-xs transition-colors",
-                    fit === f ? "bg-accent text-[#070806]" : "text-muted hover:text-ink",
+                    fit === f ? "bg-accent text-on-accent" : "text-muted hover:text-ink",
                   )}
                 >
                   {FIT_LABELS[f]}

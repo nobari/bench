@@ -455,7 +455,7 @@ export function TgsStudioWidget() {
                   setPlaying(!playing);
                 }}
                 title={playing ? "Pause" : "Play"}
-                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[var(--radius-sm)] bg-accent text-[#070806]"
+                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[var(--radius-sm)] bg-accent text-on-accent"
               >
                 {playing ? <Pause size={14} /> : <Play size={14} />}
               </button>
@@ -567,7 +567,7 @@ export function TgsStudioWidget() {
                 <button
                   onClick={() => void exportTgs()}
                   disabled={busy !== null}
-                  className="inline-flex h-9 items-center justify-center gap-1.5 rounded-[var(--radius)] bg-accent font-mono text-xs font-semibold text-[#070806] transition-[filter] hover:brightness-110 disabled:opacity-40"
+                  className="inline-flex h-9 items-center justify-center gap-1.5 rounded-[var(--radius)] bg-accent font-mono text-xs font-semibold text-on-accent transition-[filter] hover:brightness-110 disabled:opacity-40"
                 >
                   {busy === "tgs" ? <Loader size={13} className="animate-spin" /> : <Download size={13} />}
                   .tgs

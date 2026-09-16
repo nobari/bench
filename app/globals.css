@@ -1,63 +1,120 @@
 @import "tailwindcss";
 
 /* =========================================================================
-   BENCH — "Precision Instrument" design system
-   Near-black calibrated console · phosphor-lime signal · monospace readouts
+   BENCH — design tokens
+   Light-first "workshop" palette: steel-grey surfaces, one machinist-blue
+   accent for actions and the current location, category hues for icons only.
+   Dark scheme follows the OS. Everything below is driven by these variables.
    ========================================================================= */
 
 @theme {
-  /* ---- Surfaces & lines ---- */
-  --color-base: #08090a;
-  --color-base-2: #0b0d0e;
-  --color-surface: #0e1112;
-  --color-raised: #14181a;
-  --color-edge: #1d2426;
-  --color-edge-bright: #2b3437;
+  /* Surfaces & lines */
+  --color-canvas: #eef1f4;
+  --color-base: #fafbfc;
+  --color-base-2: #f3f5f7;
+  --color-surface: #ffffff;
+  --color-raised: #f2f4f7;
+  --color-edge: #d9dee4;
+  --color-edge-bright: #c2c9d1;
+  --color-scrim: rgba(21, 25, 29, 0.45);
 
-  /* ---- Text ---- */
-  --color-ink: #e9efe9;
-  --color-muted: #8b958d;
-  --color-faint: #545d57;
+  /* Text */
+  --color-ink: #15191d;
+  --color-muted: #5b6670;
+  --color-faint: #8b95a0;
 
-  /* ---- Signal (primary accent) ---- */
-  --color-signal: #c8f135;
-  --color-signal-dim: #93b324;
-  --color-signal-glow: #c8f13533;
+  /* Accent — machinist layout blue */
+  --color-accent: #1f4fd6;
+  --color-accent-hover: #1a43b8;
+  --color-accent-soft: #e6ecfb;
+  --color-on-accent: #ffffff;
 
-  /* ---- Status ---- */
-  --color-positive: #5ce08a;
-  --color-warn: #ffb454;
-  --color-danger: #ff5d6c;
+  /* Legacy aliases still referenced by a few widgets */
+  --color-signal: var(--color-accent);
+  --color-signal-dim: var(--color-accent-hover);
 
-  /* ---- Fonts (wired to next/font CSS vars in layout) ---- */
-  --font-display: var(--font-bricolage), ui-sans-serif, system-ui, sans-serif;
-  --font-mono: var(--font-jetbrains), ui-monospace, "SFMono-Regular", monospace;
-  --font-sans: var(--font-hanken), ui-sans-serif, system-ui, sans-serif;
+  /* Status */
+  --color-positive: #1a7f4b;
+  --color-warn: #b7791f;
+  --color-danger: #c62839;
 
-  /* ---- Radii ---- */
+  /* Fonts (wired to next/font in layout.tsx) */
+  --font-sans: var(--font-plex-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-display: var(--font-plex-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-plex-mono), ui-monospace, "SFMono-Regular", Menlo, monospace;
+
+  /* Radii */
   --radius-sm: 4px;
   --radius: 6px;
-  --radius-lg: 10px;
+  --radius-lg: 8px;
 }
 
 :root {
-  /* Category accent hues — referenced via var(--accent) set per page. */
-  --cat-text: #c8f135;
-  --cat-json: #ffb454;
-  --cat-image: #ff6aa2;
-  --cat-crypto: #34e0c8;
-  --cat-gen: #a79bff;
-  --cat-time: #5fa8ff;
-  --cat-color: #ff8a5c;
-  --cat-math: #e7c84a;
-  --cat-web: #5ce08a;
-  --cat-files: #48c8f2;
+  color-scheme: light;
 
-  /* Default page accent (overridden on category/tool pages). */
-  --accent: var(--color-signal);
+  /* Category hues (icon tints). */
+  --cat-text: #c2410c;
+  --cat-json: #b45309;
+  --cat-image: #be185d;
+  --cat-files: #0e7490;
+  --cat-crypto: #0f766e;
+  --cat-gen: #6d28d9;
+  --cat-time: #0369a1;
+  --cat-color: #dc2626;
+  --cat-math: #4d7c0f;
+  --cat-web: #15803d;
 
-  --grid: rgba(255, 255, 255, 0.022);
-  --grid-strong: rgba(200, 241, 53, 0.05);
+  /* Page accent — actions always use the app accent, never a category hue. */
+  --accent: var(--color-accent);
+
+  --shadow-pop: 0 12px 32px -12px rgba(21, 25, 29, 0.28), 0 0 0 1px rgba(21, 25, 29, 0.04);
+  --shadow-dialog: 0 24px 64px -24px rgba(21, 25, 29, 0.45);
+
+  --checker-a: #d5dae0;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+
+    --color-canvas: #0f1214;
+    --color-base: #141719;
+    --color-base-2: #121517;
+    --color-surface: #181c1f;
+    --color-raised: #1f2428;
+    --color-edge: #2a3136;
+    --color-edge-bright: #3a434a;
+    --color-scrim: rgba(0, 0, 0, 0.6);
+
+    --color-ink: #e6eaee;
+    --color-muted: #9aa4ae;
+    --color-faint: #6b7681;
+
+    --color-accent: #6d8eff;
+    --color-accent-hover: #85a0ff;
+    --color-accent-soft: #1c2748;
+    --color-on-accent: #0b1020;
+
+    --color-positive: #4ade80;
+    --color-warn: #fbbf24;
+    --color-danger: #f87171;
+
+    --cat-text: #fb923c;
+    --cat-json: #fbbf24;
+    --cat-image: #f472b6;
+    --cat-files: #22d3ee;
+    --cat-crypto: #2dd4bf;
+    --cat-gen: #a78bfa;
+    --cat-time: #38bdf8;
+    --cat-color: #f87171;
+    --cat-math: #a3e635;
+    --cat-web: #4ade80;
+
+    --shadow-pop: 0 12px 32px -12px rgba(0, 0, 0, 0.7), 0 0 0 1px rgba(255, 255, 255, 0.04);
+    --shadow-dialog: 0 24px 64px -24px rgba(0, 0, 0, 0.8);
+
+    --checker-a: #2a3137;
+  }
 }
 
 @layer base {
@@ -71,18 +128,19 @@
   }
 
   body {
-    background-color: var(--color-base);
+    background-color: var(--color-canvas);
     color: var(--color-ink);
     font-family: var(--font-sans);
-    font-feature-settings: "ss01", "cv01";
+    font-size: 14px;
+    line-height: 1.5;
     -webkit-font-smoothing: antialiased;
     text-rendering: optimizeLegibility;
     overflow-x: hidden;
   }
 
   ::selection {
-    background: var(--color-signal);
-    color: #050605;
+    background: var(--color-accent);
+    color: var(--color-on-accent);
   }
 
   :focus-visible {
@@ -91,33 +149,29 @@
     border-radius: 2px;
   }
 
-  /* Instrument-grade scrollbars */
   ::-webkit-scrollbar {
     width: 10px;
     height: 10px;
   }
   ::-webkit-scrollbar-track {
-    background: var(--color-base);
+    background: transparent;
   }
   ::-webkit-scrollbar-thumb {
-    background: var(--color-edge);
-    border: 2px solid var(--color-base);
-    border-radius: 999px;
-  }
-  ::-webkit-scrollbar-thumb:hover {
     background: var(--color-edge-bright);
+    border: 3px solid transparent;
+    background-clip: padding-box;
+    border-radius: 999px;
   }
 
   h1, h2, h3, h4 {
     font-family: var(--font-display);
-    letter-spacing: -0.02em;
+    letter-spacing: -0.01em;
   }
 }
 
 /*
  * iOS Safari auto-zooms the page when a focused form control renders under
- * 16px, leaving the layout zoomed with stray scroll behind modals like the
- * ⌘K palette. A 16px floor on touch devices prevents the zoom entirely.
+ * 16px. A 16px floor on touch devices prevents the zoom entirely.
  * Deliberately un-layered so it outranks text-* utilities in the cascade.
  */
 @media (hover: none) and (pointer: coarse) {
@@ -129,22 +183,22 @@
 }
 
 @layer utilities {
-  /* The signature engineering grid + faint vignette, layered behind content. */
+  /* Kept as class names used across widgets; now plain and quiet. */
   .bg-instrument {
-    background-color: var(--color-base);
-    background-image:
-      linear-gradient(var(--grid) 1px, transparent 1px),
-      linear-gradient(90deg, var(--grid) 1px, transparent 1px);
-    background-size: 44px 44px;
-    background-position: center top;
+    background-color: var(--color-canvas);
   }
-
-  /* Fine 4px tick grid for panel interiors. */
   .bg-ticks {
-    background-image:
-      linear-gradient(var(--grid) 1px, transparent 1px),
-      linear-gradient(90deg, var(--grid) 1px, transparent 1px);
-    background-size: 11px 11px;
+    background-image: none;
+  }
+  .grain::before {
+    content: none;
+  }
+  .glow {
+    text-shadow: none;
+  }
+  .rise,
+  .blink {
+    animation: none;
   }
 
   .text-balance {
@@ -161,36 +215,24 @@
     border: 1px solid var(--color-edge);
   }
 
-  /* Accent-aware text/border/bg using the page's --accent. */
+  /* Accent helpers — the page accent is the app accent everywhere. */
   .text-accent { color: var(--accent); }
   .border-accent { border-color: var(--accent); }
   .bg-accent { background-color: var(--accent); }
-  .shadow-accent { box-shadow: 0 0 0 1px var(--accent), 0 0 24px -6px var(--accent); }
+  .bg-accent-soft { background-color: var(--color-accent-soft); }
+  .text-on-accent { color: var(--color-on-accent); }
+  .shadow-accent { box-shadow: 0 0 0 1px var(--accent); }
+  .shadow-pop { box-shadow: var(--shadow-pop); }
+  .shadow-dialog { box-shadow: var(--shadow-dialog); }
 
-  .glow {
-    text-shadow: 0 0 18px var(--color-signal-glow);
-  }
-
-  /* Faint film grain over the whole viewport. */
-  .grain::before {
-    content: "";
-    position: fixed;
-    inset: 0;
-    z-index: 1;
-    pointer-events: none;
-    opacity: 0.5;
-    mix-blend-mode: overlay;
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.4'/%3E%3C/svg%3E");
-  }
-
-  /* Mono "readout" label — uppercase, tracked, tabular. */
+  /* Small label used in panel headers and stat bars. Sentence case. */
   .readout {
-    font-family: var(--font-mono);
-    font-size: 0.6875rem;
-    letter-spacing: 0.16em;
-    text-transform: uppercase;
-    font-variant-numeric: tabular-nums;
+    font-family: var(--font-sans);
+    font-size: 12px;
+    font-weight: 500;
+    line-height: 1.2;
     color: var(--color-muted);
+    font-variant-numeric: tabular-nums;
   }
 
   .tabular {
@@ -202,9 +244,9 @@
     border-radius: var(--radius-sm);
     border: 1px solid var(--color-edge);
     background: var(--color-base);
-    padding: 0.55rem 0.7rem;
+    padding: 0.5rem 0.65rem;
     font-family: var(--font-mono);
-    font-size: 0.82rem;
+    font-size: 13px;
     line-height: 1.5;
     color: var(--color-ink);
     transition: border-color 0.15s;
@@ -212,14 +254,15 @@
   .input::placeholder {
     color: var(--color-faint);
   }
+  .input:hover {
+    border-color: var(--color-edge-bright);
+  }
   .input:focus {
     border-color: var(--accent);
     outline: none;
+    box-shadow: 0 0 0 3px var(--color-accent-soft);
   }
 
-  /* Selects: custom chevron, can shrink inside grid/flex tracks (min-width:0),
-     and the value is vertically centred via the browser (line-height:normal +
-     no overflow clipping) so it never gets cut off. */
   select.input {
     -webkit-appearance: none;
     -moz-appearance: none;
@@ -230,66 +273,42 @@
     line-height: normal;
     padding-right: 1.9rem;
     text-overflow: ellipsis;
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%238b958d' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%235b6670' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
     background-repeat: no-repeat;
     background-position: right 0.6rem center;
     background-size: 12px 12px;
   }
-  select.input:hover {
-    border-color: var(--color-edge-bright);
-  }
-  /* Dark popup where the platform honors it (Windows/Linux/Chromium). */
   select.input option,
   select.input optgroup {
     background-color: var(--color-surface);
     color: var(--color-ink);
   }
 
-  /* Corner registration marks for framed elements. */
+  /* Framed elements used to carry corner marks; they are plain now. */
   .registered {
     position: relative;
   }
   .registered::before,
   .registered::after {
-    content: "";
-    position: absolute;
-    width: 7px;
-    height: 7px;
-    border-color: var(--accent);
-    opacity: 0.7;
-  }
-  .registered::before {
-    top: -1px;
-    left: -1px;
-    border-top: 1px solid;
-    border-left: 1px solid;
-  }
-  .registered::after {
-    bottom: -1px;
-    right: -1px;
-    border-bottom: 1px solid;
-    border-right: 1px solid;
+    content: none;
   }
 }
 
 @layer utilities {
-  /* JSON syntax highlighting tokens */
-  .tok-key { color: #7fb0ff; }
-  .tok-str { color: #9fe0a6; }
-  .tok-num { color: #ffce6b; }
-  .tok-bool { color: #c0a8ff; }
-  .tok-null { color: #6b746e; }
-  .tok-mark { background: var(--color-signal); color: #050605; border-radius: 2px; }
-}
+  /* JSON syntax highlighting */
+  .tok-key { color: #0550ae; }
+  .tok-str { color: #116329; }
+  .tok-num { color: #953800; }
+  .tok-bool { color: #6639ba; }
+  .tok-null { color: #6e7781; }
+  .tok-mark { background: var(--color-accent); color: var(--color-on-accent); border-radius: 2px; }
 
-@keyframes rise {
-  from {
-    opacity: 0;
-    transform: translateY(14px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
+  @media (prefers-color-scheme: dark) {
+    .tok-key { color: #7fb0ff; }
+    .tok-str { color: #9fe0a6; }
+    .tok-num { color: #ffce6b; }
+    .tok-bool { color: #c0a8ff; }
+    .tok-null { color: #7d8790; }
   }
 }
 
@@ -303,30 +322,16 @@
   /* Alpha checkerboard backdrop for colour swatches. */
   .checker {
     background-image:
-      linear-gradient(45deg, #2a3137 25%, transparent 25%),
-      linear-gradient(-45deg, #2a3137 25%, transparent 25%),
-      linear-gradient(45deg, transparent 75%, #2a3137 75%),
-      linear-gradient(-45deg, transparent 75%, #2a3137 75%);
+      linear-gradient(45deg, var(--checker-a) 25%, transparent 25%),
+      linear-gradient(-45deg, var(--checker-a) 25%, transparent 25%),
+      linear-gradient(45deg, transparent 75%, var(--checker-a) 75%),
+      linear-gradient(-45deg, transparent 75%, var(--checker-a) 75%);
     background-size: 14px 14px;
     background-position: 0 0, 0 7px, 7px -7px, -7px 0;
   }
   .gradient-animate {
     background-size: 300% 300% !important;
     animation: gradient-pan 6s ease infinite;
-  }
-}
-
-@keyframes blink {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.15; }
-}
-
-@layer utilities {
-  .rise {
-    animation: rise 0.7s cubic-bezier(0.2, 0.7, 0.2, 1) both;
-  }
-  .blink {
-    animation: blink 1.4s steps(1) infinite;
   }
 }
 

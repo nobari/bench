@@ -4,7 +4,6 @@ import { useMemo } from "react";
 import { useQueryState, parseAsString } from "nuqs";
 import { ArrowLeftRight } from "lucide-react";
 import { diffLines } from "@/lib/tools/web/diff";
-import { ShareButton } from "@/components/share-button";
 import { cn } from "@/lib/utils";
 
 export function DiffCheckerWidget() {
@@ -44,7 +43,6 @@ export function DiffCheckerWidget() {
             >
               <ArrowLeftRight size={13} /> Swap
             </button>
-            <ShareButton />
           </div>
         </div>
 

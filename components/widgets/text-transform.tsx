@@ -12,7 +12,6 @@ import {
   type TransformGroup,
 } from "@/lib/tools/text/transforms";
 import { CopyButton } from "@/components/copy-button";
-import { ShareButton } from "@/components/share-button";
 import { cn } from "@/lib/utils";
 
 interface Props {
@@ -68,7 +67,7 @@ export function TextTransformWidget({ preset, featured }: Props) {
                   className={cn(
                     "shrink-0 rounded-[var(--radius-sm)] px-2.5 py-1.5 font-mono text-xs transition-colors",
                     active
-                      ? "bg-accent text-[#070806]"
+                      ? "bg-accent text-on-accent"
                       : "text-muted hover:bg-raised hover:text-ink",
                   )}
                 >
@@ -127,7 +126,6 @@ export function TextTransformWidget({ preset, featured }: Props) {
           <div className="flex items-center justify-between border-b border-edge px-3 py-2">
             <span className="readout">Output</span>
             <div className="flex items-center gap-2">
-              <ShareButton />
               <CopyButton value={output} />
             </div>
           </div>
@@ -205,7 +203,7 @@ function TransformPicker({
       {open && (
         <>
           <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
-          <div className="absolute left-0 top-[calc(100%+6px)] z-50 w-[min(88vw,360px)] overflow-hidden rounded-[var(--radius)] border border-edge bg-surface shadow-[0_24px_60px_-20px_rgba(0,0,0,0.85)]">
+          <div className="absolute left-0 top-[calc(100%+6px)] z-50 w-[min(88vw,360px)] overflow-hidden rounded-[var(--radius)] border border-edge bg-surface shadow-pop">
             <div className="flex items-center gap-2 border-b border-edge px-3">
               <Search size={14} className="text-faint" />
               <input

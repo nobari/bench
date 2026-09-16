@@ -120,7 +120,7 @@ export function ShortUrlWidget() {
             <button
               onClick={shorten}
               disabled={!validation.ok || busy}
-              className="inline-flex h-8 items-center gap-1.5 rounded-[var(--radius-sm)] bg-accent px-3 font-mono text-xs font-semibold text-[#070806] transition-opacity disabled:cursor-not-allowed disabled:opacity-40"
+              className="inline-flex h-8 items-center gap-1.5 rounded-[var(--radius-sm)] bg-accent px-3 font-mono text-xs font-semibold text-on-accent transition-opacity disabled:cursor-not-allowed disabled:opacity-40"
             >
               {busy ? <Loader2 size={13} className="animate-spin" /> : <Scissors size={13} />}
               {busy ? "Shortening…" : "Shorten"}

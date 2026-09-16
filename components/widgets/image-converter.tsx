@@ -182,7 +182,7 @@ export function ImageConverterWidget() {
           <p className="readout">Output</p>
           <div className="flex rounded-[var(--radius-sm)] border border-edge p-0.5">
             {FORMATS.map(([val, lbl]) => (
-              <button key={val} onClick={() => setFormat(val)} className={cn("h-8 flex-1 rounded-[3px] font-mono text-xs transition-colors", format === val ? "bg-accent text-[#070806]" : "text-muted hover:text-ink")}>
+              <button key={val} onClick={() => setFormat(val)} className={cn("h-8 flex-1 rounded-[3px] font-mono text-xs transition-colors", format === val ? "bg-accent text-on-accent" : "text-muted hover:text-ink")}>
                 {lbl}
               </button>
             ))}
@@ -206,7 +206,7 @@ export function ImageConverterWidget() {
             <input type="range" min={0} max={3000} step={50} value={maxWidth} onChange={(e) => setMaxWidth(Number(e.target.value))} className="h-1.5 w-full cursor-pointer appearance-none rounded-full bg-raised accent-[var(--accent)]" />
           </div>
 
-          <button onClick={convert} disabled={!srcs.length || busy} className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-[var(--radius)] bg-accent font-mono text-sm font-semibold text-[#070806] transition-[filter] hover:brightness-110 disabled:opacity-40">
+          <button onClick={convert} disabled={!srcs.length || busy} className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-[var(--radius)] bg-accent font-mono text-sm font-semibold text-on-accent transition-[filter] hover:brightness-110 disabled:opacity-40">
             {busy ? <><Loader size={15} className="animate-spin" /> Converting…</> : "Convert"}
           </button>
         </div>

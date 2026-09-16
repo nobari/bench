@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   compressToEncodedURIComponent,
   decompressFromEncodedURIComponent,
@@ -31,7 +31,7 @@ import {
   type JsonValue,
 } from "@/lib/tools/json/utils";
 import { cn } from "@/lib/utils";
-import { copyShareLink } from "@/components/share-button";
+import { SHARE_SYNC_EVENT } from "@/components/share-button";
 
 const SAMPLE = `{
   "name": "Bench",
@@ -68,8 +68,18 @@ export function JsonViewerWidget() {
   const [query, setQuery] = useState("");
   const [forceOpen, setForceOpen] = useState<Set<string>>(new Set());
   const [forceClosed, setForceClosed] = useState<Set<string>>(new Set());
-  const [shared, setShared] = useState(false);
   const [copied, setCopied] = useState(false);
+
+  // Keep the compressed document in the URL hash so the page-level Share link reopens it.
+  useEffect(() => {
+    const sync = () => {
+      if (!text.trim()) return;
+      const c = compressToEncodedURIComponent(text);
+      window.history.replaceState(null, "", `${window.location.origin}${window.location.pathname}#doc=${c}`);
+    };
+    window.addEventListener(SHARE_SYNC_EVENT, sync);
+    return () => window.removeEventListener(SHARE_SYNC_EVENT, sync);
+  }, [text]);
 
   const trimmed = text.trim();
   const isEmpty = trimmed === "";
@@ -140,15 +150,6 @@ export function JsonViewerWidget() {
     await navigator.clipboard.writeText(out);
     setCopied(true);
     setTimeout(() => setCopied(false), 1400);
-  };
-
-  const share = async () => {
-    const c = compressToEncodedURIComponent(text);
-    const url = `${window.location.origin}${window.location.pathname}#doc=${c}`;
-    window.history.replaceState(null, "", url);
-    await copyShareLink(url);
-    setShared(true);
-    setTimeout(() => setShared(false), 1600);
   };
 
   const bytes = new TextEncoder().encode(text).length;
@@ -240,10 +241,6 @@ export function JsonViewerWidget() {
           )}
 
           <div className="ml-auto flex items-center gap-1.5">
-            <button onClick={share} className={cn("inline-flex h-8 items-center gap-1.5 rounded-[var(--radius-sm)] border border-edge px-2.5 font-mono text-xs text-muted transition-colors hover:border-accent hover:text-accent", shared && "border-positive text-positive")}>
-              {shared ? <Check size={13} /> : <Link2 size={13} />}
-              {shared ? "Copied" : "Share"}
-            </button>
             <button onClick={copyOutput} disabled={isEmpty} className={cn("inline-flex h-8 items-center gap-1.5 rounded-[var(--radius-sm)] border border-edge px-2.5 font-mono text-xs text-muted transition-colors hover:border-accent hover:text-accent disabled:opacity-40", copied && "border-positive text-positive")}>
               {copied ? <Check size={13} /> : <Copy size={13} />}
               {copied ? "Copied" : "Copy"}
@@ -353,7 +350,7 @@ function TabBtn({
       onClick={onClick}
       className={cn(
         "inline-flex h-7 items-center gap-1.5 rounded-[3px] px-2.5 font-mono text-xs transition-colors",
-        active ? "bg-accent text-[#070806]" : "text-muted hover:text-ink",
+        active ? "bg-accent text-on-accent" : "text-muted hover:text-ink",
       )}
     >
       <Icon size={13} />
@@ -409,7 +406,7 @@ function TreeNode({
       <div
         className={cn(
           "group flex items-center gap-1.5 rounded-[3px] py-[3px] pr-2 hover:bg-raised",
-          isHit && "bg-signal-glow",
+          isHit && "bg-accent-glow",
         )}
         style={{ paddingLeft: depth * 14 + 4 }}
       >

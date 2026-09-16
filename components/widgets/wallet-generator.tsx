@@ -65,7 +65,7 @@ export function WalletGeneratorWidget() {
               onClick={() => setMode(m)}
               className={cn(
                 "h-8 rounded-[3px] px-3 font-mono text-xs transition-colors",
-                mode === m ? "bg-accent text-[#070806]" : "text-muted hover:text-ink",
+                mode === m ? "bg-accent text-on-accent" : "text-muted hover:text-ink",
               )}
             >
               {m === "hd" ? "HD wallet" : "Single key"}
@@ -118,7 +118,7 @@ export function WalletGeneratorWidget() {
             onClick={() =>
               mode === "hd" ? setMnemonic(newMnemonic(words)) : setSingle(randomAccount())
             }
-            className="inline-flex h-8 items-center gap-1.5 rounded-[var(--radius-sm)] bg-accent px-3 font-mono text-xs font-semibold text-[#070806] transition-[filter] hover:brightness-110"
+            className="inline-flex h-8 items-center gap-1.5 rounded-[var(--radius-sm)] bg-accent px-3 font-mono text-xs font-semibold text-on-accent transition-[filter] hover:brightness-110"
           >
             <RefreshCw size={13} /> New
           </button>

@@ -9,9 +9,10 @@ import {
 } from "react";
 import { useRouter } from "next/navigation";
 import { Command } from "cmdk";
-import { ArrowUpRight, CornerDownLeft, Lightbulb, Search } from "lucide-react";
+import { Lightbulb, Search } from "lucide-react";
 import { CATEGORIES } from "@/lib/tools/categories";
 import { TOOLS } from "@/lib/tools/registry";
+import { toolShortTitle } from "@/lib/tools/types";
 
 interface Ctx {
   open: boolean;
@@ -27,11 +28,7 @@ export function useCommandPalette() {
   return ctx;
 }
 
-export function CommandPaletteProvider({
-  children,
-}: {
-  children: React.ReactNode;
-}) {
+export function CommandPaletteProvider({ children }: { children: React.ReactNode }) {
   const [open, setOpen] = useState(false);
   const toggle = useCallback(() => setOpen((o) => !o), []);
 
@@ -41,12 +38,7 @@ export function CommandPaletteProvider({
         e.preventDefault();
         toggle();
       }
-      if (
-        e.key === "/" &&
-        !e.metaKey &&
-        !e.ctrlKey &&
-        !isTyping(e.target)
-      ) {
+      if (e.key === "/" && !e.metaKey && !e.ctrlKey && !isTyping(e.target)) {
         e.preventDefault();
         setOpen(true);
       }
@@ -69,13 +61,12 @@ function isTyping(el: EventTarget | null) {
   return tag === "INPUT" || tag === "TEXTAREA" || el.isContentEditable;
 }
 
-function CommandMenu({
-  open,
-  setOpen,
-}: {
-  open: boolean;
-  setOpen: (v: boolean) => void;
-}) {
+const ITEM =
+  "flex cursor-pointer items-center gap-3 rounded-[var(--radius-sm)] px-3 py-2 text-[13.5px] text-muted data-[selected=true]:bg-raised data-[selected=true]:text-ink";
+const GROUP =
+  "[&_[cmdk-group-heading]]:px-3 [&_[cmdk-group-heading]]:pb-1 [&_[cmdk-group-heading]]:pt-3 [&_[cmdk-group-heading]]:text-[12px] [&_[cmdk-group-heading]]:font-semibold [&_[cmdk-group-heading]]:text-faint";
+
+function CommandMenu({ open, setOpen }: { open: boolean; setOpen: (v: boolean) => void }) {
   const router = useRouter();
 
   const go = useCallback(
@@ -91,37 +82,33 @@ function CommandMenu({
       open={open}
       onOpenChange={setOpen}
       label="Search tools"
-      className="pointer-events-auto mt-[12vh] w-[min(92vw,620px)]"
-      overlayClassName="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm"
+      className="pointer-events-auto mt-[10vh] w-[min(92vw,600px)]"
+      overlayClassName="fixed inset-0 z-50 bg-scrim"
       contentClassName="fixed inset-0 z-50 flex items-start justify-center p-4"
     >
-      <div className="panel registered overflow-hidden shadow-[0_30px_80px_-20px_rgba(0,0,0,0.8)]">
+      <div className="overflow-hidden rounded-[var(--radius-lg)] border border-edge bg-surface shadow-dialog">
         <div className="flex items-center gap-3 border-b border-edge px-4">
-          <Search size={16} className="text-faint" />
+          <Search size={16} className="text-muted" />
           <Command.Input
             autoFocus
-            placeholder={`Search ${TOOLS.length} tools — try “base64”, “gif”, “json”…`}
-            className="h-14 flex-1 bg-transparent font-mono text-sm text-ink outline-none placeholder:text-faint"
+            placeholder="Search tools — base64, json, gif, hash…"
+            className="h-12 flex-1 bg-transparent text-[15px] text-ink outline-none placeholder:text-faint"
           />
-          <kbd className="readout rounded border border-edge px-1.5 py-0.5">
-            ESC
+          <kbd className="rounded border border-edge bg-base px-1.5 py-0.5 font-mono text-[11px] text-muted">
+            esc
           </kbd>
         </div>
 
-        <Command.List className="max-h-[52vh] overflow-y-auto overscroll-contain p-2">
-          <Command.Empty className="px-3 py-8 text-center font-mono text-sm text-faint">
-            No tools match. Try another term.
+        <Command.List className="max-h-[56vh] overflow-y-auto overscroll-contain p-2">
+          <Command.Empty className="px-3 py-8 text-center text-[13px] text-muted">
+            No tool matches that. Try another word, or suggest it below.
           </Command.Empty>
 
           {CATEGORIES.map((cat) => {
             const tools = TOOLS.filter((t) => t.category === cat.slug);
             if (!tools.length) return null;
             return (
-              <Command.Group
-                key={cat.slug}
-                heading={cat.name}
-                className="[&_[cmdk-group-heading]]:readout [&_[cmdk-group-heading]]:px-3 [&_[cmdk-group-heading]]:py-2"
-              >
+              <Command.Group key={cat.slug} heading={cat.name} className={GROUP}>
                 {tools.map((t) => {
                   const Icon = t.icon;
                   return (
@@ -129,21 +116,13 @@ function CommandMenu({
                       key={`${t.category}/${t.slug}`}
                       value={`${t.title} ${t.keywords.join(" ")} ${(t.aliases ?? []).join(" ")}`}
                       onSelect={() => go(`/${t.category}/${t.slug}`)}
-                      style={{ ["--accent" as string]: `var(${cat.accentVar})` }}
-                      className="group flex cursor-pointer items-center gap-3 rounded-[var(--radius-sm)] px-3 py-2.5 text-sm text-muted data-[selected=true]:bg-raised data-[selected=true]:text-ink"
+                      className={ITEM}
                     >
-                      <Icon
-                        size={16}
-                        className="text-faint group-data-[selected=true]:text-accent"
-                      />
-                      <span className="flex-1 font-medium">{t.title}</span>
-                      <span className="hidden truncate font-mono text-xs text-faint sm:block">
+                      <Icon size={15} style={{ color: `var(${cat.accentVar})` }} className="shrink-0" />
+                      <span className="shrink-0 font-medium">{toolShortTitle(t)}</span>
+                      <span className="hidden min-w-0 truncate text-[12.5px] text-faint sm:block">
                         {t.tagline}
                       </span>
-                      <CornerDownLeft
-                        size={13}
-                        className="opacity-0 group-data-[selected=true]:opacity-100 text-accent"
-                      />
                     </Command.Item>
                   );
                 })}
@@ -151,18 +130,14 @@ function CommandMenu({
             );
           })}
 
-          <Command.Group
-            heading="Actions"
-            className="[&_[cmdk-group-heading]]:readout [&_[cmdk-group-heading]]:px-3 [&_[cmdk-group-heading]]:py-2"
-          >
+          <Command.Group heading="More" className={GROUP}>
             <Command.Item
               value="suggest a new tool request feature"
               onSelect={() => go("/suggest")}
-              className="group flex cursor-pointer items-center gap-3 rounded-[var(--radius-sm)] px-3 py-2.5 text-sm text-muted data-[selected=true]:bg-raised data-[selected=true]:text-ink"
+              className={ITEM}
             >
-              <Lightbulb size={16} className="text-faint group-data-[selected=true]:text-signal" />
-              <span className="flex-1 font-medium">Suggest a tool</span>
-              <ArrowUpRight size={13} className="text-faint" />
+              <Lightbulb size={15} className="shrink-0 text-muted" />
+              <span className="font-medium">Suggest a tool</span>
             </Command.Item>
           </Command.Group>
         </Command.List>

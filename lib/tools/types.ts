@@ -83,6 +83,8 @@ export interface ToolDef {
   category: CategorySlug;
   /** Human title, used as H1 and <title>. */
   title: string;
+  /** Short name for navigation and lists; defaults to the title without a parenthetical. */
+  short?: string;
   /** Short pitch shown on cards and under the H1. */
   tagline: string;
   /** ~150 char meta description / GEO answer opener. */
@@ -110,4 +112,9 @@ export interface ToolDef {
 /** Convenience: fully-qualified tool id. */
 export function toolId(t: Pick<ToolDef, "category" | "slug">): string {
   return `${t.category}/${t.slug}`;
+}
+
+/** Short name for navigation and lists. */
+export function toolShortTitle(t: Pick<ToolDef, "title" | "short">): string {
+  return t.short ?? t.title.replace(/\s*\(.*?\)\s*$/, "");
 }

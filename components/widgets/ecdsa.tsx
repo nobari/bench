@@ -118,7 +118,7 @@ export function EcdsaWidget() {
               type="button"
               onClick={onGenerate}
               disabled={busyGen}
-              className="inline-flex h-8 items-center gap-1.5 rounded-[var(--radius-sm)] bg-accent px-3 font-mono text-xs font-semibold text-[#070806] transition-opacity hover:opacity-90 disabled:opacity-50"
+              className="inline-flex h-8 items-center gap-1.5 rounded-[var(--radius-sm)] bg-accent px-3 font-mono text-xs font-semibold text-on-accent transition-opacity hover:opacity-90 disabled:opacity-50"
             >
               {busyGen ? "Generating…" : "Generate key pair"}
             </button>
@@ -180,7 +180,7 @@ export function EcdsaWidget() {
               type="button"
               onClick={onSign}
               disabled={busySign}
-              className="inline-flex h-9 items-center justify-center gap-1.5 rounded-[var(--radius-sm)] bg-accent px-3 font-mono text-xs font-semibold text-[#070806] transition-opacity hover:opacity-90 disabled:opacity-50"
+              className="inline-flex h-9 items-center justify-center gap-1.5 rounded-[var(--radius-sm)] bg-accent px-3 font-mono text-xs font-semibold text-on-accent transition-opacity hover:opacity-90 disabled:opacity-50"
             >
               {busySign ? "Signing…" : "Sign"}
             </button>
@@ -247,7 +247,7 @@ export function EcdsaWidget() {
               type="button"
               onClick={onVerify}
               disabled={busyVerify}
-              className="inline-flex h-9 items-center justify-center gap-1.5 rounded-[var(--radius-sm)] bg-accent px-3 font-mono text-xs font-semibold text-[#070806] transition-opacity hover:opacity-90 disabled:opacity-50"
+              className="inline-flex h-9 items-center justify-center gap-1.5 rounded-[var(--radius-sm)] bg-accent px-3 font-mono text-xs font-semibold text-on-accent transition-opacity hover:opacity-90 disabled:opacity-50"
             >
               {busyVerify ? "Verifying…" : "Verify"}
             </button>

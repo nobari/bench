@@ -14,7 +14,6 @@ import {
   type AddUnit,
 } from "@/lib/tools/time/day-math";
 import { CopyButton } from "@/components/copy-button";
-import { ShareButton } from "@/components/share-button";
 
 const MODES: { id: DayMode; label: string }[] = [
   { id: "between", label: "Between" },
@@ -65,7 +64,7 @@ export function DayCalculatorWidget() {
               className={cn(
                 "rounded-[3px] px-3 py-1.5 font-mono text-xs transition-colors",
                 mode === m.id
-                  ? "bg-accent text-[#070806] font-semibold"
+                  ? "bg-accent text-on-accent font-semibold"
                   : "text-muted hover:text-ink",
               )}
             >
@@ -74,7 +73,6 @@ export function DayCalculatorWidget() {
           ))}
         </div>
         <div className="ml-auto">
-          <ShareButton />
         </div>
       </div>
 

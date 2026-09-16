@@ -73,6 +73,7 @@ export const TOOLS: ToolDef[] = [
     slug: "base64",
     category: "text",
     title: "Base64 Encode & Decode",
+    short: "Base64",
     tagline: "Convert text and data to and from Base64 (and Base64URL)",
     description:
       "Encode text to Base64 or decode Base64 back to text, including URL-safe Base64URL. UTF-8 aware and fully client-side — paste, convert, copy.",
@@ -102,6 +103,7 @@ export const TOOLS: ToolDef[] = [
     slug: "url-encode",
     category: "text",
     title: "URL Encode & Decode",
+    short: "URL Encode & Decode",
     tagline: "Percent-encode and decode text for safe use in URLs",
     description:
       "Encode text for query strings and URLs (percent-encoding) or decode an encoded URL back to readable text. Handles UTF-8 and runs locally.",
@@ -126,6 +128,7 @@ export const TOOLS: ToolDef[] = [
     slug: "html-entities",
     category: "text",
     title: "HTML Entity Encode & Decode",
+    short: "HTML Entities",
     tagline: "Escape and unescape HTML special characters",
     description:
       "Encode characters like <, >, & and quotes into HTML entities, or decode named and numeric entities back to text. Prevent broken markup and XSS.",
@@ -177,6 +180,7 @@ export const TOOLS: ToolDef[] = [
     slug: "eip55-checksum",
     category: "text",
     title: "Ethereum Address Checksum (EIP-55)",
+    short: "EIP-55 Checksum",
     tagline: "Apply the EIP-55 mixed-case checksum to an Ethereum address",
     description:
       "Convert a lowercase Ethereum address to its EIP-55 checksummed (mixed-case) form, normalize to lowercase, or compute a Keccak-256 hash — all client-side.",
@@ -205,6 +209,7 @@ export const TOOLS: ToolDef[] = [
     slug: "full-width",
     category: "text",
     title: "Full-width ↔ Half-width Converter (Zenkaku / Hankaku)",
+    short: "Full-width ↔ Half-width",
     tagline: "Convert between full-width (全角) and half-width (半角) Japanese & Latin characters",
     description:
       "Convert ASCII and katakana to full-width (zenkaku) or back to half-width (hankaku), including half-width katakana ↔ full-width katakana. Normalize Japanese text and form input instantly, in your browser.",
@@ -252,6 +257,7 @@ export const TOOLS: ToolDef[] = [
     slug: "kana-converter",
     category: "text",
     title: "Katakana ↔ Hiragana Converter",
+    short: "Katakana ↔ Hiragana",
     tagline: "Convert Japanese kana between katakana (カタカナ) and hiragana (ひらがな)",
     description:
       "Convert hiragana to katakana or katakana to hiragana instantly, and switch half-width katakana to full-width. A fast, private Japanese kana converter that runs in your browser.",
@@ -297,6 +303,7 @@ export const TOOLS: ToolDef[] = [
     slug: "finglish",
     category: "text",
     title: "Finglish to Farsi Converter",
+    short: "Finglish → Farsi",
     tagline: "Type Persian with Latin letters (Pinglish) and get Persian script — tap any word to fix its spelling",
     description:
       "Convert Finglish / Pinglish (Persian typed in English letters) to Persian script instantly. A 1,000+ word dictionary, a verb conjugation engine and phonetic rules handle chat-style Farsi, with tap-to-fix alternatives for ص ض ط ظ ث ح ع ق غ. Runs in your browser.",
@@ -339,6 +346,7 @@ export const TOOLS: ToolDef[] = [
     slug: "romaji",
     category: "text",
     title: "Romaji to Hiragana & Katakana Converter",
+    short: "Romaji ↔ Kana",
     tagline: "Convert romaji to hiragana or katakana — and kana back to Hepburn romaji",
     description:
       "Convert romaji to hiragana or katakana the way a Japanese IME does (shi/si, tsu/tu, nn, doubled consonants, ō/ou/-), or turn hiragana and katakana into Hepburn or wāpuro romaji. Instant, private, in your browser.",
@@ -382,6 +390,7 @@ export const TOOLS: ToolDef[] = [
     slug: "gzip",
     category: "text",
     title: "Gzip / Deflate Compressor",
+    short: "Gzip / Deflate",
     tagline: "Compress and decompress text with gzip, zlib and raw deflate",
     description:
       "Compress text to gzip, zlib (deflate) or raw deflate and get Base64 output — or paste Base64/hex of compressed data and decompress it. Runs on the browser's native compression engine, nothing is uploaded.",
@@ -425,6 +434,7 @@ export const TOOLS: ToolDef[] = [
     slug: "viewer",
     category: "json",
     title: "JSON Viewer & Formatter",
+    short: "JSON Viewer",
     tagline: "Inspect, format, validate and query JSON — fast",
     description:
       "A professional JSON viewer: pretty-print or minify, validate with precise error locations, explore an interactive collapsible tree, search by key or JSONPath, and copy any path or value. Handles large documents.",
@@ -495,6 +505,7 @@ export const TOOLS: ToolDef[] = [
     slug: "qr-scanner",
     category: "image",
     title: "QR Code & Barcode Scanner",
+    short: "QR & barcode scanner",
     tagline: "Scan QR codes and barcodes — camera or image, every code at once",
     description:
       "Scan QR codes and barcodes (EAN, UPC, Code 128 …) with your camera or from an image — every code in the frame is found and decoded locally in your browser. Nothing is uploaded.",
@@ -536,6 +547,7 @@ export const TOOLS: ToolDef[] = [
     slug: "comic-reader",
     category: "image",
     title: "CBR / CBZ Comic Reader",
+    short: "Comic Reader",
     tagline: "Open and read comic book archives right in your browser",
     description:
       "Read CBR, CBZ, CB7 and CBT comic book archives online — pages are extracted locally in your browser with WebAssembly, with keyboard navigation, thumbnails, fit modes and fullscreen. No uploads.",
@@ -601,6 +613,7 @@ export const TOOLS: ToolDef[] = [
     slug: "uuid",
     category: "generators",
     title: "UUID & NanoID Generator",
+    short: "UUID & NanoID",
     tagline: "Generate UUID v4, UUID v7 and NanoID in bulk",
     description:
       "Generate random UUID v4, time-ordered UUID v7, or compact NanoID values in bulk. Configure count, length and formatting, then copy them all — generated client-side.",
@@ -626,6 +639,7 @@ export const TOOLS: ToolDef[] = [
     slug: "timestamp",
     category: "time",
     title: "Unix Timestamp Converter",
+    short: "Unix Timestamp",
     tagline: "Convert Unix epoch time to dates and back",
     description:
       "Convert Unix timestamps (seconds or milliseconds) to human-readable dates in ISO 8601, UTC and local time — or convert a date to epoch. Includes relative time and a live clock.",
@@ -722,6 +736,7 @@ export const TOOLS: ToolDef[] = [
     slug: "tgs",
     category: "image",
     title: "TGS Sticker Viewer & Editor",
+    short: "TGS Stickers",
     tagline: "Preview, recolor and convert Telegram stickers — right in your browser",
     description:
       "Open .tgs Telegram stickers and Lottie animations: play them, check Telegram's sticker rules, recolor the palette, and convert to TGS, Lottie JSON, GIF or PNG. Everything runs locally, no uploads.",
@@ -845,6 +860,7 @@ export const TOOLS: ToolDef[] = [
     slug: "date-converter",
     category: "time",
     title: "Date Converter — Formats, Calendars & Timezones",
+    short: "Date Converter",
     tagline: "Convert dates across formats, world calendars and timezones",
     description:
       "Convert any date to ISO 8601, RFC 2822, Unix time and locale formats — and into the Hijri (Islamic), Hebrew, Persian, Indian, Buddhist, Japanese, Chinese, Coptic, Ethiopic and Minguo calendars. Plus Julian Day, zodiac, season and 400+ timezones.",
@@ -955,6 +971,7 @@ export const TOOLS: ToolDef[] = [
     slug: "lucky-draw",
     category: "generators",
     title: "Lucky Draw / Random Picker",
+    short: "Lucky Draw",
     tagline: "Pick random winners from a list",
     description:
       "Paste a list of names or entries and draw random winners with a fair, cryptographic shuffle. Pick one or many, with or without repeats — a free raffle and random picker.",
@@ -1000,6 +1017,7 @@ export const TOOLS: ToolDef[] = [
     slug: "wallet",
     category: "crypto",
     title: "Crypto Wallet Generator",
+    short: "Wallet Generator",
     tagline: "Ethereum HD wallets, BIP39 mnemonics and addresses",
     description:
       "Generate an Ethereum wallet in your browser: a BIP39 recovery phrase, derived addresses (BIP44 m/44'/60'/0'/0/i) and keys — or a single random key. Fully client-side, for development and learning.",
@@ -1025,6 +1043,7 @@ export const TOOLS: ToolDef[] = [
     slug: "loan-simulator",
     category: "math",
     title: "Loan & Mortgage Simulator",
+    short: "Loan Simulator",
     tagline: "Payments, interest, repayment types and amortization schedule",
     description:
       "Calculate monthly payments, total interest and a full amortization schedule for any loan or mortgage. Compare repayment types — equal-payment, equal-principal and interest-only (balloon) — add a down payment, extra payments, an interest-only period and a start date.",
@@ -1050,6 +1069,7 @@ export const TOOLS: ToolDef[] = [
     slug: "base-converter",
     category: "math",
     title: "Number Base Converter",
+    short: "Number Base Converter",
     tagline: "Convert between binary, octal, decimal, hex and any base",
     description:
       "Convert numbers between binary, octal, decimal, hexadecimal and any base from 2 to 36. Handles arbitrarily large integers with BigInt — instant and client-side.",
@@ -1100,6 +1120,7 @@ export const TOOLS: ToolDef[] = [
     slug: "ascii-generator",
     category: "text",
     title: "ASCII Table & Character Codes",
+    short: "ASCII Table",
     tagline: "ASCII reference plus text ⇄ codes in many formats",
     description:
       "A full ASCII table reference and a character-code converter: turn text into decimal, hex, octal, binary or HTML-entity codes and back. Many representations, one tool.",
@@ -1124,6 +1145,7 @@ export const TOOLS: ToolDef[] = [
     slug: "short-url",
     category: "web",
     title: "URL Shortener",
+    short: "URL shortener",
     tagline: "Turn a URL of up to 10,000 characters into a short link — best-effort, made for handing off, not forever",
     description:
       "Shorten very long URLs (up to 10,000 characters) into a short bench.tools link. Links are stored on Vercel's free tier and cleared oldest-and-largest first when space runs out — ideal for sharing a huge URL briefly, not for permanent references.",

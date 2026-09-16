@@ -5,7 +5,7 @@ import type { WidgetKey } from "@/lib/tools/types";
 
 function Skeleton() {
   return (
-    <div className="panel bg-ticks animate-pulse p-6">
+    <div className="panel animate-pulse p-6">
       <div className="h-5 w-40 rounded bg-raised" />
       <div className="mt-5 grid gap-4 lg:grid-cols-2">
         <div className="h-48 rounded bg-raised" />

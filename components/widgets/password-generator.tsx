@@ -13,7 +13,6 @@ import {
   type PassphraseOptions,
 } from "@/lib/tools/generators/password";
 import { CopyButton } from "@/components/copy-button";
-import { ShareButton } from "@/components/share-button";
 import { cn } from "@/lib/utils";
 
 type Mode = "chars" | "phrase";
@@ -148,7 +147,7 @@ export function PasswordGeneratorWidget() {
               className={cn(
                 "h-8 flex-1 rounded-[3px] font-mono text-xs transition-colors",
                 mode === val
-                  ? "bg-accent text-[#070806]"
+                  ? "bg-accent text-on-accent"
                   : "text-muted hover:text-ink",
               )}
             >
@@ -253,7 +252,7 @@ export function PasswordGeneratorWidget() {
 
         <button
           onClick={regenerate}
-          className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-[var(--radius)] bg-accent font-mono text-sm font-semibold text-[#070806] transition-[filter] hover:brightness-110"
+          className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-[var(--radius)] bg-accent font-mono text-sm font-semibold text-on-accent transition-[filter] hover:brightness-110"
         >
           <RefreshCw size={15} /> Regenerate
         </button>
@@ -264,7 +263,6 @@ export function PasswordGeneratorWidget() {
         <div className="flex items-center justify-between border-b border-edge px-3 py-2">
           <span className="readout">Output · {outputs.length}</span>
           <div className="flex items-center gap-2">
-            <ShareButton />
             <CopyButton value={outputs.join("\n")} label="Copy all" />
           </div>
         </div>

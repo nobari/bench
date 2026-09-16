@@ -17,7 +17,6 @@ import {
   type RGBA,
 } from "@/lib/tools/color/convert";
 import { CopyButton } from "@/components/copy-button";
-import { ShareButton } from "@/components/share-button";
 import { cn } from "@/lib/utils";
 
 const WHITE: RGBA = { r: 255, g: 255, b: 255, a: 1 };
@@ -175,7 +174,6 @@ export function ColorConverterWidget() {
           <div className="panel">
             <div className="flex items-center justify-between border-b border-edge px-3 py-2">
               <span className="readout">Formats · ~{name}</span>
-              <ShareButton />
             </div>
             <div className="grid grid-cols-1 divide-y divide-edge sm:grid-cols-2 sm:divide-y-0">
               {(["hex", "rgb", "hsl", "hwb", "oklch", "cmyk"] as const).map((k) => (
@@ -391,7 +389,7 @@ function GradientBuilder({ seed, accentComplement }: { seed: string; accentCompl
               onClick={() => setType(t)}
               className={cn(
                 "h-7 rounded-[3px] px-2.5 font-mono text-xs capitalize transition-colors",
-                type === t ? "bg-accent text-[#070806]" : "text-muted hover:text-ink",
+                type === t ? "bg-accent text-on-accent" : "text-muted hover:text-ink",
               )}
             >
               {t}

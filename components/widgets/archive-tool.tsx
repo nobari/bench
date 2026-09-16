@@ -378,7 +378,7 @@ export function ArchiveExtractWidget() {
             <button
               type="submit"
               disabled={!password}
-              className="inline-flex h-10 items-center rounded-[var(--radius)] bg-accent px-4 font-mono text-sm font-semibold text-[#070806] transition-[filter] hover:brightness-110 disabled:opacity-40"
+              className="inline-flex h-10 items-center rounded-[var(--radius)] bg-accent px-4 font-mono text-sm font-semibold text-on-accent transition-[filter] hover:brightness-110 disabled:opacity-40"
             >
               Unlock
             </button>
@@ -418,7 +418,7 @@ export function ArchiveExtractWidget() {
             <button
               onClick={downloadAllAsZip}
               disabled={zipBusy}
-              className="inline-flex h-8 items-center gap-1.5 rounded-[var(--radius-sm)] bg-accent px-3 font-mono text-xs font-semibold text-[#070806] transition-[filter] hover:brightness-110 disabled:opacity-40"
+              className="inline-flex h-8 items-center gap-1.5 rounded-[var(--radius-sm)] bg-accent px-3 font-mono text-xs font-semibold text-on-accent transition-[filter] hover:brightness-110 disabled:opacity-40"
             >
               {zipBusy ? <Loader size={13} className="animate-spin" /> : <Download size={13} />}
               All as ZIP
@@ -629,7 +629,7 @@ export function ArchiveCreateWidget() {
                 onClick={() => setFmtId(f.id)}
                 className={cn(
                   "h-8 flex-1 rounded-[3px] font-mono text-xs transition-colors",
-                  fmtId === f.id ? "bg-accent text-[#070806]" : "text-muted hover:text-ink",
+                  fmtId === f.id ? "bg-accent text-on-accent" : "text-muted hover:text-ink",
                 )}
               >
                 {f.label}
@@ -653,7 +653,7 @@ export function ArchiveCreateWidget() {
           <button
             onClick={() => void create()}
             disabled={!files.length || busy}
-            className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-[var(--radius)] bg-accent font-mono text-sm font-semibold text-[#070806] transition-[filter] hover:brightness-110 disabled:opacity-40"
+            className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-[var(--radius)] bg-accent font-mono text-sm font-semibold text-on-accent transition-[filter] hover:brightness-110 disabled:opacity-40"
           >
             {busy ? (
               <>

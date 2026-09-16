@@ -14,7 +14,6 @@ import {
   localZone,
 } from "@/lib/tools/time/date-formats";
 import { CopyButton } from "@/components/copy-button";
-import { ShareButton } from "@/components/share-button";
 import { ExpandableValue } from "@/components/expandable-value";
 
 const ALL_ZONES = allTimeZones();
@@ -62,7 +61,6 @@ export function DateConverterWidget() {
           >
             <Clock size={14} /> Now
           </button>
-          <ShareButton />
           {input && (
             <button
               onClick={() => setInput("")}

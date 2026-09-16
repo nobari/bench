@@ -35,7 +35,7 @@ export function CopyButton({
       disabled={disabled || !value}
       aria-label={label}
       className={cn(
-        "inline-flex h-8 select-none items-center gap-1.5 rounded-[var(--radius-sm)] border border-edge px-2.5 font-mono text-xs text-muted transition-colors hover:border-accent hover:text-accent disabled:pointer-events-none disabled:opacity-40",
+        "inline-flex h-8 select-none items-center gap-1.5 rounded-[var(--radius-sm)] border border-edge px-2.5 text-[13px] text-muted transition-colors hover:border-accent hover:text-accent disabled:pointer-events-none disabled:opacity-40",
         copied && "border-positive text-positive",
         className,
       )}

@@ -27,7 +27,7 @@ Bench is the kind of small tools you reach for a dozen times a day — encode so
 - ⌘ **Minimum-action access** — a global **⌘K** command palette searches and jumps to any tool from anywhere.
 - 🔎 **SEO / GEO / LLM-ready** — static generation, per-tool metadata, JSON-LD (`SoftwareApplication`, `BreadcrumbList`, `FAQPage`), `sitemap.xml`, `robots.txt`, and machine-readable [`/llms.txt`](https://llmstxt.org) + `/llms-full.txt`.
 - 🧩 **Registry-driven** — one typed array generates routes, navigation, command palette, sitemap, OG images, and AI-discovery files.
-- 🎛️ **A distinct design** — a "Precision Instrument" dark theme with per-category accent colors, built to avoid generic UI.
+- 🧰 **Built like a tool, not a landing page** — every tool is one click away in a persistent index, each page has a single primary Share action, and the light/dark palette follows your system.
 
 ## Tools
 

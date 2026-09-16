@@ -17,7 +17,6 @@ import {
   type DecodeBase,
 } from "@/lib/tools/text/ascii";
 import { CopyButton } from "@/components/copy-button";
-import { ShareButton } from "@/components/share-button";
 import { cn } from "@/lib/utils";
 
 type Mode = "table" | "encode" | "decode";
@@ -47,7 +46,7 @@ export function AsciiGeneratorWidget() {
               className={cn(
                 "h-8 flex-1 rounded-[3px] font-mono text-xs transition-colors",
                 current === val
-                  ? "bg-accent text-[#070806] font-semibold"
+                  ? "bg-accent text-on-accent font-semibold"
                   : "text-muted hover:text-ink",
               )}
             >
@@ -260,7 +259,6 @@ function EncodePanel() {
           <div className="flex items-center justify-between border-b border-edge px-3 py-2">
             <span className="readout">Codes</span>
             <div className="flex items-center gap-2">
-              <ShareButton />
               <CopyButton value={output} />
             </div>
           </div>
@@ -351,7 +349,6 @@ function DecodePanel() {
           <div className="flex items-center justify-between border-b border-edge px-3 py-2">
             <span className="readout">Text</span>
             <div className="flex items-center gap-2">
-              <ShareButton />
               <CopyButton value={output} />
             </div>
           </div>

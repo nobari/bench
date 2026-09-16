@@ -6,10 +6,10 @@
 export const SITE = {
   name: "Bench",
   /** Used in <title> templates and wordmark. */
-  wordmark: "BENCH",
-  tagline: "A precision toolkit for the web",
+  wordmark: "Bench",
+  tagline: "Everyday tools for text, data, images and the web",
   description:
-    "Fast, private, no-nonsense developer utilities. Encode, decode, convert, inspect and generate — every tool runs entirely in your browser. No uploads, no tracking, no limits.",
+    "Fast, private utilities for text, JSON, images, files, hashing, time, color, math and the web. Every tool runs in your browser — no uploads, no accounts, no tracking.",
   /** GitHub repo used by the “Suggest a tool” server action + footer link. */
   repo: "nobari/bench",
   links: {

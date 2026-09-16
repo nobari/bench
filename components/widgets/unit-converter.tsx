@@ -10,7 +10,6 @@ import {
   type CategoryDef,
 } from "@/lib/tools/math/units";
 import { CopyButton } from "@/components/copy-button";
-import { ShareButton } from "@/components/share-button";
 import { cn } from "@/lib/utils";
 
 /** Resolve a category by key, falling back to the first defined category. */
@@ -68,7 +67,6 @@ export function UnitConverterWidget() {
       <div className="panel registered p-3 space-y-3">
         <div className="flex items-center justify-between">
           <span className="readout">Category</span>
-          <ShareButton />
         </div>
         <div className="flex flex-wrap gap-2">
           {CATEGORIES.map((c) => (
@@ -82,7 +80,7 @@ export function UnitConverterWidget() {
               className={cn(
                 "h-8 rounded-[var(--radius-sm)] border px-3 font-mono text-xs transition-colors",
                 category.key === c.key
-                  ? "border-accent bg-accent text-[#070806] font-semibold"
+                  ? "border-accent bg-accent text-on-accent font-semibold"
                   : "border-edge text-muted hover:border-accent hover:text-accent",
               )}
             >
