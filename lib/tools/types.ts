@@ -57,6 +57,7 @@ export type WidgetKey =
   | "palette-generator"
   | "image-converter"
   | "base64-image"
+  | "provenance"
   | "slow-mo"
   | "diff-checker"
   | "regex-tester"

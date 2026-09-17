@@ -8,6 +8,9 @@ importers:
 
   .:
     dependencies:
+      '@contentauth/c2pa-web':
+        specifier: ^0.15.0
+        version: 0.15.0
       '@noble/curves':
         specifier: ^2.2.0
         version: 2.2.0
@@ -211,6 +214,18 @@ packages:
   '@babel/types@7.29.7':
     resolution: {integrity: sha512-4zBIxpPzowiZpusoFkyGVwakdRJUyuH5PxQ/PrqghfdFWWasvnCdPfQXHrenDai+gyLARulZjZowCOj6fjT4pA==}
     engines: {node: '>=6.9.0'}
+
+  '@contentauth/c2pa-types@0.7.4':
+    resolution: {integrity: sha512-lPxm/5yvUqS2LItFMvgfCDWm8yCw9vsW32vrkCPgj4QkzGxQ9WuUkK32eWzsxBL9sCDbCQDNNtFroH6qTaU90w==}
+
+  '@contentauth/c2pa-utilities@0.3.0':
+    resolution: {integrity: sha512-1rlnqnZrfw5IE85JbIPYybIb65l3o8YJzLUAoD4zHNkEZguhM33hCPw5FE1BHHI1VvNmO8qbKZWok6vL84zdiQ==}
+
+  '@contentauth/c2pa-wasm@0.12.0':
+    resolution: {integrity: sha512-UeWTzJ++UW1MHDogakGp69cSucatsbRy5o0Emsil4RKK3nChsSq0ApBk1LkHdPb1ojDEQGNcUpLdusn+JlSMzA==}
+
+  '@contentauth/c2pa-web@0.15.0':
+    resolution: {integrity: sha512-iRjXpRPiasTMPXunqaNy/mKgzmqd+HpChFjlOhAPeidcUWnFpbV2MZpIWQXXfD2bWKMm14ITm4dUOBmnZjLcyQ==}
 
   '@emnapi/core@1.10.0':
     resolution: {integrity: sha512-yq6OkJ4p82CAfPl0u9mQebQHKPJkY7WrIuk205cTYnYe+k2Z8YBh11FrbRG/H6ihirqcacOgl2BIO8oyMQLeXw==}
@@ -1740,6 +1755,9 @@ packages:
   hermes-parser@0.25.1:
     resolution: {integrity: sha512-6pEjquH3rqaI6cYAXYPcz9MS4rY6R4ngRgrgfDshRptUZIc3lw0MCIJIGDj9++mfySOuPTHB4nrSW99BCvOPIA==}
 
+  highgain@0.1.0:
+    resolution: {integrity: sha512-Vw/g2upw4MYLZ9e95k79+idMoPFEKvTQVTce9LCDfI+T6AiG+SdiR4WDKszB1grQy0O+uhxd6cqbdi3VhECdbA==}
+
   highlight.js@11.12.0:
     resolution: {integrity: sha512-nbfWpyRMcMrPMmDwJB+dhX/eiaPKtc2RB+0QZskqJ3WjRA/FDS0e9hZrx8EC/lbEv8gXy98FcDbNa/dspAaJMg==}
     engines: {node: '>=12.0.0'}
@@ -2598,6 +2616,10 @@ packages:
     peerDependencies:
       typescript: '>=4.8.4'
 
+  ts-deepmerge@8.0.0:
+    resolution: {integrity: sha512-133O+10nJmVI8w5xeVZPEv5PIrv7iaUae07wv1aH8XJH95Ur6YIhWAPhPyP1YPlbPS9fCVcNIZTu7m8urRVF0A==}
+    engines: {node: '>=14.13.1'}
+
   tsconfig-paths@3.15.0:
     resolution: {integrity: sha512-2Ac2RgzDe/cn48GvOe3M+o82pEFewD3UPbyoUHHdKasHwJKjds4fLXWf/Ux5kATBKN20oaFGu+jbElp1pos0mg==}
 
@@ -2861,6 +2883,22 @@ snapshots:
     dependencies:
       '@babel/helper-string-parser': 7.29.7
       '@babel/helper-validator-identifier': 7.29.7
+
+  '@contentauth/c2pa-types@0.7.4': {}
+
+  '@contentauth/c2pa-utilities@0.3.0':
+    dependencies:
+      '@contentauth/c2pa-types': 0.7.4
+      ts-deepmerge: 8.0.0
+
+  '@contentauth/c2pa-wasm@0.12.0': {}
+
+  '@contentauth/c2pa-web@0.15.0':
+    dependencies:
+      '@contentauth/c2pa-types': 0.7.4
+      '@contentauth/c2pa-utilities': 0.3.0
+      '@contentauth/c2pa-wasm': 0.12.0
+      highgain: 0.1.0
 
   '@emnapi/core@1.10.0':
     dependencies:
@@ -4386,6 +4424,8 @@ snapshots:
     dependencies:
       hermes-estree: 0.25.1
 
+  highgain@0.1.0: {}
+
   highlight.js@11.12.0: {}
 
   human-signals@2.1.0: {}
@@ -5223,6 +5263,8 @@ snapshots:
   ts-api-utils@2.5.0(typescript@5.9.3):
     dependencies:
       typescript: 5.9.3
+
+  ts-deepmerge@8.0.0: {}
 
   tsconfig-paths@3.15.0:
     dependencies:

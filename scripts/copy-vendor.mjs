@@ -16,6 +16,8 @@ const FILES = [
   // relative to its own URL, so both files must live in the same directory.
   ["libarchive.js/dist/worker-bundle.js", "libarchive/worker-bundle.js"],
   ["libarchive.js/dist/libarchive.wasm", "libarchive/libarchive.wasm"],
+  // c2pa-web (Content Credentials reader/signer) — the widget passes wasmSrc: /vendor/c2pa/c2pa_bg.wasm
+  ["@contentauth/c2pa-web/dist/resources/c2pa_bg.wasm", "c2pa/c2pa_bg.wasm"],
 ];
 
 for (const [from, to] of FILES) {
