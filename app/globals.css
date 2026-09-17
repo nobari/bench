@@ -60,6 +60,7 @@
   --cat-text: #c2410c;
   --cat-json: #b45309;
   --cat-image: #be185d;
+  --cat-audio: #a21caf;
   --cat-files: #0e7490;
   --cat-crypto: #0f766e;
   --cat-gen: #6d28d9;
@@ -120,6 +121,7 @@ html[data-nav="collapsed"] .tool-nav {
     --cat-text: #fb923c;
     --cat-json: #fbbf24;
     --cat-image: #f472b6;
+    --cat-audio: #e879f9;
     --cat-files: #22d3ee;
     --cat-crypto: #2dd4bf;
     --cat-gen: #a78bfa;
@@ -236,7 +238,7 @@ html[data-nav="collapsed"] .tool-nav {
   /* Accent helpers — the page accent is the app accent everywhere. */
   .text-accent { color: var(--accent); }
   .border-accent { border-color: var(--accent); }
-  .bg-accent { background-color: var(--accent); }
+  .bg-accent { background-color: var(--color-accent-fill); }
   .bg-accent-soft { background-color: var(--color-accent-soft); }
   .text-on-accent { color: var(--color-on-accent); }
   .shadow-accent { box-shadow: 0 0 0 1px var(--accent); }

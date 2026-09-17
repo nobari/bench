@@ -1,4 +1,5 @@
 import {
+  Music,
   Binary,
   Braces,
   Image as ImageIcon,
@@ -40,6 +41,15 @@ export const CATEGORIES: Category[] = [
       "Turn image sequences into optimized GIFs, convert between formats and resize — all processed in your browser with no uploads.",
     icon: ImageIcon,
     accentVar: "--cat-image",
+  },
+  {
+    slug: "audio",
+    name: "Audio & Music",
+    tagline: "Convert audio files and do the music math, locally",
+    description:
+      "Convert between MP3, WAV, FLAC, AAC and Opus in your browser, and convert notes, frequencies, MIDI numbers, tempos, keys, decibels, pitch ratios and bitrates.",
+    icon: Music,
+    accentVar: "--cat-audio",
   },
   {
     slug: "files",

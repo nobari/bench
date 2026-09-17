@@ -11,6 +11,9 @@ importers:
       '@contentauth/c2pa-web':
         specifier: ^0.15.0
         version: 0.15.0
+      '@mediabunny/mp3-encoder':
+        specifier: ^1.56.3
+        version: 1.56.3(mediabunny@1.56.2)
       '@noble/curves':
         specifier: ^2.2.0
         version: 2.2.0
@@ -465,6 +468,11 @@ packages:
 
   '@jridgewell/trace-mapping@0.3.31':
     resolution: {integrity: sha512-zzNR+SdQSDJzc8joaeP8QQoCQr8NuYx2dIIytl1QeBEZHJ9uW6hebsrYgbz8hJwUQao3TWCMtmfV8Nu1twOLAw==}
+
+  '@mediabunny/mp3-encoder@1.56.3':
+    resolution: {integrity: sha512-B2vsWmE8GT8R9Ua7CVa68i8YK9ZoCqA6s5GjeyZwPf26wLchEG95Y2Ek5yMviH8TtnQI/WE3r+RhoWGqcoAO2g==}
+    peerDependencies:
+      mediabunny: ^1.0.0
 
   '@napi-rs/wasm-runtime@1.1.5':
     resolution: {integrity: sha512-AWPoBRJ9tsnVhor4sjO7rkni+7p+2IAEFj6cx06UgP10jkQHqay/36uRV/bFkgrh18D9vb4cr8Q0Pthskgzy+Q==}
@@ -3098,6 +3106,10 @@ snapshots:
     dependencies:
       '@jridgewell/resolve-uri': 3.1.2
       '@jridgewell/sourcemap-codec': 1.5.5
+
+  '@mediabunny/mp3-encoder@1.56.3(mediabunny@1.56.2)':
+    dependencies:
+      mediabunny: 1.56.2
 
   '@napi-rs/wasm-runtime@1.1.5(@emnapi/core@1.10.0)(@emnapi/runtime@1.10.0)':
     dependencies:

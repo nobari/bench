@@ -4,7 +4,7 @@
 
 <p>
   <a href="https://bench.bozmoz.com"><img alt="bench.bozmoz.com" src="https://img.shields.io/badge/live-bench.bozmoz.com-68a52a?style=flat-square&labelColor=1c2414"></a>
-  <a href="#tools"><img alt="46 tools" src="https://img.shields.io/badge/tools-46-68a52a?style=flat-square&labelColor=1c2414"></a>
+  <a href="#tools"><img alt="53 tools" src="https://img.shields.io/badge/tools-53-68a52a?style=flat-square&labelColor=1c2414"></a>
   <a href="https://nextjs.org"><img alt="Next.js 16" src="https://img.shields.io/badge/Next.js-16-1e2419?style=flat-square&logo=nextdotjs&logoColor=white&labelColor=1c2414"></a>
   <a href="https://react.dev"><img alt="React 19" src="https://img.shields.io/badge/React-19-149eca?style=flat-square&logo=react&logoColor=white&labelColor=1c2414"></a>
   <a href="https://www.typescriptlang.org"><img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-5-3178c6?style=flat-square&logo=typescript&logoColor=white&labelColor=1c2414"></a>
@@ -34,7 +34,7 @@ Bench is the kind of small tools you reach for a dozen times a day — encode so
 
 ## Tools
 
-> 46 tools across 10 categories — and counting.
+> 53 tools across 11 categories — and counting.
 
 | Category | Tools |
 | --- | --- |

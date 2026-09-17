@@ -65,6 +65,11 @@ const WIDGETS: Record<WidgetKey, React.ComponentType<Record<string, unknown>>> =
     () => import("@/components/widgets/palette-generator").then((m) => m.PaletteGeneratorWidget),
     { ssr: false, loading: Skeleton },
   ),
+  "audio-converter": dynamic(() => import("@/components/widgets/audio-converter").then((m) => m.AudioConverterWidget), { ssr: false, loading: Skeleton }),
+  "note-frequency": dynamic(() => import("@/components/widgets/note-frequency").then((m) => m.NoteFrequencyWidget), { ssr: false, loading: Skeleton }),
+  "bpm-calculator": dynamic(() => import("@/components/widgets/bpm-calculator").then((m) => m.BpmCalculatorWidget), { ssr: false, loading: Skeleton }),
+  transposer: dynamic(() => import("@/components/widgets/transposer").then((m) => m.TransposerWidget), { ssr: false, loading: Skeleton }),
+  "audio-units": dynamic(() => import("@/components/widgets/audio-units").then((m) => m.AudioUnitsWidget), { ssr: false, loading: Skeleton }),
   provenance: dynamic(() => import("@/components/widgets/provenance").then((m) => m.ProvenanceWidget), { ssr: false, loading: Skeleton }),
   "base64-image": dynamic(() => import("@/components/widgets/base64-image").then((m) => m.Base64ImageWidget), { ssr: false, loading: Skeleton }),
   "image-converter": dynamic(

@@ -1,4 +1,6 @@
 import {
+  AudioLines,
+  AudioWaveform,
   Binary,
   BookOpen,
   Braces,
@@ -18,6 +20,7 @@ import {
   FastForward,
   Film,
   Fingerprint,
+  Gauge,
   GitCompare,
   Hash,
   Images,
@@ -26,8 +29,11 @@ import {
   Languages,
   Link,
   Link2,
+  ListMusic,
   Lock,
+  Metronome,
   Palette,
+  Piano,
   Pipette,
   QrCode,
   Regex,
@@ -40,6 +46,7 @@ import {
   Superscript,
   Table,
   Timer,
+  Volume2,
   Wallet,
 } from "lucide-react";
 import type { CategorySlug, ToolDef } from "./types";
@@ -1310,6 +1317,201 @@ export const TOOLS: ToolDef[] = [
     related: ["generators/random", "generators/uuid"],
     aliases: ["raffle", "random name picker", "winner picker"],
   },
+
+  /* ============================== AUDIO ================================== */
+  {
+    slug: "converter",
+    category: "audio",
+    title: "Audio Converter",
+    short: "Audio converter",
+    tagline: "Convert MP3, WAV, FLAC, AAC and Opus in your browser — with bitrate, trim, normalise and tag options",
+    description:
+      "Convert audio between MP3, WAV, FLAC, AAC/M4A, Opus (Ogg/WebM) and extract audio from video, entirely in your browser: choose bitrate, sample rate and channels, trim, normalise, and edit or strip tags. No uploads.",
+    keywords: ["audio converter", "mp3 converter", "wav to mp3", "flac to mp3", "m4a to mp3", "mp3 to wav", "convert audio online", "opus converter", "extract audio from video", "video to mp3"],
+    icon: AudioLines,
+    status: "beta",
+    widget: "audio-converter",
+    howItWorks:
+      "Drop audio or video files and pick an output: MP3 (via a WebAssembly LAME encoder), AAC in M4A or ADTS, Opus in Ogg or WebM, FLAC, or WAV at 16/24-bit or 32-bit float. The file is demuxed and decoded locally, optionally resampled and remixed to mono or stereo, trimmed to a start/end time, gain-adjusted or peak-normalised to −1 dBFS, then encoded with the browser's WebCodecs — nothing leaves your device. Tags (title, artist, album, cover art) are carried over, edited, or stripped. Formats the current browser can't encode are greyed out; Chrome and Edge support the full set.",
+    faq: [
+      { q: "Which formats can I convert between?", a: "Input: anything the browser can demux — MP3, WAV, FLAC, AAC/M4A, Ogg Vorbis/Opus, WebM, MP4/MOV/MKV video (the audio track is extracted). Output: MP3, AAC (M4A or raw ADTS), Opus (Ogg or WebM), FLAC and WAV." },
+      { q: "Is the conversion lossless?", a: "WAV and FLAC are lossless. MP3, AAC and Opus are lossy; converting one lossy format to another always loses a little more, so keep the bitrate at or above the source's." },
+      { q: "Are my files uploaded?", a: "No. Decoding and encoding run in your browser with WebCodecs and a WASM MP3 encoder. Large files work, limited only by your device's memory." },
+      { q: "Why is a format greyed out?", a: "Encoders come from the browser. Safari and Firefox lack some WebCodecs audio encoders (AAC, FLAC or Opus depending on the version); MP3 and WAV work everywhere because they don't rely on the browser." },
+      { q: "Can it normalise loudness?", a: "It peak-normalises to −1 dBFS (a measuring pass followed by the encode) and applies a manual gain in dB. LUFS loudness normalisation isn't included." },
+    ],
+    examples: [
+      { label: "MP3 at 320 kbps", query: "fmt=mp3&br=320" },
+      { label: "WAV, 24-bit, 48 kHz", query: "fmt=wav&bd=pcm-s24&sr=48000" },
+      { label: "Opus for the web", query: "fmt=ogg&br=96" },
+    ],
+    related: ["audio/bitrate", "image/converter", "image/slow-mo"],
+    aliases: ["mp3 to wav", "wav to flac", "m4a converter", "ogg to mp3", "webm to mp3", "music converter"],
+  },
+  {
+    slug: "note-frequency",
+    category: "audio",
+    title: "Note ↔ Frequency ↔ MIDI Converter",
+    short: "Note ↔ frequency",
+    tagline: "Any note, frequency or MIDI number to the other two — with cents, tuning and a piano table",
+    description:
+      "Convert musical notes to frequencies in hertz and MIDI note numbers (and back), with cents deviation, alternative concert pitch (432, 442 Hz…), wavelength and period, plus a full piano frequency chart.",
+    keywords: ["note to frequency", "frequency to note", "midi note number", "note frequency chart", "a4 440 hz", "hz to note converter", "piano key frequencies", "432 hz tuning", "midi to hz"],
+    icon: Piano,
+    status: "stable",
+    widget: "note-frequency",
+    howItWorks:
+      "Type a note (A4, C#3, B♭2), a frequency in hertz, or a MIDI number; the other two update, and a frequency that falls between notes shows how many cents sharp or flat it is. Equal temperament is assumed: f = A4 × 2^((midi − 69) / 12). Change A4 to 432, 442 or any value to retune everything, switch between sharps and flats, hear the pitch with the Play button, and scroll the 88-key table.",
+    faq: [
+      { q: "What frequency is middle C?", a: "C4, MIDI 60, is 261.63 Hz at A4 = 440 Hz. A4 itself is MIDI 69." },
+      { q: "How do I convert a frequency to a MIDI note?", a: "midi = 69 + 12 × log2(f / 440). Round to the nearest whole number for the note; the fraction × 100 is the deviation in cents." },
+      { q: "What does 432 Hz change?", a: "Every note drops by about 32 cents (≈1.8%). Set A4 = 432 to see the exact frequencies." },
+    ],
+    examples: [
+      { label: "Middle C", query: "k=note&v=C4" },
+      { label: "445 Hz — how sharp?", query: "k=hz&v=445" },
+      { label: "A4 at 432 Hz", query: "k=note&v=A4&a4=432" },
+    ],
+    related: ["audio/pitch-ratio", "audio/transpose", "audio/bpm"],
+    aliases: ["hz to midi", "note frequency table", "pitch to frequency"],
+  },
+  {
+    slug: "bpm",
+    category: "audio",
+    title: "BPM to Milliseconds & Delay Time Calculator",
+    short: "BPM ↔ ms",
+    tagline: "Delay and LFO times for every note value, tap tempo, bars ↔ seconds and tempo-change math",
+    description:
+      "Convert BPM to milliseconds, hertz and samples for whole to 64th notes (straight, dotted, triplet), tap a tempo, convert bars to seconds and back, and see the pitch shift of a tempo change.",
+    keywords: ["bpm to ms", "delay time calculator", "bpm calculator", "tap tempo", "bpm to hz", "bars to seconds", "ms to bpm", "lfo rate calculator", "tempo to milliseconds", "bpm to samples"],
+    icon: Metronome,
+    status: "stable",
+    widget: "bpm-calculator",
+    howItWorks:
+      "A quarter note lasts 60000 / BPM milliseconds; every other value scales from that (dotted × 1.5, triplet × 2/3). The table gives each note value in ms, as an LFO rate in Hz and in samples at your sample rate — the numbers you type into delays, compressors' release times and LFOs. Tap tempo averages your last taps. The converters go the other way (a 375 ms delay is an eighth note at 80 BPM), turn bars into seconds for loop lengths, and show what a tempo change does to speed and pitch if the audio is repitched rather than time-stretched.",
+    faq: [
+      { q: "How do I convert BPM to milliseconds?", a: "One beat (quarter note) = 60000 ÷ BPM ms. At 120 BPM that's 500 ms; an eighth is 250 ms, a dotted eighth 375 ms, an eighth-note triplet 166.7 ms." },
+      { q: "What is a dotted or triplet delay?", a: "Dotted values are 1.5× the straight value; triplets are 2/3 of it. Dotted-eighth delays give the classic U2 rhythm; triplet delays swing." },
+      { q: "How do I turn a delay time into a tempo?", a: "BPM = 60000 × beats ÷ ms. Enter the milliseconds and the note value it represents." },
+    ],
+    examples: [
+      { label: "120 BPM at 48 kHz", query: "bpm=120&sr=48000" },
+      { label: "174 BPM drum & bass", query: "bpm=174" },
+    ],
+    related: ["audio/note-frequency", "audio/pitch-ratio", "time/day-calculator"],
+    aliases: ["delay calculator", "tempo calculator", "beats per minute to ms"],
+  },
+  {
+    slug: "transpose",
+    category: "audio",
+    title: "Chord & Key Transposer",
+    short: "Transpose chords",
+    tagline: "Move a chord sheet to any key, pick sharps or flats, add a capo, and see the scale and diatonic chords",
+    description:
+      "Transpose chords and chord sheets up or down by semitones or from one key to another, with sharp/flat spelling, slash chords, capo positions, key signatures, relative keys and diatonic chords.",
+    keywords: ["chord transposer", "transpose chords", "transpose key", "capo chart", "chord sheet transposer", "change key of song", "guitar transpose", "key transposer", "chord converter"],
+    icon: ListMusic,
+    status: "stable",
+    widget: "transposer",
+    howItWorks:
+      "Paste a chord sheet (chord lines above lyrics, or a bare progression) and step the transposition up or down, or pick the song's key and the key you want. Chord symbols — including qualities like m7, sus4, maj7(#11) and slash basses like G/B — are recognised and shifted; lyric lines are left alone unless you say otherwise. Spelling follows the original accidentals or your ♯/♭ choice. A capo setting shows the shapes to play so the result sounds in the target key, and the key cards list the scale, key signature, relative and parallel keys and the diatonic chords of both keys.",
+    faq: [
+      { q: "How do I transpose a song from G to A?", a: "Choose G as the from-key and A as the to-key (or press + twice): every chord moves up two semitones, so G D Em C becomes A E F#m D." },
+      { q: "How does the capo help?", a: "A capo raises the pitch of open shapes. To sound in E with a capo on fret 2, play D-shapes; the tool shows the shapes for any capo position." },
+      { q: "Sharps or flats?", a: "By default a chord keeps its own spelling (Bb stays flat, F# stays sharp). Force ♯ or ♭ for keys that read better one way — flats for F, Bb, Eb, Ab; sharps for G, D, A, E, B." },
+    ],
+    examples: [
+      { label: "Up two semitones", query: "n=2" },
+      { label: "G major to E major", query: "from=G&n=-3" },
+      { label: "Capo 2 shapes", query: "n=0&capo=2&from=E" },
+    ],
+    related: ["audio/note-frequency", "audio/pitch-ratio", "text/transform"],
+    aliases: ["chord transposition", "song key changer", "capo calculator", "transpose guitar chords"],
+  },
+  {
+    slug: "decibel",
+    category: "audio",
+    title: "Decibel Converter",
+    short: "Decibels",
+    tagline: "dB to amplitude and power ratios, dBu/dBV/volts, bit-depth dynamic range and SPL over distance",
+    description:
+      "Convert decibels to amplitude and power ratios and back, dBu, dBV and volts, perceived loudness, bit depth to dynamic range, and sound pressure level at a different distance.",
+    keywords: ["db to ratio", "decibel converter", "dbu to volts", "dbv to dbu", "db to amplitude", "dbfs", "dynamic range bit depth", "spl distance calculator", "decibel calculator"],
+    icon: Volume2,
+    status: "stable",
+    widget: "audio-units",
+    widgetProps: { preset: "decibel" },
+    howItWorks:
+      "Amplitude (voltage) ratios use 20 log10, power ratios use 10 log10: −6 dB halves the amplitude and quarters the power. dBu is referenced to 0.7746 V RMS and dBV to 1 V, so +4 dBu (pro line level) is 1.228 V and −10 dBV (consumer) is 0.316 V. Linear PCM has a theoretical dynamic range of 6.02 × bits + 1.76 dB, and a point source loses 6 dB of SPL each time the distance doubles.",
+    faq: [
+      { q: "Is −6 dB half as loud?", a: "It's half the amplitude and a quarter of the power, but perceived loudness only drops by about a third — roughly 10 dB is needed to sound twice as loud or quiet." },
+      { q: "What's the difference between dBu and dBV?", a: "Different reference voltages: dBu uses 0.7746 V, dBV uses 1 V, so dBu = dBV + 2.22." },
+      { q: "How much dynamic range does 24-bit audio have?", a: "About 146 dB theoretical (6.02 × 24 + 1.76); 16-bit gives 98 dB. Real converters reach less." },
+    ],
+    examples: [
+      { label: "−6 dB", query: "db=-6" },
+      { label: "+20 dB", query: "db=20" },
+    ],
+    related: ["audio/pitch-ratio", "audio/bitrate", "math/unit-converter"],
+    aliases: ["db calculator", "dbu dbv converter", "amplitude to db"],
+  },
+  {
+    slug: "pitch-ratio",
+    category: "audio",
+    title: "Semitones, Cents & Pitch Ratio Converter",
+    short: "Semitones ↔ cents",
+    tagline: "Semitones ↔ cents ↔ frequency ratio ↔ playback speed, interval names and sample-rate pitch shifts",
+    description:
+      "Convert between semitones, cents, frequency ratios and playback speed percentages, name the interval, find the nearest just-intonation ratio, and see how playing at the wrong sample rate shifts pitch.",
+    keywords: ["semitones to cents", "cents to ratio", "pitch ratio calculator", "semitone frequency ratio", "playback speed pitch", "cents calculator", "interval calculator", "44100 to 48000 pitch shift"],
+    icon: AudioWaveform,
+    status: "stable",
+    widget: "audio-units",
+    widgetProps: { preset: "pitch" },
+    howItWorks:
+      "In equal temperament a semitone is a frequency ratio of 2^(1/12) ≈ 1.0595 and a cent is 2^(1/1200). Enter any one of semitones, cents, ratio or speed percentage and the others follow, along with the interval name, the nearest just-intonation ratio (a perfect fifth is 2 cents narrower than 3:2) and the length change if audio is sped up rather than time-stretched. The sample-rate calculator shows the pitch shift when a file recorded at one rate is played at another.",
+    faq: [
+      { q: "How many cents in a semitone?", a: "100 cents. An octave is 1200 cents, or a frequency ratio of exactly 2." },
+      { q: "How much does 10% faster playback raise the pitch?", a: "12 × log2(1.10) ≈ 1.65 semitones (165 cents), like an old tape or turntable pitch control." },
+      { q: "What happens playing 44.1 kHz audio at 48 kHz?", a: "It runs 8.8% fast and rises 1.47 semitones — the classic accidental sample-rate mismatch." },
+    ],
+    examples: [
+      { label: "Perfect fifth", query: "st=7" },
+      { label: "One octave", query: "st=12" },
+      { label: "Quarter tone", query: "st=0.5" },
+    ],
+    related: ["audio/note-frequency", "audio/bpm", "audio/decibel"],
+    aliases: ["cents to semitones", "ratio to cents", "speed to pitch"],
+  },
+  {
+    slug: "bitrate",
+    category: "audio",
+    title: "Audio Bitrate & File Size Calculator",
+    short: "Audio bitrate & size",
+    tagline: "PCM bitrate from sample rate, bit depth and channels; file size from bitrate and duration; and back",
+    description:
+      "Calculate audio bitrate and file size: uncompressed PCM from sample rate, bit depth and channels, or any bitrate (MP3, AAC, Opus, FLAC) for a duration, plus how long a given size lasts.",
+    keywords: ["audio file size calculator", "bitrate calculator", "wav file size", "mp3 file size", "audio bitrate", "kbps to mb", "sample rate bit depth bitrate", "how big is a wav file"],
+    icon: Gauge,
+    status: "stable",
+    widget: "audio-units",
+    widgetProps: { preset: "bitrate" },
+    howItWorks:
+      "PCM bitrate = sample rate × bit depth × channels: CD audio is 44,100 × 16 × 2 = 1,411 kbps, about 10 MB per minute. Compressed formats are simply their bitrate × duration, so 320 kbps MP3 is 2.4 MB per minute and 96 kbps Opus 0.7 MB. Enter a bitrate (or pick a preset) and a duration for the size, or a size to see how long it lasts, and compare it with the PCM you set.",
+    faq: [
+      { q: "How big is a minute of WAV audio?", a: "At CD quality (44.1 kHz, 16-bit, stereo) about 10.1 MB; at 48 kHz 24-bit stereo about 16.5 MB; at 96 kHz 24-bit stereo about 33 MB." },
+      { q: "How big is a 320 kbps MP3 per minute?", a: "320 kbps × 60 s ÷ 8 = 2.4 MB per minute, 144 MB per hour." },
+      { q: "How much smaller is FLAC than WAV?", a: "Typically 50–60% of the PCM size for music; silence and simple material compress far more." },
+    ],
+    examples: [
+      { label: "CD quality", query: "sr=44100&bd=16&ch=2" },
+      { label: "Hi-res 96 kHz / 24-bit", query: "sr=96000&bd=24&ch=2" },
+      { label: "One hour at 128 kbps", query: "kbps=128&dur=3600" },
+    ],
+    related: ["audio/converter", "audio/decibel", "math/unit-converter"],
+    aliases: ["audio size calculator", "kbps calculator", "wav size"],
+  },
+
 
   /* ============================== CRYPTO ================================= */
   {
