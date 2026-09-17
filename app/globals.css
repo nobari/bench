@@ -2,32 +2,36 @@
 
 /* =========================================================================
    BENCH — design tokens
-   Matcha palette: warm off-white "tea bowl" surfaces, one matcha-green
-   accent for actions and the current location, category hues for icons only.
+   Matcha-latte palette: creamy "foam" surfaces, a vivid matcha green for
+   fills (buttons, the current location) with dark tea-leaf text on it, and a
+   deeper, readable matcha for links and outlines. Category hues tint icons only.
    Dark scheme (steeped tea) follows the OS. Everything is driven by these variables.
    ========================================================================= */
 
 @theme {
-  /* Surfaces & lines */
-  --color-canvas: #f3f5ee;
-  --color-base: #fafbf7;
-  --color-base-2: #f0f3ea;
-  --color-surface: #ffffff;
-  --color-raised: #eef2e6;
-  --color-edge: #d6dccb;
-  --color-edge-bright: #bec8ae;
-  --color-scrim: rgba(30, 36, 25, 0.45);
+  /* Surfaces & lines — latte foam */
+  --color-canvas: #f5f1e6;
+  --color-base: #faf7ef;
+  --color-base-2: #f1ecdf;
+  --color-surface: #fffdf8;
+  --color-raised: #ede8da;
+  --color-edge: #ddd6c4;
+  --color-edge-bright: #c6bda6;
+  --color-scrim: rgba(28, 33, 18, 0.45);
 
-  /* Text */
-  --color-ink: #1e2419;
-  --color-muted: #5c6854;
-  --color-faint: #8a9682;
+  /* Text — tea leaf */
+  --color-ink: #1c2414;
+  --color-muted: #5b6550;
+  --color-faint: #8b9380;
 
-  /* Accent — matcha */
-  --color-accent: #5b8a3c;
-  --color-accent-hover: #4d7632;
-  --color-accent-soft: #e7f0db;
-  --color-on-accent: #ffffff;
+  /* Accent — matcha. `accent` is the readable green for text, borders and
+     rings; `accent-fill` is the vivid latte green used by bg-accent (see the
+     utilities layer), with `on-accent` dark on top of it. */
+  --color-accent: #3f7414;
+  --color-accent-fill: #68a52a;
+  --color-accent-hover: #5c9424;
+  --color-accent-soft: #e4eed3;
+  --color-on-accent: #0f1907;
 
   /* Legacy aliases still referenced by a few widgets */
   --color-signal: var(--color-accent);
@@ -70,30 +74,44 @@
   --shadow-pop: 0 12px 32px -12px rgba(30, 36, 25, 0.28), 0 0 0 1px rgba(30, 36, 25, 0.04);
   --shadow-dialog: 0 24px 64px -24px rgba(30, 36, 25, 0.45);
 
-  --checker-a: #d3dac6;
+  --checker-a: #dad3c1;
+}
+
+/* bg-accent is the vivid latte green; text/border/ring-accent stay on the
+   readable green. Unlayered on purpose: Tailwind's own .bg-accent lives in
+   @layer utilities, and an unlayered rule always wins over a layered one. */
+.bg-accent {
+  background-color: var(--color-accent-fill);
+}
+
+/* Sidebar width before hydration: an inline script in layout.tsx sets
+   data-nav from localStorage so a collapsed sidebar doesn't flash open. */
+html[data-nav="collapsed"] .tool-nav {
+  width: 3rem;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
     color-scheme: dark;
 
-    --color-canvas: #12160f;
-    --color-base: #171c13;
-    --color-base-2: #141810;
-    --color-surface: #1b2117;
-    --color-raised: #232b1e;
-    --color-edge: #2e3828;
-    --color-edge-bright: #3d4a35;
+    --color-canvas: #11150c;
+    --color-base: #161b11;
+    --color-base-2: #131710;
+    --color-surface: #1a2015;
+    --color-raised: #222a1b;
+    --color-edge: #2d3725;
+    --color-edge-bright: #3e4b33;
     --color-scrim: rgba(0, 0, 0, 0.6);
 
-    --color-ink: #e9eee1;
-    --color-muted: #a2ae97;
-    --color-faint: #6f7b66;
+    --color-ink: #eef1e4;
+    --color-muted: #a6b099;
+    --color-faint: #737d68;
 
-    --color-accent: #a8c973;
-    --color-accent-hover: #b9d689;
-    --color-accent-soft: #2a3822;
-    --color-on-accent: #111709;
+    --color-accent: #a9d45f;
+    --color-accent-fill: #8cc63f;
+    --color-accent-hover: #9bd14f;
+    --color-accent-soft: #26361b;
+    --color-on-accent: #0f1907;
 
     --color-positive: #4fcf9a;
     --color-warn: #e2b84b;

@@ -191,7 +191,7 @@ export function indentLines(text: string, start: number, end: number, outdent: b
 export const EXPORT_CSS = `
 :root{color-scheme:light}body{margin:0;background:#fff;color:#1e2419;font:16px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
 main{max-width:760px;margin:0 auto;padding:48px 24px}h1,h2,h3,h4,h5,h6{line-height:1.25;margin:1.6em 0 .6em}h1{font-size:2em}h2{font-size:1.5em;border-bottom:1px solid #d6dccb;padding-bottom:.3em}h3{font-size:1.25em}
-p,ul,ol,pre,table,blockquote{margin:0 0 1em}a{color:#5b8a3c}code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.9em;background:#f0f3ea;padding:.15em .35em;border-radius:4px}
+p,ul,ol,pre,table,blockquote{margin:0 0 1em}a{color:#68a52a}code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.9em;background:#f0f3ea;padding:.15em .35em;border-radius:4px}
 pre{background:#f3f5ee;border:1px solid #d6dccb;border-radius:6px;padding:14px 16px;overflow:auto}pre code{background:none;padding:0;font-size:.875em}
 blockquote{border-left:3px solid #bec8ae;margin-left:0;padding:.2em 1em;color:#5c6854}table{border-collapse:collapse;width:100%}th,td{border:1px solid #d6dccb;padding:.45em .7em;text-align:left}th{background:#f0f3ea}
 img{max-width:100%}hr{border:0;border-top:1px solid #d6dccb;margin:2em 0}input[type=checkbox]{margin-right:.4em}

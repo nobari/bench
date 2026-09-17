@@ -25,7 +25,7 @@ import { cn } from "@/lib/utils";
 const MODES = ["harmony", "scale", "random", "image"] as const;
 const SCHEME_IDS = ["analogous", "complementary", "split", "triadic", "tetradic", "monochromatic"] as const;
 const FORMAT_IDS = ["css", "tailwind", "scss", "json"] as const;
-const DEFAULT_BASE = "#5b8a3c";
+const DEFAULT_BASE = "#68a52a";
 
 const SEL = "h-8 rounded-[var(--radius-sm)] border border-edge bg-base px-2 pr-7 text-[13px] text-ink outline-none focus:border-accent";
 const GHOST =

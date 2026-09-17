@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Menu, X } from "lucide-react";
+import { Menu, PanelLeftClose, PanelLeftOpen, X } from "lucide-react";
 import { CATEGORIES } from "@/lib/tools/categories";
 import { TOOLS } from "@/lib/tools/registry";
 import { toolShortTitle } from "@/lib/tools/types";
@@ -64,17 +64,81 @@ function NavList({ pathname, onNavigate }: { pathname: string; onNavigate?: () =
   );
 }
 
-/** Desktop sidebar. */
+const NAV_KEY = "bench:nav-collapsed";
+
+/** Icon-only rail shown while the sidebar is collapsed: one link per category. */
+function NavRail({ pathname }: { pathname: string }) {
+  return (
+    <nav aria-label="Tool categories" className="flex flex-col items-center gap-1 px-1.5 py-2">
+      {CATEGORIES.map((cat) => {
+        if (!TOOLS.some((t) => t.category === cat.slug)) return null;
+        const Icon = cat.icon;
+        const active = pathname === `/${cat.slug}` || pathname.startsWith(`/${cat.slug}/`);
+        return (
+          <Link
+            key={cat.slug}
+            href={`/${cat.slug}`}
+            title={cat.name}
+            aria-label={cat.name}
+            aria-current={pathname === `/${cat.slug}` ? "page" : undefined}
+            className={cn("flex h-9 w-9 items-center justify-center rounded-[var(--radius-sm)]", active ? "bg-accent-soft" : "hover:bg-raised")}
+          >
+            <Icon size={17} style={{ color: `var(${cat.accentVar})` }} />
+          </Link>
+        );
+      })}
+    </nav>
+  );
+}
+
+/** Desktop sidebar: the full index, collapsible to an icon rail (remembered per browser). */
 export function ToolNav({ className }: { className?: string }) {
   const pathname = usePathname();
+  const [collapsed, setCollapsed] = useState(false);
+
+  useEffect(() => {
+    let remembered = false;
+    try {
+      remembered = localStorage.getItem(NAV_KEY) === "1";
+    } catch {
+      /* storage unavailable */
+    }
+    if (remembered) queueMicrotask(() => setCollapsed(true));
+  }, []);
+
+  const toggle = () => {
+    const next = !collapsed;
+    setCollapsed(next);
+    try {
+      localStorage.setItem(NAV_KEY, next ? "1" : "0");
+    } catch {
+      /* storage unavailable */
+    }
+    if (next) document.documentElement.dataset.nav = "collapsed";
+    else delete document.documentElement.dataset.nav;
+  };
+
   return (
     <aside
       className={cn(
-        "sticky top-12 h-[calc(100vh-3rem)] w-60 shrink-0 overflow-y-auto border-r border-edge bg-base",
+        "tool-nav sticky top-12 h-[calc(100vh-3rem)] shrink-0 overflow-y-auto overflow-x-hidden border-r border-edge bg-base transition-[width] duration-200",
+        collapsed ? "w-12" : "w-60",
         className,
       )}
     >
-      <NavList pathname={pathname} />
+      <div className={cn("flex h-9 items-center border-b border-edge", collapsed ? "justify-center" : "justify-end px-2")}>
+        <button
+          type="button"
+          onClick={toggle}
+          aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+          aria-expanded={!collapsed}
+          title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+          className="flex h-7 w-7 items-center justify-center rounded-[var(--radius-sm)] text-faint hover:bg-raised hover:text-ink"
+        >
+          {collapsed ? <PanelLeftOpen size={15} /> : <PanelLeftClose size={15} />}
+        </button>
+      </div>
+      {collapsed ? <NavRail pathname={pathname} /> : <NavList pathname={pathname} />}
     </aside>
   );
 }

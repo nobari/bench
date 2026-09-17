@@ -299,7 +299,7 @@ export function describeColor(hex: string): { hex: string; hsl: string; oklch: s
   };
 }
 
-/** Normalise user input like "5b8a3c" or "#5B8A3C" to "#5b8a3c"; null if invalid. */
+/** Normalise user input like "68a52a" or "#5B8A3C" to "#68a52a"; null if invalid. */
 export function normalizeHex(input: string): string | null {
   const t = input.trim();
   const rgb = parseHex(t.startsWith("#") ? t : `#${t}`);

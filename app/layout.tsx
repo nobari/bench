@@ -62,8 +62,8 @@ export const metadata: Metadata = {
 
 export const viewport: Viewport = {
   themeColor: [
-    { media: "(prefers-color-scheme: light)", color: "#fafbf7" },
-    { media: "(prefers-color-scheme: dark)", color: "#171c13" },
+    { media: "(prefers-color-scheme: light)", color: "#faf7ef" },
+    { media: "(prefers-color-scheme: dark)", color: "#161b11" },
   ],
   colorScheme: "light dark",
 };
@@ -73,6 +73,14 @@ export default function RootLayout({
 }: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="en" className={`${sans.variable} ${mono.variable} h-full`} suppressHydrationWarning>
+      <head>
+        {/* Applies the remembered sidebar state before first paint (see .tool-nav in globals.css). */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html: "try{if(localStorage.getItem('bench:nav-collapsed')==='1')document.documentElement.dataset.nav='collapsed'}catch(e){}",
+          }}
+        />
+      </head>
       <body className="flex min-h-full flex-col">
         <Providers>
           <SiteHeader />

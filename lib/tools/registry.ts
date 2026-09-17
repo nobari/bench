@@ -935,7 +935,7 @@ export const TOOLS: ToolDef[] = [
       { q: "Can I share a palette?", a: "Yes — mode, base colour, scheme, count and the generated colours are in the page URL, so the Share button reproduces exactly what you see." },
     ],
     examples: [
-      { label: "Analogous palette from matcha green", query: "m=harmony&base=%235b8a3c&scheme=analogous&n=5" },
+      { label: "Analogous palette from matcha green", query: "m=harmony&base=%2368a52a&scheme=analogous&n=5" },
       { label: "Tints and shades of a blue", query: "m=scale&base=%231f4fd6" },
       { label: "A saved random palette", query: "m=random&c=%23e07a5f%2C%233d405b%2C%2381b29a%2C%23f2cc8f%2C%23f4f1de" },
     ],

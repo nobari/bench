@@ -3,13 +3,13 @@
 <a href="https://bench.bozmoz.com">![Bench — everyday tools for text, data, images and the web](docs/banner.svg)</a>
 
 <p>
-  <a href="https://bench.bozmoz.com"><img alt="bench.bozmoz.com" src="https://img.shields.io/badge/live-bench.bozmoz.com-5b8a3c?style=flat-square&labelColor=1e2419"></a>
-  <a href="#tools"><img alt="46 tools" src="https://img.shields.io/badge/tools-46-5b8a3c?style=flat-square&labelColor=1e2419"></a>
-  <a href="https://nextjs.org"><img alt="Next.js 16" src="https://img.shields.io/badge/Next.js-16-1e2419?style=flat-square&logo=nextdotjs&logoColor=white&labelColor=1e2419"></a>
-  <a href="https://react.dev"><img alt="React 19" src="https://img.shields.io/badge/React-19-149eca?style=flat-square&logo=react&logoColor=white&labelColor=1e2419"></a>
-  <a href="https://www.typescriptlang.org"><img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-5-3178c6?style=flat-square&logo=typescript&logoColor=white&labelColor=1e2419"></a>
-  <a href="https://tailwindcss.com"><img alt="Tailwind CSS 4" src="https://img.shields.io/badge/Tailwind-4-38bdf8?style=flat-square&logo=tailwindcss&logoColor=white&labelColor=1e2419"></a>
-  <a href="#license"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-8b958d?style=flat-square&labelColor=1e2419"></a>
+  <a href="https://bench.bozmoz.com"><img alt="bench.bozmoz.com" src="https://img.shields.io/badge/live-bench.bozmoz.com-68a52a?style=flat-square&labelColor=1c2414"></a>
+  <a href="#tools"><img alt="46 tools" src="https://img.shields.io/badge/tools-46-68a52a?style=flat-square&labelColor=1c2414"></a>
+  <a href="https://nextjs.org"><img alt="Next.js 16" src="https://img.shields.io/badge/Next.js-16-1e2419?style=flat-square&logo=nextdotjs&logoColor=white&labelColor=1c2414"></a>
+  <a href="https://react.dev"><img alt="React 19" src="https://img.shields.io/badge/React-19-149eca?style=flat-square&logo=react&logoColor=white&labelColor=1c2414"></a>
+  <a href="https://www.typescriptlang.org"><img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-5-3178c6?style=flat-square&logo=typescript&logoColor=white&labelColor=1c2414"></a>
+  <a href="https://tailwindcss.com"><img alt="Tailwind CSS 4" src="https://img.shields.io/badge/Tailwind-4-38bdf8?style=flat-square&logo=tailwindcss&logoColor=white&labelColor=1c2414"></a>
+  <a href="#license"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-8b958d?style=flat-square&labelColor=1c2414"></a>
 </p>
 
 **A growing collection of fast, private developer utilities — every tool runs 100% in your browser.**<br/>
