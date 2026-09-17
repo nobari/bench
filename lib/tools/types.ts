@@ -53,6 +53,7 @@ export type WidgetKey =
   | "id-generator"
   | "timestamp-converter"
   | "color-converter"
+  | "palette-generator"
   | "image-converter"
   | "slow-mo"
   | "diff-checker"

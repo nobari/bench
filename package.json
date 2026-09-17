@@ -1,6 +1,6 @@
 {
   "name": "bench",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "private": true,
   "description": "A precision toolkit for the web — fast, private, client-side developer utilities.",
   "license": "MIT",

@@ -1,8 +1,12 @@
 import Link from "next/link";
 import { SITE } from "@/lib/site";
 import { CopyButton } from "@/components/copy-button";
+import pkg from "@/package.json";
 
 export function SiteFooter() {
+  // Baked in at build time on Vercel: which release this page is.
+  const sha = process.env.VERCEL_GIT_COMMIT_SHA?.slice(0, 7);
+  const version = `v${pkg.version}`;
   return (
     <footer className="mt-16 border-t border-edge px-5 py-6 text-[13px] text-muted lg:px-8">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -14,6 +18,21 @@ export function SiteFooter() {
           stores anything on a server.
         </p>
         <nav aria-label="Site" className="flex items-center gap-4">
+          {sha ? (
+            <a
+              href={`${SITE.links.github}/commit/${process.env.VERCEL_GIT_COMMIT_SHA}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              title={`Release ${version} · commit ${sha}`}
+              className="font-mono text-[12px] text-faint hover:text-ink"
+            >
+              {version} · {sha}
+            </a>
+          ) : (
+            <span title="Release" className="font-mono text-[12px] text-faint">
+              {version}
+            </span>
+          )}
           <Link href="/about" className="hover:text-ink">
             About
           </Link>
