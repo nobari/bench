@@ -37,6 +37,7 @@ import {
   Signature,
   Superscript,
   Table,
+  Timer,
   Wallet,
 } from "lucide-react";
 import type { CategorySlug, ToolDef } from "./types";
@@ -1110,6 +1111,48 @@ export const TOOLS: ToolDef[] = [
     ],
     related: ["time/date-converter", "time/timestamp"],
     aliases: ["date difference", "days until", "age calculator"],
+  },
+
+  {
+    slug: "cron",
+    category: "time",
+    title: "Cron Expression Parser & Builder",
+    short: "Cron",
+    tagline: "Explain any cron schedule and build one by clicking",
+    description:
+      "Paste a cron expression to see it in plain English with its next run times in any timezone, or build a schedule field by field. Validates ranges, steps, lists, names and @aliases.",
+    keywords: [
+      "cron expression",
+      "cron parser",
+      "cron builder",
+      "cron generator",
+      "crontab syntax",
+      "cron schedule explained",
+      "cron next run time",
+      "cron every 5 minutes",
+      "crontab guru",
+      "cron timezone",
+    ],
+    icon: Timer,
+    status: "stable",
+    widget: "cron",
+    howItWorks:
+      "A cron expression has five fields — minute, hour, day of month, month and day of week — and this tool reads all the standard syntax: * for any value, lists (1,15), ranges (MON-FRI), steps (*/10, 5/10, 0-30/10), month and weekday names, Sunday as 0 or 7, and the @hourly/@daily/@weekly/@monthly/@yearly aliases. A sixth leading seconds field is supported for schedulers that use it. Each field is validated with a precise error, the schedule is described in plain English, and the next runs are computed in the timezone you choose, taking daylight-saving changes into account (a time that doesn't exist on a spring-forward night is skipped, and a repeated fall-back hour runs once). The builder edits the same expression one field at a time — every value, specific values, every n starting at x, or a range — so typing and clicking always stay in sync. Like POSIX cron, when both day-of-month and day-of-week are restricted, a day matches when either one does.",
+    faq: [
+      { q: "What do the five fields in a cron expression mean?", a: "In order: minute (0–59), hour (0–23), day of month (1–31), month (1–12 or JAN–DEC) and day of week (0–7 or SUN–SAT, where 0 and 7 are both Sunday). * means any value; 0 9 * * 1-5 runs at 09:00 Monday to Friday." },
+      { q: "How do I write “every 5 minutes” in cron?", a: "*/5 * * * *. The */n step syntax means every nth value starting from the field's minimum; 0 */6 * * * runs every six hours on the hour." },
+      { q: "Which timezone does cron use?", a: "Whatever the server or scheduler is configured for — often UTC on cloud platforms and the system zone on a Linux box. Pick that zone in the Next runs panel to see the real wall-clock times; the tool shows the zone's current UTC offset." },
+      { q: "Does it support the seconds field or Quartz syntax?", a: "A leading seconds field (six fields total) is supported. Quartz-only tokens such as L, W and # are not — they aren't valid in standard cron, Vercel, GitHub Actions or Kubernetes CronJobs." },
+      { q: "Why does 0 0 15 * 1 run on the 15th and every Monday?", a: "That's the POSIX rule: when both day-of-month and day-of-week are restricted, the schedule fires on days matching either field. To get “the third Monday of the month” you need scheduler-specific extensions or a check inside the job." },
+    ],
+    examples: [
+      { label: "Every 5 minutes", query: "e=*%2F5+*+*+*+*" },
+      { label: "Weekdays at 09:30 in Tokyo", query: "e=30+9+*+*+1-5&tz=Asia%2FTokyo" },
+      { label: "First of every quarter", query: "e=0+0+1+1%2C4%2C7%2C10+*" },
+      { label: "Every 30 seconds", query: "e=*%2F30+*+*+*+*+*" },
+    ],
+    related: ["time/timestamp", "time/date-converter", "time/day-calculator"],
+    aliases: ["crontab", "cron job schedule", "cron syntax", "schedule expression"],
   },
 
   /* ============================== GENERATORS ============================= */

@@ -52,6 +52,7 @@ export type WidgetKey =
   | "hash-generator"
   | "id-generator"
   | "timestamp-converter"
+  | "cron"
   | "color-converter"
   | "palette-generator"
   | "image-converter"
