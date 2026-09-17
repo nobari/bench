@@ -56,6 +56,7 @@ export type WidgetKey =
   | "color-converter"
   | "palette-generator"
   | "image-converter"
+  | "base64-image"
   | "slow-mo"
   | "diff-checker"
   | "regex-tester"

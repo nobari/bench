@@ -65,6 +65,7 @@ const WIDGETS: Record<WidgetKey, React.ComponentType<Record<string, unknown>>> =
     () => import("@/components/widgets/palette-generator").then((m) => m.PaletteGeneratorWidget),
     { ssr: false, loading: Skeleton },
   ),
+  "base64-image": dynamic(() => import("@/components/widgets/base64-image").then((m) => m.Base64ImageWidget), { ssr: false, loading: Skeleton }),
   "image-converter": dynamic(
     () => import("@/components/widgets/image-converter").then((m) => m.ImageConverterWidget),
     { ssr: false, loading: Skeleton },
