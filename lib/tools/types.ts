@@ -54,6 +54,8 @@ export type WidgetKey =
   | "id-generator"
   | "timestamp-converter"
   | "cron"
+  | "earth-sun-moon"
+  | "scale-model"
   | "color-converter"
   | "palette-generator"
   | "image-converter"

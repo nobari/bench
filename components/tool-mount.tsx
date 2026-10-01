@@ -60,6 +60,8 @@ const WIDGETS: Record<WidgetKey, React.ComponentType<Record<string, unknown>>> =
     () => import("@/components/widgets/color-converter").then((m) => m.ColorConverterWidget),
     { ssr: false, loading: Skeleton },
   ),
+  "scale-model": dynamic(() => import("@/components/widgets/scale-model").then((m) => m.ScaleModelWidget), { ssr: false, loading: Skeleton }),
+  "earth-sun-moon": dynamic(() => import("@/components/widgets/earth-sun-moon").then((m) => m.EarthSunMoonWidget), { ssr: false, loading: Skeleton }),
   cron: dynamic(() => import("@/components/widgets/cron").then((m) => m.CronWidget), { ssr: false, loading: Skeleton }),
   "palette-generator": dynamic(
     () => import("@/components/widgets/palette-generator").then((m) => m.PaletteGeneratorWidget),
