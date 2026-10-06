@@ -110,6 +110,7 @@ const WIDGETS: Record<WidgetKey, React.ComponentType<Record<string, unknown>>> =
     () => import("@/components/widgets/tgs-studio").then((m) => m.TgsStudioWidget),
     { ssr: false, loading: Skeleton },
   ),
+  "mermaid-editor": dynamic(() => import("@/components/widgets/mermaid-editor").then((m) => m.MermaidEditorWidget), { ssr: false, loading: Skeleton }),
   "markdown-editor": dynamic(
     () => import("@/components/widgets/markdown-editor").then((m) => m.MarkdownEditorWidget),
     { ssr: false, loading: Skeleton },

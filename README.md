@@ -4,7 +4,7 @@
 
 <p>
   <a href="https://bench.bozmoz.com"><img alt="bench.bozmoz.com" src="https://img.shields.io/badge/live-bench.bozmoz.com-68a52a?style=flat-square&labelColor=1c2414"></a>
-  <a href="#tools"><img alt="55 tools" src="https://img.shields.io/badge/tools-55-68a52a?style=flat-square&labelColor=1c2414"></a>
+  <a href="#tools"><img alt="56 tools" src="https://img.shields.io/badge/tools-56-68a52a?style=flat-square&labelColor=1c2414"></a>
   <a href="https://nextjs.org"><img alt="Next.js 16" src="https://img.shields.io/badge/Next.js-16-1e2419?style=flat-square&logo=nextdotjs&logoColor=white&labelColor=1c2414"></a>
   <a href="https://react.dev"><img alt="React 19" src="https://img.shields.io/badge/React-19-149eca?style=flat-square&logo=react&logoColor=white&labelColor=1c2414"></a>
   <a href="https://www.typescriptlang.org"><img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-5-3178c6?style=flat-square&logo=typescript&logoColor=white&labelColor=1c2414"></a>
@@ -34,7 +34,7 @@ Bench is the kind of small tools you reach for a dozen times a day — encode so
 
 ## Tools
 
-> 55 tools across 11 categories — and counting.
+> 56 tools across 11 categories — and counting.
 
 | Category | Tools |
 | --- | --- |
@@ -46,7 +46,7 @@ Bench is the kind of small tools you reach for a dozen times a day — encode so
 | **Time & Date** | Unix Timestamp · Date Converter (12 calendars + timezones) · Day Calculator · Cron Parser & Builder · Earth, Sun & Moon Simulator (day/night globe, seasons, moon phases) · Sun, Earth & Moon to Scale (true sizes, distances, rotations) |
 | **Color & Design** | Color Converter (HEX/RGB/HSL/OKLCH/CMYK · picker · gradients · contrast) · Color Palette Generator (OKLCH harmonies, scales, from image) |
 | **Math & Units** | Loan & Mortgage Simulator · Number Base Converter · Unit Converter |
-| **Web & Dev** | Regex Tester · Diff Checker (line/word/char, side by side, patches) · JWT Decoder, Verifier & Encoder · URL Shortener (server-backed, best-effort) |
+| **Web & Dev** | Regex Tester · Mermaid Diagram Editor (live preview, print, SVG/PNG export) · Diff Checker (line/word/char, side by side, patches) · JWT Decoder, Verifier & Encoder · URL Shortener (server-backed, best-effort) |
 
 Adding a tool is a one-file change — see the add-tool skill in `.claude/skills`.
 

@@ -76,6 +76,7 @@ export type WidgetKey =
   | "tgs-studio"
   | "text-compress"
   | "markdown-editor"
+  | "mermaid-editor"
   | "archive-extract"
   | "archive-create"
   | "date-converter"

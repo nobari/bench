@@ -66,8 +66,8 @@ export function ToolShell({ tool }: { tool: ToolDef }) {
         <ToolMount widget={tool.widget} widgetProps={tool.widgetProps} />
       </div>
 
-      <div className="mt-12 grid gap-10 lg:grid-cols-[minmax(0,1fr)_300px]">
-        <div className="space-y-10">
+      <div className="mt-12 grid grid-cols-[minmax(0,1fr)] gap-10 lg:grid-cols-[minmax(0,1fr)_300px]">
+        <div className="min-w-0 space-y-10">
           {tool.howItWorks && (
             <section>
               <h2 className="text-[15px] font-semibold text-ink">How it works</h2>
@@ -96,7 +96,7 @@ export function ToolShell({ tool }: { tool: ToolDef }) {
           ) : null}
         </div>
 
-        <aside className="space-y-8">
+        <aside className="min-w-0 space-y-8">
           {tool.examples?.length ? (
             <section>
               <h2 className="text-[13px] font-semibold text-ink">Examples</h2>

@@ -50,6 +50,7 @@ import {
   Timer,
   Volume2,
   Wallet,
+  Workflow,
 } from "lucide-react";
 import type { CategorySlug, ToolDef } from "./types";
 
@@ -1752,6 +1753,35 @@ export const TOOLS: ToolDef[] = [
     ],
     related: ["text/transform", "text/base64"],
     aliases: ["ascii chart", "character code converter", "text to hex"],
+  },
+  {
+    slug: "mermaid",
+    category: "web",
+    title: "Mermaid Diagram Editor",
+    short: "Mermaid editor",
+    tagline: "Write Mermaid, see the diagram as you type, then print it or export SVG, PNG and Markdown",
+    description:
+      "A full Mermaid editor in the browser: live preview with zoom and pan, 20 templates covering flowcharts, sequence, class, ER, state, Gantt, mind maps, timelines, Git graphs, pie and XY charts, themes and a hand-drawn look, syntax errors with line numbers, print to A4 or Letter, and SVG, PNG and Markdown export.",
+    keywords: ["mermaid editor", "mermaid live editor", "mermaid diagram", "mermaid online", "flowchart maker", "sequence diagram online", "mermaid to png", "mermaid to svg", "print mermaid diagram", "mermaid gantt", "mermaid er diagram", "mermaid mind map", "diagram as code"],
+    icon: Workflow,
+    status: "stable",
+    widget: "mermaid-editor",
+    howItWorks:
+      "Type Mermaid text on the left and the diagram renders on the right as you type — flowcharts, sequence, class, state, entity-relationship, C4, architecture, Gantt, timeline, Kanban, mind map, Git graph, requirement, packet, pie, XY, quadrant, Sankey and radar diagrams, every type in Mermaid 12. Pick a template to start, switch themes or the hand-drawn look, and zoom and pan the preview. A syntax error names the line and leaves the last good drawing on screen while you fix it. Print opens a clean page with the diagram scaled to one sheet — A4 or Letter, portrait or landscape — optionally with the source appended; export gives a standalone SVG, a PNG at 2× or 4×, the image on the clipboard, a Markdown ```mermaid fence for GitHub, Notion or Obsidian, or the .mmd file. Rendering happens entirely in your browser; drafts are kept locally, and Share puts the diagram in the link.",
+    faq: [
+      { q: "Which Mermaid diagram types work?", a: "Flowchart, sequence, class, state, entity-relationship, user journey, Gantt, pie, quadrant, requirement, Git graph, C4, mind map, timeline, Sankey, XY chart, packet, Kanban, architecture and radar — everything in Mermaid 12 except block diagrams (block-beta), which the current Mermaid release cannot render inside a React page." },
+      { q: "How do I print a Mermaid diagram?", a: "Press Print. The diagram opens on a clean white page scaled to fit one sheet in the paper size you chose, and the browser's print dialog lets you save it as a PDF or send it to a printer." },
+      { q: "How do I export to PNG or SVG?", a: "SVG downloads the vector file as rendered. PNG 2× and 4× rasterise it at two or four times screen resolution — 4× is right for slides and documents. 'Copy image' puts a PNG on the clipboard for pasting straight into chat or a doc." },
+      { q: "Can I use the diagram in GitHub or Notion?", a: "Yes — 'Copy Markdown' copies a ```mermaid code fence, which GitHub, GitLab, Notion, Obsidian and many wikis render natively." },
+      { q: "Is anything uploaded?", a: "No. Mermaid runs in your browser with its strict security level, your draft is saved only in this browser, and a Share link carries the diagram compressed in the URL." },
+    ],
+    examples: [
+      { label: "Sequence diagram", query: "i=sequenceDiagram%0A%20%20%20%20Alice-%3E%3EBob%3A%20Hello%20Bob%2C%20how%20are%20you%3F%0A%20%20%20%20Bob--%3E%3EAlice%3A%20Great!" },
+      { label: "Hand-drawn forest theme", query: "theme=forest&look=hand" },
+      { label: "Preview only", query: "v=preview" },
+    ],
+    related: ["text/markdown", "web/diff", "json/viewer"],
+    aliases: ["mermaid live", "mermaid chart", "diagram editor", "flowchart online", "uml online"],
   },
   {
     slug: "regex",

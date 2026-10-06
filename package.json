@@ -1,6 +1,6 @@
 {
   "name": "bench",
-  "version": "1.6.0",
+  "version": "1.7.0",
   "private": true,
   "description": "A precision toolkit for the web — fast, private, client-side developer utilities.",
   "license": "MIT",
@@ -44,6 +44,7 @@
     "lz-string": "^1.5.0",
     "marked": "^18.0.13",
     "mediabunny": "^1.56.2",
+    "mermaid": "^12.1.0",
     "motion": "^12.40.0",
     "next": "16.2.9",
     "nuqs": "^2.8.9",
