@@ -46,11 +46,13 @@ import {
   type ProxyHeight,
   type Title,
   type TitleFont,
+  type LutKind,
   type TitlePosition,
   type Transition,
   type TransitionKind,
 } from "@/lib/tools/video/project";
 import { drawTransition } from "@/lib/tools/video/transitions";
+import { LUT_OPTIONS, parseCube } from "@/lib/tools/video/lut";
 import { Grader, buildProxy, drawOverlays, encoderSupport, exportProject, probe } from "@/lib/tools/video/engine";
 import { ProjectStore, hasFileSystemAccess, AUTOSAVE_FILE, PROJECT_FILE, PROXY_DIR } from "@/lib/tools/video/store";
 import { cn } from "@/lib/utils";
@@ -136,6 +138,25 @@ export function VideoEditorWidget() {
   const scratchRef = useRef<{ a: OffscreenCanvas; b: OffscreenCanvas; s: OffscreenCanvas; w: number; h: number } | null>(null);
   const pendingUrls = useRef<Set<string>>(new Set());
   const previewBoxRef = useRef<HTMLDivElement>(null);
+  const cubeInput = useRef<HTMLInputElement>(null);
+  const customLut = useMemo(() => {
+    try {
+      return project.customLut ? parseCube(project.customLut.cube) : null;
+    } catch {
+      return null;
+    }
+  }, [project.customLut]);
+  const loadCube = async (file: File, clipId: string) => {
+    const cube = await file.text();
+    try {
+      const parsed = parseCube(cube);
+      if (![17, 33, 65].includes(parsed.size)) throw new Error("size");
+    } catch {
+      return setError(`${file.name} is not a 3D .cube LUT this tool can read (17, 33 or 65 points).`);
+    }
+    setProject((p) => ({ ...p, customLut: { name: file.name, cube }, clips: p.clips.map((c) => (c.id === clipId ? { ...c, grade: { ...c.grade, lut: "custom" } } : c)) }));
+    setStatus(`Loaded ${file.name}`);
+  };
   // Clear-project dialog: forgetting is always in the browser only; deleting our own files from the folder is opt-in.
   const [clearOpen, setClearOpen] = useState(false);
   const [clearFiles, setClearFiles] = useState(false);
@@ -567,6 +588,7 @@ export function VideoEditorWidget() {
         try {
           if (!graderRef.current || graderRef.current.canvas.width !== w) graderRef.current = new Grader(w, h);
           const grader = graderRef.current;
+          grader.setCustomLut(customLut);
           const ctx = c.getContext("2d")!;
           const alt = altRef.current;
           const tr = windows.length ? transitionAt(windows, playhead) : null;
@@ -630,7 +652,7 @@ export function VideoEditorWidget() {
     };
     raf = requestAnimationFrame(draw);
     return () => cancelAnimationFrame(raf);
-  }, [under, playhead, project, logo, duration, windows, playing, previewUrlFor]);
+  }, [under, playhead, project, logo, duration, windows, playing, previewUrlFor, customLut]);
 
   const update = (id: string, patch: Partial<Clip>) => setProject((p) => ({ ...p, clips: p.clips.map((c) => (c.id === id ? { ...c, ...patch } : c)) }));
   const updateMusic = (id: string, patch: Partial<MusicTrack>) => setProject((p) => ({ ...p, music: p.music.map((m) => (m.id === id ? { ...m, ...patch } : m)) }));
@@ -992,13 +1014,39 @@ export function VideoEditorWidget() {
             {tab === "colour" && (current ? (
               <>
                 <label className="flex items-center justify-between gap-2 text-muted">
-                  Conversion LUT
-                  <select value={current.grade.lut} onChange={(e) => update(current.id, { grade: { ...current.grade, lut: e.target.value as Clip["grade"]["lut"] } })} className={SEL}>
+                  Conversion
+                  <select
+                    value={current.grade.lut}
+                    onChange={(e) => {
+                      const kind = e.target.value as LutKind;
+                      if (kind === "custom" && !project.customLut) return cubeInput.current?.click();
+                      update(current.id, { grade: { ...current.grade, lut: kind } });
+                    }}
+                    className={SEL}
+                    aria-label="Conversion"
+                  >
                     <option value="none">None (Rec.709 footage)</option>
-                    <option value="dlog">DJI D-Log → Rec.709</option>
-                    <option value="dlogm">DJI D-Log M → Rec.709</option>
+                    {LUT_OPTIONS.map((o) => (
+                      <option key={o.kind} value={o.kind}>
+                        {o.name}
+                      </option>
+                    ))}
+                    <option value="custom">{project.customLut ? `Your .cube — ${project.customLut.name}` : "Your own .cube file…"}</option>
                   </select>
                 </label>
+                <input ref={cubeInput} type="file" accept=".cube" hidden onChange={(e) => e.target.files?.[0] && void loadCube(e.target.files[0], current.id)} />
+                <p className="text-[12px] text-faint">
+                  {current.grade.lut === "custom"
+                    ? `${project.customLut?.name ?? "No file yet"} is applied as-is: it should expect the camera's log in and give Rec.709 out. `
+                    : (LUT_OPTIONS.find((o) => o.kind === current.grade.lut)?.hint ?? "Pick the conversion for the camera's log profile; the sliders below fine-tune on top of it. ")}
+                  <button type="button" onClick={() => cubeInput.current?.click()} className="underline decoration-dotted underline-offset-2 hover:text-accent">
+                    {project.customLut ? "Replace the .cube" : "Load a .cube"}
+                  </button>
+                  {" · "}
+                  <a href="https://www.dji.com/lut" target="_blank" rel="noreferrer" className="underline decoration-dotted underline-offset-2 hover:text-accent">
+                    DJI&apos;s official LUTs
+                  </a>
+                </p>
                 <Slider label="Exposure" value={current.grade.exposure} min={-3} max={3} step={0.05} onChange={(v) => update(current.id, { grade: { ...current.grade, exposure: v } })} format={(v) => `${v > 0 ? "+" : ""}${v.toFixed(2)} EV`} />
                 <Slider label="Temperature" value={current.grade.temperature} min={-100} max={100} step={1} onChange={(v) => update(current.id, { grade: { ...current.grade, temperature: v } })} format={(v) => (v > 0 ? `warm +${v}` : v < 0 ? `cool ${v}` : "neutral")} />
                 <Slider label="Tint" value={current.grade.tint} min={-100} max={100} step={1} onChange={(v) => update(current.id, { grade: { ...current.grade, tint: v } })} format={(v) => (v > 0 ? `magenta +${v}` : v < 0 ? `green ${v}` : "neutral")} />

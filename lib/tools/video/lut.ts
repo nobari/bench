@@ -1,11 +1,11 @@
 /**
  * Colour: .cube LUT parsing and sampling, the DJI D-Log / D-Log M → Rec.709
- * conversion, and the exposure / white balance / contrast / saturation
+ * conversions (modelled on DJI's own LUT), and the exposure / white balance / contrast / saturation
  * adjustments — as pure maths (used by tests and the CPU preview) and as a
  * GLSL fragment shader (used for every frame on export and proxy playback).
  */
 
-import type { Grade } from "./project";
+import type { Grade, LutKind } from "./project";
 
 export interface Lut3D {
   size: number;
@@ -55,51 +55,118 @@ export function sampleLut(lut: Lut3D, r: number, g: number, b: number): [number,
 
 /* ------------------------------------------------- D-Log → linear → 709 */
 
+/* ------------------------------------------------ DJI log curves */
+
 /**
- * DJI D-Log decode (from DJI's published white paper): a log segment above
- * the toe and a linear segment below it, mapping encoded [0,1] to scene
- * linear. D-Log M is the same family with a brighter mid-grey and less
- * range, so it uses a gentler curve.
+ * DJI D-Log, exactly as published in DJI's white paper "D-Log and D-Gamut of
+ * DJI Cinema Color System" (Zenmuse X7 2017, X9 2022): 18 % grey sits at code
+ * 0.3988 (10-bit 408), 90 % white at 0.573, black at 0.0929.
  */
-export function dlogToLinear(x: number, variant: "dlog" | "dlogm" = "dlog"): number {
-  if (variant === "dlogm") {
-    // D-Log M: ~1.5 stops less dynamic range than D-Log, mid-grey near 0.41.
-    return x < 0.104 ? (x - 0.0929) / 5.3 + 0.0 : Math.max(0, (10 ** ((x - 0.584) / 0.256) - 0.0108) / (1 - 0.0108));
+export function dlogToLinear(x: number): number {
+  return x <= 0.14 ? Math.max(0, (x - 0.0929) / 6.025) : (10 ** (3.89616 * x - 2.27752) - 0.0108) / 0.9892;
+}
+export function linearToDlog(v: number): number {
+  return v <= 0.0078 ? 6.025 * v + 0.0929 : Math.log10(v * 0.9892 + 0.0108) * 0.256663 + 0.584555;
+}
+/** D-Gamut RGB → Rec.709 RGB in linear light, from the same paper (row-major). */
+export const DGAMUT_TO_709 = [1.6746, -0.5797, -0.0949, -0.0981, 1.334, -0.2359, -0.041, -0.243, 1.284] as const;
+
+/**
+ * DJI D-Log M has no published formula and is not a plain log. These are the
+ * OpenOSV constants (Apache-2.0, Kemerd and the OpenOSV contributors): a
+ * seven-parameter curve least-squares fitted to the neutral axis of DJI's own
+ * Osmo 360 D-Log M → Rec.709 LUT. 18 % grey at code 0.400; code 1.0 is 3.76,
+ * about 4.4 stops over grey.
+ */
+const DLOGM = { xShift: -2.360862594, yShift: 0.630835854, scale: 6.691455736, slope: 1.011886004, slope2: 3.035658045, intercept: 0.822056039, mid: 0.00786506109 };
+const DLOGM_CUT = DLOGM.intercept / (DLOGM.slope2 - DLOGM.slope);
+export function dlogmToLinear(code: number): number {
+  const t = 2 ** (DLOGM.scale * code + DLOGM.yShift) + DLOGM.xShift;
+  return Math.max(0, (t < DLOGM_CUT ? t * DLOGM.slope + DLOGM.intercept : t * DLOGM.slope2) * DLOGM.mid);
+}
+export function linearToDlogm(lin: number): number {
+  const pw = Math.max(0, lin) / DLOGM.mid;
+  let t = pw / DLOGM.slope2;
+  if (t < DLOGM_CUT) t = (pw - DLOGM.intercept) / DLOGM.slope;
+  const a = t - DLOGM.xShift;
+  return a > 0 ? Math.max(0, (Math.log2(a) - DLOGM.yShift) / DLOGM.scale) : 0;
+}
+
+/* ------------------------------------------- DJI's Rec.709 rendering */
+
+/**
+ * How DJI itself renders D-Log M to Rec.709, measured on the official Osmo
+ * Action 6 LUT (v1.0, 2025-11-13): the display value at each of its 33 grey
+ * grid points, joined by a monotone cubic so nothing overshoots.
+ * 18 % grey (code 0.41) lands near display 0.40; the curve is gentle — about
+ * 1.3× slope through the mids — which is why DJI's look is calm rather than
+ * punchy. A log-curve-plus-gamma guess is roughly twice as steep.
+ */
+const DJI_TONE = [0, 0.00371, 0.01133, 0.02497, 0.04557, 0.07176, 0.10284, 0.1375, 0.17481, 0.21572, 0.25989, 0.30528, 0.35025, 0.39466, 0.43662, 0.47407, 0.50715, 0.53826, 0.56939, 0.60153, 0.63521, 0.66851, 0.70192, 0.73453, 0.76802, 0.80164, 0.83479, 0.86609, 0.89494, 0.92182, 0.94746, 0.97117, 0.98795];
+/** Monotone piecewise-cubic (Fritsch–Carlson) through uniformly spaced knots on [0, 1]. */
+function pchip(knots: number[], x: number): number {
+  const n = knots.length - 1, h = 1 / n;
+  const d = knots.slice(0, n).map((y, i) => (knots[i + 1] - y) / h);
+  const m = knots.map((_, i) => (i === 0 ? d[0] : i === n ? d[n - 1] : d[i - 1] * d[i] <= 0 ? 0 : 2 / (1 / d[i - 1] + 1 / d[i])));
+  const i = Math.min(n - 1, Math.max(0, Math.floor(x * n)));
+  const t = x * n - i, t2 = t * t, t3 = t2 * t;
+  return (2 * t3 - 3 * t2 + 1) * knots[i] + (t3 - 2 * t2 + t) * h * m[i] + (-2 * t3 + 3 * t2) * knots[i + 1] + (t3 - t2) * h * m[i + 1];
+}
+export const djiTone = (code: number) => pchip(DJI_TONE, Math.min(1, Math.max(0, code)));
+/**
+ * Hue and saturation of that rendering: a 3×3 applied in log space before the
+ * tone curve, least-squares fitted to every unclipped entry of the Action 6
+ * LUT with each row constrained to sum to 1, so greys stay exactly neutral.
+ * 0.033 RMS against the cube; chroma gain around mid grey within 3 % of DJI's.
+ */
+const DJI_LOG_MATRIX = [1.25866, -0.16277, -0.09589, -0.10848, 1.16525, -0.05678, -0.07455, -0.12533, 1.19988];
+/** Display-referred 18 % grey of this rendering — the pivot for the looks' contrast. */
+const GREY_DISPLAY = pchip(DJI_TONE, 0.4);
+
+/** Options offered for log footage, in menu order. */
+export const LUT_OPTIONS: { kind: Exclude<LutKind, "none" | "custom">; name: string; hint: string }[] = [
+  { kind: "dlogm", name: "D-Log M → Rec.709 (DJI)", hint: "Matches DJI's official Osmo Action LUT: tone, hue and saturation were measured from the Action 6 file. The calm, true-to-life starting point." },
+  { kind: "dlogm-natural", name: "D-Log M → Natural", hint: "DJI's rendering with 12 % less saturation and slightly less contrast — flattering for tarmac, dashboards and overcast days." },
+  { kind: "dlogm-vivid", name: "D-Log M → Vivid", hint: "DJI's rendering with 10 % more saturation and a little more contrast, in the spirit of DJI's own vivid LUTs." },
+  { kind: "dlog", name: "D-Log → Rec.709 (DJI)", hint: "DJI's published D-Log curve and D-Gamut matrix (Mavic 3 Pro Hasselblad camera, Inspire 3, Zenmuse), rendered with the same tone as the D-Log M look." },
+];
+const LOOKS: Record<Exclude<LutKind, "none" | "custom">, { sat: number; con: number }> = { dlogm: { sat: 1, con: 1 }, "dlogm-natural": { sat: 0.88, con: 0.94 }, "dlogm-vivid": { sat: 1.1, con: 1.04 }, dlog: { sat: 1, con: 1 } };
+
+const clamp01 = (v: number) => Math.min(1, Math.max(0, v));
+const mul3 = (m: readonly number[], v: [number, number, number]): [number, number, number] => [m[0] * v[0] + m[1] * v[1] + m[2] * v[2], m[3] * v[0] + m[4] * v[1] + m[5] * v[2], m[6] * v[0] + m[7] * v[1] + m[8] * v[2]];
+
+/** One log triplet → display Rec.709, for the built-in conversions. */
+export function convertLog(kind: Exclude<LutKind, "none" | "custom">, rgb: [number, number, number]): [number, number, number] {
+  let out: [number, number, number];
+  if (kind === "dlog") {
+    // Published curve and gamut, then DJI's rendering via the D-Log M code it corresponds to.
+    const lin = mul3(DGAMUT_TO_709, [dlogToLinear(rgb[0]), dlogToLinear(rgb[1]), dlogToLinear(rgb[2])]);
+    out = [djiTone(linearToDlogm(lin[0])), djiTone(linearToDlogm(lin[1])), djiTone(linearToDlogm(lin[2]))];
+  } else {
+    const c = mul3(DJI_LOG_MATRIX, rgb);
+    out = [djiTone(c[0]), djiTone(c[1]), djiTone(c[2])];
   }
-  // D-Log: toe below 0.0929, log above (mid-grey 0.3773).
-  return x < 0.0929 ? (x - 0.0929) / 8.0 + 0.0 : Math.max(0, (10 ** ((x - 0.584) / 0.209) - 0.0108) / (1 - 0.0108));
+  const { sat, con } = LOOKS[kind];
+  if (sat !== 1 || con !== 1) {
+    const y = 0.2126 * out[0] + 0.7152 * out[1] + 0.0722 * out[2];
+    out = out.map((v) => clamp01(GREY_DISPLAY + ((y + sat * (v - y)) - GREY_DISPLAY) * con)) as [number, number, number];
+  }
+  return out;
 }
 
-/** Scene linear → Rec.709 (BT.1886-ish) display, with a soft shoulder so highlights roll off instead of clipping. */
-export function linearTo709(v: number): number {
-  const shoulder = v > 0.8 ? 0.8 + (1 - Math.exp(-(v - 0.8) * 2.5)) * 0.2 : v;
-  const c = Math.min(Math.max(shoulder, 0), 1);
-  return c < 0.018 ? 4.5 * c : 1.099 * Math.pow(c, 0.45) - 0.099;
-}
-
-/** Encoded mid-grey (18% scene reflectance) for each log curve, from DJI's documentation. */
-const MID_GREY = { dlog: 0.3773, dlogm: 0.41 } as const;
-
-/**
- * Build the D-Log / D-Log M → Rec.709 conversion as a 3D LUT (33³, the
- * industry size). Scene linear is scaled so that 18% grey lands at 0.18
- * linear exactly, which Rec.709 then shows at the conventional ~0.46 —
- * the same anchoring DJI's own LUTs use, so footage looks "normal" rather than dark.
- */
-export function buildDlogLut(variant: "dlog" | "dlogm", size = 33): Lut3D {
+/** Build a built-in conversion as a 3D LUT (33³, the industry size). */
+export function buildDlogLut(kind: Exclude<LutKind, "none" | "custom">, size = 33): Lut3D {
   const data = new Float32Array(size ** 3 * 3);
-  const norm = 0.18 / Math.max(1e-6, dlogToLinear(MID_GREY[variant], variant));
-  const conv = (x: number) => linearTo709(dlogToLinear(x, variant) * norm);
   let i = 0;
   for (let b = 0; b < size; b++)
     for (let g = 0; g < size; g++)
       for (let r = 0; r < size; r++) {
-        // D-Log is encoded per channel with Rec.709-ish primaries, so per-channel decode is a faithful first-order conversion.
-        data[i++] = conv(r / (size - 1));
-        data[i++] = conv(g / (size - 1));
-        data[i++] = conv(b / (size - 1));
+        const o = convertLog(kind, [r / (size - 1), g / (size - 1), b / (size - 1)]);
+        data[i++] = o[0];
+        data[i++] = o[1];
+        data[i++] = o[2];
       }
-  return { size, data, title: variant === "dlog" ? "DJI D-Log to Rec.709" : "DJI D-Log M to Rec.709" };
+  return { size, data, title: LUT_OPTIONS.find((o) => o.kind === kind)?.name ?? kind };
 }
 
 /** A LUT as .cube text, for download. */

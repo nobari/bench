@@ -5,9 +5,13 @@
  * Nothing here touches the DOM, files or codecs — see engine.ts for that.
  */
 
+/** Built-in conversions, plus the project's own .cube (DJI's official file, say). */
+export type LutKind = "none" | "dlogm" | "dlogm-natural" | "dlogm-vivid" | "dlog" | "custom";
+export const LUT_KINDS: LutKind[] = ["none", "dlogm", "dlogm-natural", "dlogm-vivid", "dlog", "custom"];
+
 export interface Grade {
-  /** Which log curve the footage was shot in; "none" skips the LUT. */
-  lut: "none" | "dlog" | "dlogm";
+  /** Which conversion to apply first; "none" skips the LUT. */
+  lut: LutKind;
   /** Stops of exposure, −3…+3. */
   exposure: number;
   /** White balance: temperature shift (blue ↔ amber) and tint (green ↔ magenta), −100…100. */
@@ -295,6 +299,8 @@ export interface Project {
   export: ExportSettings;
   preview: PreviewSettings;
   transition: TransitionSettings;
+  /** A .cube the user loaded (expects the camera's log in, Rec.709 out), applied by clips whose lut is "custom". */
+  customLut?: { name: string; cube: string } | null;
   /** Proxy state per media id: whether a proxy exists (and which file). */
   proxies: Record<string, { ready: boolean; file?: string }>;
 }
@@ -614,7 +620,8 @@ export function deserialize(json: string): Project | null {
     const legacy = (p.transition ?? {}) as { kind?: string; duration?: number };
     const known = TRANSITIONS.some((t) => t.kind === legacy.kind);
     const transition: Transition = { kind: known ? (legacy.kind as TransitionKind) : DEFAULT_TRANSITION.kind, duration: legacy.duration ?? DEFAULT_TRANSITION.duration };
-    const clips = known && !p.clips.some((c) => c.transitionIn) ? applyTransitionToAll(p.clips, transition) : p.clips;
+    const migrated = known && !p.clips.some((c) => c.transitionIn) ? applyTransitionToAll(p.clips, transition) : p.clips;
+    const clips = migrated.map((c) => (LUT_KINDS.includes(c.grade?.lut) ? c : { ...c, grade: { ...c.grade, lut: "none" as LutKind } }));
     return { ...newProject(), ...p, clips, export: { ...DEFAULT_EXPORT, ...p.export }, preview: { ...DEFAULT_PREVIEW, ...(p.preview ?? (Object.values(p.proxies ?? {}).some((x) => x?.ready) ? { proxyHeight: 1080 } : {})) }, transition, titles: (p.titles ?? []).map((t) => normalizeTitle(t)) };
   } catch {
     return null;

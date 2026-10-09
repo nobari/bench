@@ -24,8 +24,8 @@ import {
   type StreamTargetChunk,
   type VideoCodec,
 } from "mediabunny";
-import { GRADE_FRAGMENT_SHADER, buildDlogLut, lutTexture, type Lut3D } from "./lut";
-import { TITLE_FONTS, dbToGain, exportRange, musicGainAt, placeClips, planExport, transitionAt, transitionWindows, type Clip, type ExportSpan, type Grade, type MediaRef, type PlacedClip, type Project, type Title, type Transform, type TransitionWindow } from "./project";
+import { GRADE_FRAGMENT_SHADER, buildDlogLut, lutTexture, parseCube, type Lut3D } from "./lut";
+import { TITLE_FONTS, dbToGain, exportRange, musicGainAt, placeClips, planExport, transitionAt, transitionWindows, type Clip, type ExportSpan, type Grade, type LutKind, type MediaRef, type PlacedClip, type Project, type Title, type Transform, type TransitionWindow } from "./project";
 import { drawTransition } from "./transitions";
 
 export interface Probe {
@@ -123,12 +123,19 @@ export class Grader {
   private program: WebGLProgram;
   private frameTex: WebGLTexture;
   private lutTex: WebGLTexture;
-  private lutLoaded: "none" | "dlog" | "dlogm" | "custom" = "none";
+  private lutLoaded: LutKind = "none";
   private lutSize = 33;
   private uniforms: Record<string, WebGLUniformLocation | null> = {};
   readonly canvas: OffscreenCanvas;
-  private luts: Partial<Record<"dlog" | "dlogm", Lut3D>> = {};
-  customLut: Lut3D | null = null;
+  private luts: Partial<Record<LutKind, Lut3D>> = {};
+  private custom: Lut3D | null = null;
+
+  /** The project's own .cube; clips with lut "custom" use it (and draw unconverted until one is set). */
+  setCustomLut(lut: Lut3D | null) {
+    if (lut === this.custom) return;
+    this.custom = lut;
+    if (this.lutLoaded === "custom") this.lutLoaded = "none";
+  }
 
   constructor(width: number, height: number) {
     this.canvas = new OffscreenCanvas(width, height);
@@ -178,10 +185,12 @@ void main() { vUv = aUv; vec3 p = uTransform * vec3(aPos, 1.0); gl_Position = ve
     gl.uniform1i(this.uniforms.uLut, 1);
   }
 
-  private loadLut(kind: Grade["lut"]) {
-    if (kind === "none" || this.lutLoaded === kind) return;
-    const lut = kind === "dlog" || kind === "dlogm" ? (this.luts[kind] ??= buildDlogLut(kind)) : null;
-    if (!lut) return;
+  /** Upload the LUT for a grade if needed; false when there is nothing to apply. */
+  private loadLut(kind: LutKind): boolean {
+    if (kind === "none") return false;
+    const lut = kind === "custom" ? this.custom : (this.luts[kind] ??= buildDlogLut(kind));
+    if (!lut) return false;
+    if (this.lutLoaded === kind) return true;
     const { width, height, data } = lutTexture(lut);
     const gl = this.gl;
     gl.activeTexture(gl.TEXTURE1);
@@ -192,6 +201,7 @@ void main() { vUv = aUv; vec3 p = uTransform * vec3(aPos, 1.0); gl_Position = ve
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
     this.lutLoaded = kind;
     this.lutSize = lut.size;
+    return true;
   }
 
   /** Draw a source image with the grade and transform into this.canvas. */
@@ -203,8 +213,8 @@ void main() { vUv = aUv; vec3 p = uTransform * vec3(aPos, 1.0); gl_Position = ve
     // The quad's texture coordinates already put the frame the right way up; flipping here would invert it.
     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, src as TexImageSource);
-    this.loadLut(grade.lut);
-    gl.uniform1i(this.uniforms.uUseLut, grade.lut === "none" ? 0 : 1);
+    const useLut = this.loadLut(grade.lut);
+    gl.uniform1i(this.uniforms.uUseLut, useLut ? 1 : 0);
     gl.uniform1f(this.uniforms.uLutSize, this.lutSize);
     gl.uniform1f(this.uniforms.uExposure, grade.exposure);
     gl.uniform1f(this.uniforms.uTemperature, grade.temperature);
@@ -494,6 +504,13 @@ export async function exportProject(opts: ExportOptions): Promise<{ bytesWritten
   const canvas = new OffscreenCanvas(outW, outH);
   const ctx2d = canvas.getContext("2d")!;
   const grader = new Grader(outW, outH);
+  if (project.customLut) {
+    try {
+      grader.setCustomLut(parseCube(project.customLut.cube));
+    } catch {
+      /* unreadable .cube: those clips export unconverted, as the preview showed */
+    }
+  }
   const videoSource = new CanvasSource(canvas, { codec, bitrate, keyFrameInterval: 2, latencyMode: PRESET_LATENCY[project.export.preset], hardwareAcceleration: "prefer-hardware" });
   output.addVideoTrack(videoSource, { frameRate: fps });
   const sampleRate = 48000;
