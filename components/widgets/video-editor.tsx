@@ -52,7 +52,7 @@ import {
 } from "@/lib/tools/video/project";
 import { drawTransition } from "@/lib/tools/video/transitions";
 import { Grader, buildProxy, drawOverlays, encoderSupport, exportProject, probe } from "@/lib/tools/video/engine";
-import { ProjectStore, hasFileSystemAccess } from "@/lib/tools/video/store";
+import { ProjectStore, hasFileSystemAccess, AUTOSAVE_FILE, PROJECT_FILE, PROXY_DIR } from "@/lib/tools/video/store";
 import { cn } from "@/lib/utils";
 
 const SEL = "h-8 rounded-[var(--radius-sm)] border border-edge bg-base px-2 pr-7 text-[13px] text-ink outline-none focus:border-accent";
@@ -136,6 +136,53 @@ export function VideoEditorWidget() {
   const scratchRef = useRef<{ a: OffscreenCanvas; b: OffscreenCanvas; s: OffscreenCanvas; w: number; h: number } | null>(null);
   const pendingUrls = useRef<Set<string>>(new Set());
   const previewBoxRef = useRef<HTMLDivElement>(null);
+  // Clear-project dialog: forgetting is always in the browser only; deleting our own files from the folder is opt-in.
+  const [clearOpen, setClearOpen] = useState(false);
+  const [clearFiles, setClearFiles] = useState(false);
+  const [clearProxies, setClearProxies] = useState(false);
+  const keepButtonRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (!clearOpen) return;
+    keepButtonRef.current?.focus();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setClearOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [clearOpen]);
+  const clearProject = async () => {
+    setPlaying(false);
+    store.cancelAutosave();
+    const notes: string[] = [];
+    if (folder && clearFiles) {
+      const removed = await store.removeProjectFiles();
+      if (removed.length) notes.push(`deleted ${removed.join(" and ")}`);
+    }
+    if (folder && clearProxies && (await store.removeProxies())) notes.push(`deleted ${PROXY_DIR}/`);
+    await store.forget();
+    for (const url of proxyUrls.current.values()) URL.revokeObjectURL(url);
+    proxyUrls.current.clear();
+    pendingUrls.current.clear();
+    musicBuffers.current.clear();
+    if (altRef.current) {
+      altRef.current.removeAttribute("src");
+      delete altRef.current.dataset.src;
+    }
+    setProjectState(newProject());
+    setHistory([]);
+    setFolder(null);
+    setSelected(null);
+    setSelectedMusic(null);
+    setSelectedTitle(null);
+    setSelectedTransition(null);
+    setLogo(null);
+    setPlayhead(0);
+    setError(null);
+    setClearOpen(false);
+    setClearFiles(false);
+    setClearProxies(false);
+    setStatus(`Project cleared${notes.length ? " — " + notes.join(", ") : ""}. Your recordings were not touched.`);
+  };
   const selectedTransitionRef = useRef<string | null>(null);
   useEffect(() => {
     selectedTransitionRef.current = selectedTransition;
@@ -685,6 +732,9 @@ export function VideoEditorWidget() {
         </button>
         <button type="button" onClick={undo} disabled={!history.length} className={GHOST}>
           Undo
+        </button>
+        <button type="button" onClick={() => setClearOpen(true)} className={cn(GHOST, "hover:border-danger hover:text-danger")} title="Start over: forget this project in the browser, optionally delete its files from the folder">
+          <Trash2 size={13} /> Clear
         </button>
         <span className="text-[12px] text-faint">{status}</span>
         {recovered && <span className="rounded-[var(--radius-sm)] bg-accent-soft px-2 py-0.5 text-[12px] text-accent">Recovered unsaved work from the autosave</span>}
@@ -1395,6 +1445,48 @@ export function VideoEditorWidget() {
         </div>
         <p className="mt-1 text-[11.5px] text-faint">Click the ruler to seek · space plays · ⌘Z undoes · ⌘S saves. Clips are shown in playback order; music lanes stack, and overlaps on one lane crossfade.</p>
       </div>
+      {clearOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-labelledby="clear-project-title">
+          <div className="absolute inset-0 bg-scrim" onClick={() => setClearOpen(false)} />
+          <div className="relative w-full max-w-md space-y-3 rounded-[var(--radius)] border border-edge bg-base p-4 shadow-dialog">
+            <h3 id="clear-project-title" className="text-[15px] font-semibold text-ink">
+              Clear this project?
+            </h3>
+            <p className="text-[13px] text-muted">The editor forgets the project in this browser: the open timeline, its undo history and the remembered folder. Your recordings and music files are never deleted.</p>
+            {folder ? (
+              <div className="space-y-2 rounded-[var(--radius-sm)] border border-edge p-2 text-[13px]">
+                <label className="flex items-start gap-2">
+                  <input type="checkbox" checked={clearFiles} onChange={(e) => setClearFiles(e.target.checked)} className="mt-0.5 accent-[var(--accent)]" />
+                  <span>
+                    Also delete the project file and autosave from <b>{folder}</b>
+                    <span className="block text-[12px] text-faint">
+                      {PROJECT_FILE} and {AUTOSAVE_FILE}. Leave this off to reopen the project later from the folder.
+                    </span>
+                  </span>
+                </label>
+                <label className="flex items-start gap-2">
+                  <input type="checkbox" checked={clearProxies} onChange={(e) => setClearProxies(e.target.checked)} className="mt-0.5 accent-[var(--accent)]" />
+                  <span>
+                    Also delete the rendered proxies
+                    <span className="block text-[12px] text-faint">The {PROXY_DIR}/ folder. They can be rendered again any time.</span>
+                  </span>
+                </label>
+              </div>
+            ) : (
+              <p className="text-[12px] text-faint">No project folder is open, so nothing on disk changes.</p>
+            )}
+            <p className="text-[12px] text-faint">Nothing else in the folder is touched: the footage stays exactly where it is.</p>
+            <div className="flex justify-end gap-2">
+              <button ref={keepButtonRef} type="button" onClick={() => setClearOpen(false)} className={GHOST}>
+                Keep project
+              </button>
+              <button type="button" onClick={() => void clearProject()} className={cn(PRIMARY, "bg-danger hover:bg-danger")} data-confirm-clear>
+                <Trash2 size={13} /> Clear project
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1421,6 +1513,7 @@ function RangeCut({ duration, onCut }: { duration: number; onCut: (a: number, b:
         Cut it out
       </button>
       <span className="text-faint">— e.g. a petrol stop; the footage stays continuous.</span>
+
     </div>
   );
 }

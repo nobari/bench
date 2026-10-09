@@ -33,6 +33,14 @@ async function dbGet<T>(key: string): Promise<T | undefined> {
     tx.onerror = () => reject(tx.error);
   });
 }
+async function dbDelete(key: string): Promise<void> {
+  const d = await db();
+  return new Promise((resolve, reject) => {
+    const tx = d.transaction(DB_STORE, "readwrite").objectStore(DB_STORE).delete(key);
+    tx.onsuccess = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
 async function dbSet(key: string, value: unknown): Promise<void> {
   const d = await db();
   return new Promise((resolve, reject) => {
@@ -132,6 +140,50 @@ export class ProjectStore {
         .then(() => this.onStatus?.("Autosaved"))
         .catch(() => this.onStatus?.("Autosave failed"));
     }, delayMs);
+  }
+
+  /** Drop a pending autosave without writing it. */
+  cancelAutosave(): void {
+    if (this.saveTimer) clearTimeout(this.saveTimer);
+    this.saveTimer = null;
+    this.pending = null;
+  }
+
+  /**
+   * Forget the project in this browser: the remembered folder handle and
+   * anything pending. Nothing on disk changes.
+   */
+  async forget(): Promise<void> {
+    this.cancelAutosave();
+    this.dir = null;
+    this.files.clear();
+    await dbDelete("lastFolder").catch(() => undefined);
+  }
+
+  /** Delete the project file and autosave from the folder — only the two files this tool writes; recordings are never touched. */
+  async removeProjectFiles(): Promise<string[]> {
+    if (!this.dir) return [];
+    const removed: string[] = [];
+    for (const name of [PROJECT_FILE, AUTOSAVE_FILE]) {
+      try {
+        await this.dir.removeEntry(name);
+        removed.push(name);
+      } catch {
+        /* not there */
+      }
+    }
+    return removed;
+  }
+
+  /** Delete the rendered proxies folder; it can be rebuilt any time. */
+  async removeProxies(): Promise<boolean> {
+    if (!this.dir) return false;
+    try {
+      await this.dir.removeEntry(PROXY_DIR, { recursive: true });
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   /** Flush a pending autosave immediately (on unload). */
