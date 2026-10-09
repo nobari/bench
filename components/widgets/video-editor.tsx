@@ -58,7 +58,7 @@ const RANGE = "h-1.5 w-full cursor-pointer appearance-none rounded-full bg-raise
 const LANE_COLORS = ["#8cc63f", "#5ab3d6", "#d9a400"];
 const POSITION_NAMES: Record<TitlePosition, string> = { tl: "Top left", tc: "Top centre", tr: "Top right", ml: "Middle left", mc: "Centre", mr: "Middle right", bl: "Bottom left", bc: "Bottom centre", br: "Bottom right" };
 const KIND_LABELS: Record<Title["kind"], string> = { intro: "Intro", title: "Title", lowerThird: "Lower third" };
-const DEFAULT_PREVIEW_HEIGHT: ProxyHeight = 1080;
+const DEFAULT_PREVIEW_HEIGHT: ProxyHeight = 0;
 const toHex = (c: string) => (/^#[0-9a-fA-F]{6}$/.test(c) ? c : "#ffffff");
 type Tab = "trim" | "transform" | "colour" | "audio" | "titles" | "export";
 const TABS: [Tab, string, typeof Scissors][] = [
@@ -339,16 +339,25 @@ export function VideoEditorWidget() {
     if (store.hasFolder) for (const m of ordered) await makeProxy(m, files.find((f) => f.name === m.name)!, previewRef.current);
   };
 
-  const makeProxy = async (m: MediaRef, file: File, height: ProxyHeight) => {
+  const makeProxy = async (m: MediaRef, file: File, height: ProxyHeight, force = false) => {
     if (!height) {
       proxyUrls.current.delete(m.id);
       setProject((p) => ({ ...p, proxies: { ...p.proxies, [m.id]: { ready: false } } }));
       return;
     }
+    const name = `${m.id}.proxy${height}.mp4`;
+    if (!force) {
+      // A proxy at this size from earlier is reused as is.
+      const existing = await store.proxyFile(name);
+      if (existing && existing.size > 0) {
+        proxyUrls.current.set(m.id, URL.createObjectURL(existing));
+        setProject((p) => ({ ...p, proxies: { ...p.proxies, [m.id]: { ready: true, file: name } } }));
+        return;
+      }
+    }
     const abort = new AbortController();
     setJob({ kind: "proxy", label: `${height}p proxy for ${m.name}`, fraction: 0, abort });
     try {
-      const name = `${m.id}.proxy${height}.mp4`;
       const { writable } = await store.createWritable(name, "proxies");
       await buildProxy(file, writable as unknown as WritableStream<import("mediabunny").StreamTargetChunk>, height, (f) => setJob((j) => (j ? { ...j, fraction: f } : j)), abort.signal);
       const pf = await store.proxyFile(name);
@@ -361,13 +370,12 @@ export function VideoEditorWidget() {
     }
   };
 
-  const rebuildProxies = async () => {
-    const h = previewRef.current;
+  const rebuildProxies = async (height: ProxyHeight = previewRef.current, force = true) => {
     for (const id of [...new Set(project.clips.map((c) => c.media))]) {
       const f = await store.getFile(id), m = project.media[id];
       if (f && m) {
         proxyUrls.current.delete(id);
-        await makeProxy(m, f, h);
+        await makeProxy(m, f, height, force);
       }
     }
   };
@@ -737,11 +745,21 @@ export function VideoEditorWidget() {
             )}
             <label className="flex items-center gap-1.5 text-[12px] text-muted" title="Smaller proxies render faster and scrub more smoothly; larger ones show the grade in more detail. Export always uses the originals.">
               Proxy
-              <select value={project.preview.proxyHeight} onChange={(e) => setProject((p) => ({ ...p, preview: { ...p.preview, proxyHeight: Number(e.target.value) as ProxyHeight } }))} className={cn(SEL, "h-7 text-[12px]")}>
+              <select
+                value={project.preview.proxyHeight}
+                onChange={(e) => {
+                  const h = Number(e.target.value) as ProxyHeight;
+                  previewRef.current = h;
+                  setProject((p) => ({ ...p, preview: { ...p.preview, proxyHeight: h } }));
+                  // Choosing a size renders the proxies straight away (existing ones at that size are reused).
+                  void rebuildProxies(h, false);
+                }}
+                className={cn(SEL, "h-7 text-[12px]")}
+              >
                 <option value={1080}>1080p</option>
                 <option value={720}>720p</option>
                 <option value={360}>360p</option>
-                <option value={0}>Off — preview the originals</option>
+                <option value={0}>Off — play the originals</option>
               </select>
             </label>
             <button type="button" onClick={() => void rebuildProxies()} disabled={!project.clips.length || !!job || !folder} className={cn(GHOST, "h-7 text-[12px]")} title="Render the proxies again at the chosen size">

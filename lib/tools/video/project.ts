@@ -236,7 +236,8 @@ export interface PreviewSettings {
   /** Proxy size for preview; 0 previews the full-resolution source. */
   proxyHeight: ProxyHeight;
 }
-export const DEFAULT_PREVIEW: PreviewSettings = { proxyHeight: 1080 };
+/** Off by default: the preview plays the originals until a proxy size is chosen. */
+export const DEFAULT_PREVIEW: PreviewSettings = { proxyHeight: 0 };
 
 export interface Project {
   version: 1;
@@ -543,7 +544,7 @@ export function deserialize(json: string): Project | null {
   try {
     const p = JSON.parse(json) as Project;
     if (p?.version !== 1 || !Array.isArray(p.clips) || !p.media) return null;
-    return { ...newProject(), ...p, export: { ...DEFAULT_EXPORT, ...p.export }, preview: { ...DEFAULT_PREVIEW, ...(p.preview ?? {}) }, transition: { ...DEFAULT_TRANSITION, ...(p.transition ?? {}) }, titles: (p.titles ?? []).map((t) => normalizeTitle(t)) };
+    return { ...newProject(), ...p, export: { ...DEFAULT_EXPORT, ...p.export }, preview: { ...DEFAULT_PREVIEW, ...(p.preview ?? (Object.values(p.proxies ?? {}).some((x) => x?.ready) ? { proxyHeight: 1080 } : {})) }, transition: { ...DEFAULT_TRANSITION, ...(p.transition ?? {}) }, titles: (p.titles ?? []).map((t) => normalizeTitle(t)) };
   } catch {
     return null;
   }
