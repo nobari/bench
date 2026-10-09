@@ -10,14 +10,17 @@ import {
   TITLE_FONTS,
   TITLE_POSITIONS,
   TRANSITIONS,
+  addTransitionAt,
   appendMusic,
   applyAudioTo,
   applyGradeTo,
+  applyTransitionToAll,
   clipAt,
   crossfades,
   dbToGain,
   effectiveMusicEnd,
   estimateExport,
+  exportRange,
   fmtTime,
   moveItem,
   musicGainAt,
@@ -30,6 +33,7 @@ import {
   planExport,
   removeRange,
   reorderMusic,
+  setTransition,
   splitClip,
   timelineDuration,
   titleLanes,
@@ -43,6 +47,7 @@ import {
   type Title,
   type TitleFont,
   type TitlePosition,
+  type Transition,
   type TransitionKind,
 } from "@/lib/tools/video/project";
 import { drawTransition } from "@/lib/tools/video/transitions";
@@ -100,6 +105,8 @@ export function VideoEditorWidget() {
   const [selected, setSelected] = useState<string | null>(null);
   const [selectedMusic, setSelectedMusic] = useState<string | null>(null);
   const [selectedTitle, setSelectedTitle] = useState<string | null>(null);
+  /** The incoming clip id of the selected cut's transition. */
+  const [selectedTransition, setSelectedTransition] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>("trim");
   const [playhead, setPlayhead] = useState(0);
   const [playing, setPlaying] = useState(false);
@@ -129,6 +136,10 @@ export function VideoEditorWidget() {
   const scratchRef = useRef<{ a: OffscreenCanvas; b: OffscreenCanvas; s: OffscreenCanvas; w: number; h: number } | null>(null);
   const pendingUrls = useRef<Set<string>>(new Set());
   const previewBoxRef = useRef<HTMLDivElement>(null);
+  const selectedTransitionRef = useRef<string | null>(null);
+  useEffect(() => {
+    selectedTransitionRef.current = selectedTransition;
+  }, [selectedTransition]);
   const [fullscreen, setFullscreen] = useState(false);
   useEffect(() => {
     const onChange = () => setFullscreen(!!document.fullscreenElement);
@@ -144,9 +155,12 @@ export function VideoEditorWidget() {
 
   const duration = timelineDuration(project);
   const placed = useMemo(() => placeClips(project.clips), [project.clips]);
-  const windows = useMemo(() => transitionWindows(placed, project.transition), [placed, project.transition]);
+  const windows = useMemo(() => transitionWindows(placed), [placed]);
+  const selectedWindow = useMemo(() => windows.find((w) => w.incoming.id === selectedTransition) ?? null, [windows, selectedTransition]);
   const titleLaneOf = useMemo(() => titleLanes(project.titles), [project.titles]);
   const spans = useMemo(() => planExport(project), [project]);
+  const range = useMemo(() => exportRange(project), [project]);
+  const setRange = (r: { from: number; to: number } | null) => setProject((p) => ({ ...p, export: { ...p.export, range: r } }));
   const estimate = useMemo(() => estimateExport(project, spans), [project, spans]);
   const current = selected ? project.clips.find((c) => c.id === selected) : undefined;
   const currentMusic = selectedMusic ? project.music.find((m) => m.id === selectedMusic) : undefined;
@@ -240,9 +254,10 @@ export function VideoEditorWidget() {
         const f = await store.proxyFile(px.file);
         if (f) proxyUrls.current.set(id, URL.createObjectURL(f));
       }
-      if (stale.length) setProject((q) => ({ ...q, proxies: Object.fromEntries(Object.entries(q.proxies).map(([id, px]) => [id, stale.includes(id) ? { ready: false } : px])) }));
+      // Load-time housekeeping: no undo entry, and the flags are recomputed on every load anyway.
+      if (stale.length) setProjectState((q) => ({ ...q, proxies: Object.fromEntries(Object.entries(q.proxies).map(([id, px]) => [id, stale.includes(id) ? { ready: false } : px])) }));
     },
-    [store, setProject],
+    [store],
   );
 
   useEffect(() => {
@@ -256,6 +271,11 @@ export function VideoEditorWidget() {
       } else if ((e.metaKey || e.ctrlKey) && e.key === "s") {
         e.preventDefault();
         void store.save(project);
+      } else if ((e.key === "Delete" || e.key === "Backspace") && selectedTransitionRef.current && !(e.target as HTMLElement).closest("input, textarea, select")) {
+        e.preventDefault();
+        const id = selectedTransitionRef.current;
+        setProject((p) => ({ ...p, clips: setTransition(p.clips, id, null) }));
+        setSelectedTransition(null);
       } else if (e.key === " " && !(e.target as HTMLElement).closest("input, textarea, select")) {
         e.preventDefault();
         void audioCtxRef.current?.resume();
@@ -267,7 +287,7 @@ export function VideoEditorWidget() {
       window.removeEventListener("beforeunload", onUnload);
       window.removeEventListener("keydown", onKey);
     };
-  }, [store, undo, project]);
+  }, [store, undo, project, setProject]);
 
   // Try to reopen the last project folder silently.
   useEffect(() => {
@@ -528,7 +548,7 @@ export function VideoEditorWidget() {
                 sc.a.getContext("2d")!.drawImage(grader.canvas, 0, 0);
                 grader.draw(alt, other.grade, other.transform, alt.videoWidth, alt.videoHeight);
                 sc.b.getContext("2d")!.drawImage(grader.canvas, 0, 0);
-                drawTransition(ctx, outgoingIsUnder ? sc.a : sc.b, outgoingIsUnder ? sc.b : sc.a, w, h, project.transition.kind, tr.progress, sc.s);
+                drawTransition(ctx, outgoingIsUnder ? sc.a : sc.b, outgoingIsUnder ? sc.b : sc.a, w, h, tr.window.kind, tr.progress, sc.s);
                 composed = true;
               }
             }
@@ -567,6 +587,26 @@ export function VideoEditorWidget() {
 
   const update = (id: string, patch: Partial<Clip>) => setProject((p) => ({ ...p, clips: p.clips.map((c) => (c.id === id ? { ...c, ...patch } : c)) }));
   const updateMusic = (id: string, patch: Partial<MusicTrack>) => setProject((p) => ({ ...p, music: p.music.map((m) => (m.id === id ? { ...m, ...patch } : m)) }));
+  // Transitions live on the cut they lead into; selecting one parks the playhead on the cut so the preview shows its middle.
+  const focusTransition = (incomingId: string | null) => {
+    setSelectedTransition(incomingId);
+    const w = windows.find((x) => x.incoming.id === incomingId);
+    if (w) {
+      setPlayhead(w.cut);
+      setSeekToken((x) => x + 1);
+    }
+  };
+  const addTransitionAtPlayhead = () => {
+    const r = addTransitionAt(project.clips, playhead, project.transition);
+    if (!r) return setError("Move the playhead at least 0.2 s inside a clip, or onto a cut, to add a transition.");
+    setProject((p) => ({ ...p, clips: r.clips }));
+    setSelectedTransition(r.incomingId);
+  };
+  const changeTransition = (patch: Partial<Transition>) =>
+    setProject((p) => {
+      const tr = { ...p.transition, ...patch };
+      return { ...p, transition: tr, clips: selectedTransition ? setTransition(p.clips, selectedTransition, tr) : p.clips };
+    });
   // Opening a title also parks the playhead where it is fully faded in, so the preview shows what you are editing.
   const focusTitle = (t: Title | null) => {
     setSelectedTitle(t?.id ?? null);
@@ -605,7 +645,7 @@ export function VideoEditorWidget() {
     const abort = new AbortController();
     setJob({ kind: "export", label: "Exporting", fraction: 0, abort });
     try {
-      const name = `${project.name.replace(/[^\w-]+/g, "-")}-${project.export.resolution === "source" ? "8K" : project.export.resolution + "p"}.mp4`;
+      const name = `${project.name.replace(/[^\w-]+/g, "-")}-${project.export.resolution === "source" ? "8K" : project.export.resolution + "p"}${range ? `-${Math.round(range.from)}s-${Math.round(range.to)}s` : ""}.mp4`;
       const { writable } = await store.createWritable(name);
       await exportProject({
         project,
@@ -810,26 +850,54 @@ export function VideoEditorWidget() {
                   </button>
                 </div>
                 <RangeCut duration={duration} onCut={(a, b) => setProject((p) => ({ ...p, clips: removeRange(p.clips, a, b) }))} />
-                <div className="space-y-2 rounded-[var(--radius-sm)] border border-edge p-2">
+                <div className={cn("space-y-2 rounded-[var(--radius-sm)] border p-2", selectedWindow ? "border-accent" : "border-edge")} data-transition-box>
                   <div className="flex items-center justify-between text-[12.5px]">
-                    <span className="font-medium text-ink">Transitions at every cut</span>
-                    <span className="text-faint">{placed.length > 1 ? `${placed.length - 1} cut${placed.length === 2 ? "" : "s"}` : "no cuts yet"}</span>
+                    <span className="font-medium text-ink">{selectedWindow ? `Transition at ${fmtTime(selectedWindow.cut)}` : "Transitions"}</span>
+                    <span className="text-faint">{placed.length > 1 ? `${windows.length} of ${placed.length - 1} cut${placed.length === 2 ? "" : "s"}` : "no cuts yet"}</span>
                   </div>
-                  <select value={project.transition.kind} onChange={(e) => setProject((p) => ({ ...p, transition: { ...p.transition, kind: e.target.value as TransitionKind } }))} className={SEL} aria-label="Transition">
-                    <option value="none">None — hard cuts</option>
+                  <select value={selectedWindow?.kind ?? project.transition.kind} onChange={(e) => changeTransition({ kind: e.target.value as TransitionKind })} className={SEL} aria-label="Transition">
                     {TRANSITIONS.map((t) => (
                       <option key={t.kind} value={t.kind}>
                         {t.name}
                       </option>
                     ))}
                   </select>
-                  {project.transition.kind !== "none" && (
-                    <>
-                      <p className="text-[12px] text-faint">{TRANSITIONS.find((t) => t.kind === project.transition.kind)?.hint}</p>
-                      <Slider label="Length" value={project.transition.duration} min={0.25} max={3} step={0.25} onChange={(v) => setProject((p) => ({ ...p, transition: { ...p.transition, duration: v } }))} format={(v) => `${v} s, centred on the cut`} />
-                    </>
-                  )}
-                  <p className="text-[12px] text-faint">One setting for all splits: every cut gets this transition, or none do. Where a recording has no spare frames past a cut, its last frame holds through the transition.</p>
+                  <p className="text-[12px] text-faint">{TRANSITIONS.find((t) => t.kind === (selectedWindow?.kind ?? project.transition.kind))?.hint}</p>
+                  <Slider label="Length" value={selectedWindow ? selectedWindow.incoming.transitionIn!.duration : project.transition.duration} min={0.25} max={3} step={0.25} onChange={(v) => changeTransition({ duration: v })} format={(v) => `${v} s, centred on the cut`} />
+                  <div className="flex flex-wrap gap-1.5">
+                    {selectedWindow ? (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setProject((p) => ({ ...p, clips: setTransition(p.clips, selectedWindow.incoming.id, null) }));
+                          setSelectedTransition(null);
+                        }}
+                        className={cn(GHOST, "hover:border-danger hover:text-danger")}
+                      >
+                        <Trash2 size={13} /> Remove this transition
+                      </button>
+                    ) : (
+                      <button type="button" onClick={addTransitionAtPlayhead} disabled={!project.clips.length} className={cn(GHOST, "border-accent text-accent")} title="Splits the clip at the playhead if it is not already on a cut">
+                        + Add at playhead
+                      </button>
+                    )}
+                    <button type="button" onClick={() => setProject((p) => ({ ...p, clips: applyTransitionToAll(p.clips, selectedWindow?.incoming.transitionIn ?? p.transition) }))} disabled={placed.length < 2} className={GHOST} title="Put this transition on every cut">
+                      Apply to all cuts
+                    </button>
+                    {windows.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setProject((p) => ({ ...p, clips: applyTransitionToAll(p.clips, null) }));
+                          setSelectedTransition(null);
+                        }}
+                        className={GHOST}
+                      >
+                        Remove all
+                      </button>
+                    )}
+                  </div>
+                  <p className="text-[12px] text-faint">{selectedWindow ? "Changes here affect this cut only. Delete removes it." : "Adding at the playhead splits the clip there if it is not already on a cut. Click a ⋈ marker on the timeline to change or remove a transition."}</p>
                 </div>
                 {current && (
                   <div className="grid grid-cols-2 gap-2">
@@ -1123,6 +1191,35 @@ export function VideoEditorWidget() {
             )}
             {tab === "export" && (
               <>
+                <div className="space-y-1.5 rounded-[var(--radius-sm)] border border-edge p-2 text-[12.5px]" data-export-range>
+                  <div className="flex items-center justify-between">
+                    <span className="font-medium text-ink">Range</span>
+                    <span className="font-mono text-[12px] text-faint tabular">{range ? `${fmtTime(range.from)} → ${fmtTime(range.to)} · ${fmtTime(range.to - range.from)}` : `whole timeline · ${fmtTime(duration)}`}</span>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <label className="flex items-center gap-1 text-muted">
+                      From
+                      <input type="number" step={0.1} min={0} max={duration} value={project.export.range?.from ?? 0} onChange={(e) => setRange({ from: Number(e.target.value), to: project.export.range?.to ?? duration })} className={cn(INPUT, "w-24 font-mono")} aria-label="Export from (seconds)" />
+                    </label>
+                    <button type="button" onClick={() => setRange({ from: playhead, to: project.export.range?.to ?? duration })} className={GHOST} title="Start the export at the playhead">
+                      ⇤ playhead
+                    </button>
+                    <label className="flex items-center gap-1 text-muted">
+                      To
+                      <input type="number" step={0.1} min={0} max={duration} value={project.export.range?.to ?? duration} onChange={(e) => setRange({ from: project.export.range?.from ?? 0, to: Number(e.target.value) })} className={cn(INPUT, "w-24 font-mono")} aria-label="Export to (seconds)" />
+                    </label>
+                    <button type="button" onClick={() => setRange({ from: project.export.range?.from ?? 0, to: playhead })} className={GHOST} title="End the export at the playhead">
+                      playhead ⇥
+                    </button>
+                    {project.export.range && (
+                      <button type="button" onClick={() => setRange(null)} className={GHOST}>
+                        Whole timeline
+                      </button>
+                    )}
+                  </div>
+                  {project.export.range && !range && <p className="text-[12px] text-danger">From must come before To (inside the timeline), or the whole timeline is exported.</p>}
+                  <p className="text-[12px] text-faint">Export just a part of the drive — to check a grade quickly, or to cut one section for a short.</p>
+                </div>
                 <div className="grid grid-cols-2 gap-2">
                   <label className="text-[12.5px] text-muted">
                     Codec
@@ -1214,6 +1311,7 @@ export function VideoEditorWidget() {
                   onClick={() => {
                     setSelected(c.id);
                     setSelectedMusic(null);
+                    setSelectedTransition(null);
                     setPlayhead(c.start);
                     setSeekToken((t) => t + 1);
                   }}
@@ -1229,16 +1327,24 @@ export function VideoEditorWidget() {
                   </span>
                 </button>
               ))}
+              {range && <div className="pointer-events-none absolute top-0 h-full border-x-2 border-accent bg-accent/10" style={{ left: range.from * pxPerSec, width: (range.to - range.from) * pxPerSec }} title={`Export range ${fmtTime(range.from)} → ${fmtTime(range.to)}`} data-export-band />}
               {windows.map((w) => (
-                <div
+                <button
                   key={w.incoming.id}
-                  className="pointer-events-none absolute top-0 flex h-full items-center justify-center border-x border-ink/60 bg-white/50 text-[11px] text-ink"
+                  type="button"
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onClick={() => {
+                    setTab("trim");
+                    focusTransition(w.incoming.id);
+                  }}
+                  className={cn("absolute top-0 flex h-full items-center justify-center border-x border-ink/60 bg-white/50 text-[11px] text-ink hover:bg-white/70", selectedTransition === w.incoming.id && "bg-accent-soft ring-2 ring-accent")}
                   style={{ left: w.start * pxPerSec, width: Math.max(8, (w.end - w.start) * pxPerSec) }}
-                  title={`${TRANSITIONS.find((t) => t.kind === project.transition.kind)?.name} · ${(w.end - w.start).toFixed(2)} s`}
+                  title={`${TRANSITIONS.find((t) => t.kind === w.kind)?.name} · ${(w.end - w.start).toFixed(2)} s — click to change or remove`}
+                  aria-label={`Transition at ${fmtTime(w.cut)}`}
                   data-transition
                 >
                   ⋈
-                </div>
+                </button>
               ))}
             </div>
             {/* title lanes: overlapping titles stack */}

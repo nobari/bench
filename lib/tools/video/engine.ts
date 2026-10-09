@@ -25,7 +25,7 @@ import {
   type VideoCodec,
 } from "mediabunny";
 import { GRADE_FRAGMENT_SHADER, buildDlogLut, lutTexture, type Lut3D } from "./lut";
-import { TITLE_FONTS, dbToGain, musicGainAt, placeClips, planExport, transitionAt, transitionWindows, type Clip, type ExportSpan, type Grade, type MediaRef, type PlacedClip, type Project, type Title, type Transform, type TransitionWindow } from "./project";
+import { TITLE_FONTS, dbToGain, exportRange, musicGainAt, placeClips, planExport, transitionAt, transitionWindows, type Clip, type ExportSpan, type Grade, type MediaRef, type PlacedClip, type Project, type Title, type Transform, type TransitionWindow } from "./project";
 import { drawTransition } from "./transitions";
 
 export interface Probe {
@@ -485,7 +485,9 @@ export async function exportProject(opts: ExportOptions): Promise<{ bytesWritten
   if (!(await canEncodeVideo(codec, { width: outW, height: outH, bitrate }))) throw new Error(`This browser can't encode ${codec.toUpperCase()} at ${outW}×${outH}. Try the other codec or a lower resolution.`);
   const spans = planExport(project);
   const total = spans.reduce((a, s) => a + (s.end - s.start), 0);
-  const windows = transitionWindows(placeClips(project.clips), project.transition);
+  // A partial export starts its file at zero: timeline times shift back by the range start.
+  const offset = exportRange(project)?.from ?? 0;
+  const windows = transitionWindows(placeClips(project.clips));
   const neighbour = new NeighbourFrames((id) => openInput(id));
   let tmpA: OffscreenCanvas | null = null, tmpB: OffscreenCanvas | null = null, scratch: OffscreenCanvas | null = null;
   const output = new Output({ format: new Mp4OutputFormat({ fastStart: false }), target: new StreamTarget(opts.writable, { chunked: true }) });
@@ -542,7 +544,7 @@ export async function exportProject(opts: ExportOptions): Promise<{ bytesWritten
           tmpA.getContext("2d")!.drawImage(grader.canvas, 0, 0, outW, outH);
           grader.draw(frame.toCanvasImageSource(), other.grade, other.transform, om?.width ?? frame.displayWidth, om?.height ?? frame.displayHeight);
           tmpB.getContext("2d")!.drawImage(grader.canvas, 0, 0, outW, outH);
-          drawTransition(ctx2d, outgoingIsThis ? tmpA : tmpB, outgoingIsThis ? tmpB : tmpA, outW, outH, project.transition.kind, tr.progress, scratch);
+          drawTransition(ctx2d, outgoingIsThis ? tmpA : tmpB, outgoingIsThis ? tmpB : tmpA, outW, outH, tr.window.kind, tr.progress, scratch);
           composed = true;
         }
       }
@@ -553,7 +555,7 @@ export async function exportProject(opts: ExportOptions): Promise<{ bytesWritten
         ctx2d.drawImage(sample.toCanvasImageSource(), 0, 0, outW, outH);
       }
       drawOverlays(ctx2d, outW, outH, timelineT, project, logo);
-      await videoSource.add(timelineT, sample.duration || 1 / fps);
+      await videoSource.add(timelineT - offset, sample.duration || 1 / fps);
       progress(sample.timestamp);
       sample.close();
     }
@@ -562,9 +564,9 @@ export async function exportProject(opts: ExportOptions): Promise<{ bytesWritten
   await neighbour.reset();
   videoSource.close();
   // Audio.
-  await mixAudio({ project, getFile, sampleRate }, 0, total, async (samples, timestamp) => {
-    opts.onProgress?.({ phase: "audio", fraction: Math.min(1, timestamp / Math.max(1e-6, total)) });
-    const s = new AudioSample({ data: samples, format: "f32", numberOfChannels: 2, sampleRate, timestamp });
+  await mixAudio({ project, getFile, sampleRate }, offset, offset + total, async (samples, timestamp) => {
+    opts.onProgress?.({ phase: "audio", fraction: Math.min(1, (timestamp - offset) / Math.max(1e-6, total)) });
+    const s = new AudioSample({ data: samples, format: "f32", numberOfChannels: 2, sampleRate, timestamp: timestamp - offset });
     await audioSource.add(s);
     s.close();
   }, signal);

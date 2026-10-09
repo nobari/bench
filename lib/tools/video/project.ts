@@ -57,6 +57,8 @@ export interface Clip {
   /** Original audio gain in dB (−60 mutes) and mute flag. */
   gainDb: number;
   muted: boolean;
+  /** The transition leading into this clip from the one before it, if any. */
+  transitionIn?: Transition;
 }
 
 export interface Keyframe {
@@ -163,18 +165,21 @@ export interface ExportSettings {
   resolution: "source" | 2160 | 1440 | 1080;
   /** Whether untouched spans may be stream-copied. */
   smartCopy: boolean;
+  /** Export only this part of the timeline (seconds); null means all of it. */
+  range: { from: number; to: number } | null;
 }
 
-export type TransitionKind = "none" | "dissolve" | "dipBlack" | "dipWhite" | "zoom" | "blur" | "wipe" | "push";
-export interface TransitionSettings {
-  /** One choice for every cut: each split gets this transition, or none do. */
+export type TransitionKind = "dissolve" | "dipBlack" | "dipWhite" | "zoom" | "blur" | "wipe" | "push";
+export interface Transition {
   kind: TransitionKind;
   /** Seconds, centred on the cut. */
   duration: number;
 }
-export const DEFAULT_TRANSITION: TransitionSettings = { kind: "none", duration: 1 };
+/** The project's choice for new transitions (the last one used). */
+export type TransitionSettings = Transition;
+export const DEFAULT_TRANSITION: Transition = { kind: "dissolve", duration: 1 };
 /** Transitions that suit road footage, in the order the menu shows them. */
-export const TRANSITIONS: { kind: Exclude<TransitionKind, "none">; name: string; hint: string }[] = [
+export const TRANSITIONS: { kind: TransitionKind; name: string; hint: string }[] = [
   { kind: "dissolve", name: "Cross dissolve", hint: "A soft blend — the classic for continuous driving." },
   { kind: "dipBlack", name: "Dip to black", hint: "Stops, parking and jumps in time." },
   { kind: "dipWhite", name: "Flash to white", hint: "Tunnel exits and driving into the sun." },
@@ -185,6 +190,7 @@ export const TRANSITIONS: { kind: Exclude<TransitionKind, "none">; name: string;
 ];
 
 export interface TransitionWindow {
+  kind: TransitionKind;
   outgoing: PlacedClip;
   incoming: PlacedClip;
   cut: number;
@@ -193,20 +199,56 @@ export interface TransitionWindow {
 }
 
 /**
- * One window per cut between consecutive clips, centred on the cut so no
+ * One window per cut that carries a transition, centred on the cut so no
  * timing shifts. A window never exceeds either clip's length, which also
  * keeps neighbouring windows apart.
  */
-export function transitionWindows(placed: PlacedClip[], s: TransitionSettings): TransitionWindow[] {
-  if (s.kind === "none" || !(s.duration > 0)) return [];
+export function transitionWindows(placed: PlacedClip[]): TransitionWindow[] {
   const out: TransitionWindow[] = [];
   for (let i = 1; i < placed.length; i++) {
-    const a = placed[i - 1], b = placed[i];
-    const d = Math.min(s.duration, a.end - a.start, b.end - b.start);
+    const a = placed[i - 1], b = placed[i], tr = b.transitionIn;
+    if (!tr || !(tr.duration > 0)) continue;
+    const d = Math.min(tr.duration, a.end - a.start, b.end - b.start);
     if (d < 0.2) continue;
-    out.push({ outgoing: a, incoming: b, cut: b.start, start: b.start - d / 2, end: b.start + d / 2 });
+    out.push({ kind: tr.kind, outgoing: a, incoming: b, cut: b.start, start: b.start - d / 2, end: b.start + d / 2 });
   }
   return out;
+}
+
+/** Set (or with null, remove) the transition on the cut leading into a clip. The first clip has no cut before it. */
+export function setTransition(clips: Clip[], incomingId: string, tr: Transition | null): Clip[] {
+  return clips.map((c, i) => {
+    if (c.id !== incomingId) return c;
+    const { transitionIn, ...rest } = c;
+    void transitionIn;
+    return tr && i > 0 ? { ...rest, transitionIn: { ...tr } } : rest;
+  });
+}
+
+/** Stamp one transition on every cut (null clears them all). */
+export function applyTransitionToAll(clips: Clip[], tr: Transition | null): Clip[] {
+  return clips.map((c, i) => {
+    const { transitionIn, ...rest } = c;
+    void transitionIn;
+    return tr && i > 0 ? { ...rest, transitionIn: { ...tr } } : rest;
+  });
+}
+
+/**
+ * Add a transition at a timeline instant: on the cut there if one is within
+ * a frame or so, otherwise by splitting the clip under the playhead first.
+ * Returns null when there is nothing to cut (too close to the ends).
+ */
+export function addTransitionAt(clips: Clip[], t: number, tr: Transition, snap = 0.05): { clips: Clip[]; incomingId: string } | null {
+  const placed = placeClips(clips);
+  const atCut = placed.find((c, i) => i > 0 && Math.abs(c.start - t) <= snap);
+  if (atCut) return { clips: setTransition(clips, atCut.id, tr), incomingId: atCut.id };
+  const under = placed.find((c) => t > c.start && t < c.end);
+  if (!under || t - under.start < 0.2 || under.end - t < 0.2) return null;
+  const split = splitClip(clips, under.id, t);
+  const second = split[split.findIndex((c) => c.id === under.id) + 1];
+  if (!second || second.media !== under.media) return null;
+  return { clips: setTransition(split, second.id, tr), incomingId: second.id };
 }
 
 /** The transition in progress at a timeline instant, with 0 → 1 progress across its window. */
@@ -257,7 +299,18 @@ export interface Project {
   proxies: Record<string, { ready: boolean; file?: string }>;
 }
 
-export const DEFAULT_EXPORT: ExportSettings = { codec: "hevc", bitrateMbps: 100, preset: "balanced", audioBitrateKbps: 256, resolution: "source", smartCopy: true };
+export const DEFAULT_EXPORT: ExportSettings = { codec: "hevc", bitrateMbps: 100, preset: "balanced", audioBitrateKbps: 256, resolution: "source", smartCopy: true, range: null };
+
+/** The part of the timeline an export covers: the chosen range clamped to the timeline, or null for all of it (also when the range is empty or backwards). */
+export function exportRange(p: Project): { from: number; to: number } | null {
+  const r = p.export.range;
+  if (!r) return null;
+  const total = timelineDuration(p);
+  const from = Math.max(0, Math.min(total, r.from)), to = Math.max(0, Math.min(total, r.to));
+  if (!(to - from > 0.05)) return null;
+  if (from <= 0 && to >= total) return null;
+  return { from, to };
+}
 
 export const newId = () => Math.random().toString(36).slice(2, 10);
 
@@ -302,7 +355,9 @@ export function splitClip(clips: Clip[], clipId: string, t: number): Clip[] {
   if (!p || t <= p.start + 0.01 || t >= p.end - 0.01) return clips;
   const cut = p.in + (t - p.start);
   const a: Clip = { ...p, out: cut, id: p.id };
+  // The new second half follows its sibling with a plain cut; it never inherits the transition leading into the first half.
   const b: Clip = { ...p, in: cut, id: newId() };
+  delete b.transitionIn;
   const strip = (c: PlacedClip): Clip => { const { start, end, index, ...rest } = c; void start; void end; void index; return rest; };
   return clips.flatMap((c) => (c.id === clipId ? [strip({ ...a, start: 0, end: 0, index: 0 }), strip({ ...b, start: 0, end: 0, index: 0 })] : [c]));
 }
@@ -316,7 +371,11 @@ export function removeRange(clips: Clip[], from: number, to: number): Clip[] {
     if (c.end <= from || c.start >= to) out.push(strip(c));
     else {
       if (c.start < from) out.push({ ...strip(c), out: c.in + (from - c.start) });
-      if (c.end > to) out.push({ ...strip(c), id: c.start < from ? newId() : c.id, in: c.in + (to - c.start) });
+      if (c.end > to) {
+        const tail: Clip = { ...strip(c), id: c.start < from ? newId() : c.id, in: c.in + (to - c.start) };
+        if (c.start < from) delete tail.transitionIn;
+        out.push(tail);
+      }
     }
   }
   return out;
@@ -482,7 +541,7 @@ const isNeutralTransform = (t: Transform) => t.rotate === 0 && t.straighten === 
 export function planExport(p: Project): ExportSpan[] {
   const spans: ExportSpan[] = [];
   const placed = placeClips(p.clips);
-  const windows = transitionWindows(placed, p.transition);
+  const windows = transitionWindows(placed);
   const sameCodec = (m: MediaRef | undefined) => !!m?.codec && m.codec.startsWith(p.export.codec);
   for (const c of placed) {
     const reasons: string[] = [];
@@ -511,7 +570,14 @@ export function planExport(p: Project): ExportSpan[] {
     }
     if (cursor < c.end) spans.push({ kind: "copy", clipId: c.id, sourceIn: c.in + (cursor - c.start), sourceOut: c.out, start: cursor, end: c.end, reasons: [] });
   }
-  return spans;
+  // A partial export keeps only what falls inside the range, trimming spans at its edges.
+  const range = exportRange(p);
+  if (!range) return spans;
+  return spans.flatMap((s) => {
+    const s0 = Math.max(s.start, range.from), e0 = Math.min(s.end, range.to);
+    if (e0 - s0 <= 1e-6) return [];
+    return [{ ...s, sourceIn: s.sourceIn + (s0 - s.start), sourceOut: s.sourceOut - (s.end - e0), start: s0, end: e0 }];
+  });
 }
 
 export interface ExportEstimate {
@@ -544,7 +610,12 @@ export function deserialize(json: string): Project | null {
   try {
     const p = JSON.parse(json) as Project;
     if (p?.version !== 1 || !Array.isArray(p.clips) || !p.media) return null;
-    return { ...newProject(), ...p, export: { ...DEFAULT_EXPORT, ...p.export }, preview: { ...DEFAULT_PREVIEW, ...(p.preview ?? (Object.values(p.proxies ?? {}).some((x) => x?.ready) ? { proxyHeight: 1080 } : {})) }, transition: { ...DEFAULT_TRANSITION, ...(p.transition ?? {}) }, titles: (p.titles ?? []).map((t) => normalizeTitle(t)) };
+    // Until 1.12.0 one transition setting applied to every cut; carry it onto the cuts it covered.
+    const legacy = (p.transition ?? {}) as { kind?: string; duration?: number };
+    const known = TRANSITIONS.some((t) => t.kind === legacy.kind);
+    const transition: Transition = { kind: known ? (legacy.kind as TransitionKind) : DEFAULT_TRANSITION.kind, duration: legacy.duration ?? DEFAULT_TRANSITION.duration };
+    const clips = known && !p.clips.some((c) => c.transitionIn) ? applyTransitionToAll(p.clips, transition) : p.clips;
+    return { ...newProject(), ...p, clips, export: { ...DEFAULT_EXPORT, ...p.export }, preview: { ...DEFAULT_PREVIEW, ...(p.preview ?? (Object.values(p.proxies ?? {}).some((x) => x?.ready) ? { proxyHeight: 1080 } : {})) }, transition, titles: (p.titles ?? []).map((t) => normalizeTitle(t)) };
   } catch {
     return null;
   }
