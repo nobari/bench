@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, Clapperboard, Crop, Download, FolderOpen, Loader, Music, Pause, Play, Save, Scissors, SlidersHorizontal, Trash2, Type, Upload, Volume2 } from "lucide-react";
+import { AlertTriangle, ChevronRight, Clapperboard, Crop, Download, FolderOpen, Loader, Music, Pause, Play, Save, Scissors, SlidersHorizontal, Trash2, Type, Upload, Volume2 } from "lucide-react";
 import {
   DEFAULT_EXPORT,
   NEUTRAL_GRADE,
@@ -36,6 +36,7 @@ import {
   type ProxyHeight,
   type Title,
   type TitleFont,
+  type TitlePosition,
 } from "@/lib/tools/video/project";
 import { Grader, buildProxy, drawOverlays, encoderSupport, exportProject, probe } from "@/lib/tools/video/engine";
 import { ProjectStore, hasFileSystemAccess } from "@/lib/tools/video/store";
@@ -47,6 +48,8 @@ const GHOST = "inline-flex h-8 items-center gap-1.5 rounded-[var(--radius-sm)] b
 const PRIMARY = "inline-flex h-9 items-center gap-2 rounded-[var(--radius-sm)] bg-accent px-3.5 text-sm font-medium text-on-accent hover:bg-[var(--color-accent-hover)] disabled:opacity-40";
 const RANGE = "h-1.5 w-full cursor-pointer appearance-none rounded-full bg-raised accent-[var(--accent)]";
 const LANE_COLORS = ["#8cc63f", "#5ab3d6", "#d9a400"];
+const POSITION_NAMES: Record<TitlePosition, string> = { tl: "Top left", tc: "Top centre", tr: "Top right", ml: "Middle left", mc: "Centre", mr: "Middle right", bl: "Bottom left", bc: "Bottom centre", br: "Bottom right" };
+const KIND_LABELS: Record<Title["kind"], string> = { intro: "Intro", title: "Title", lowerThird: "Lower third" };
 const DEFAULT_PREVIEW_HEIGHT: ProxyHeight = 1080;
 const toHex = (c: string) => (/^#[0-9a-fA-F]{6}$/.test(c) ? c : "#ffffff");
 type Tab = "trim" | "transform" | "colour" | "audio" | "titles" | "export";
@@ -88,6 +91,7 @@ export function VideoEditorWidget() {
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const [selectedMusic, setSelectedMusic] = useState<string | null>(null);
+  const [selectedTitle, setSelectedTitle] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>("trim");
   const [playhead, setPlayhead] = useState(0);
   const [playing, setPlaying] = useState(false);
@@ -466,8 +470,23 @@ export function VideoEditorWidget() {
 
   const update = (id: string, patch: Partial<Clip>) => setProject((p) => ({ ...p, clips: p.clips.map((c) => (c.id === id ? { ...c, ...patch } : c)) }));
   const updateMusic = (id: string, patch: Partial<MusicTrack>) => setProject((p) => ({ ...p, music: p.music.map((m) => (m.id === id ? { ...m, ...patch } : m)) }));
-  const addTitle = (kind: Title["kind"]) =>
-    setProject((p) => ({ ...p, titles: [...p.titles, newTitle(kind, kind === "intro" ? 0 : playhead, kind === "intro" ? p.name : kind === "lowerThird" ? "Location" : "Title", kind === "intro" ? new Date().toLocaleDateString() : "")] }));
+  // Opening a title also parks the playhead where it is fully faded in, so the preview shows what you are editing.
+  const focusTitle = (t: Title | null) => {
+    setSelectedTitle(t?.id ?? null);
+    if (t) {
+      setPlayhead(Math.min(duration, t.start + Math.min(t.fade, t.duration / 2)));
+      setSeekToken((x) => x + 1);
+    }
+  };
+  const addTitle = (kind: Title["kind"]) => {
+    const t = newTitle(kind, kind === "intro" ? 0 : playhead, kind === "intro" ? project.name : kind === "lowerThird" ? "Location" : "Title", kind === "intro" ? new Date().toLocaleDateString() : "");
+    setProject((p) => ({ ...p, titles: [...p.titles, t] }));
+    focusTitle(t);
+  };
+  const removeTitle = (id: string) => {
+    setProject((p) => ({ ...p, titles: p.titles.filter((x) => x.id !== id) }));
+    setSelectedTitle((s) => (s === id ? null : s));
+  };
   const patchTitle = (id: string, patch: Partial<Title>) => setProject((p) => ({ ...p, titles: p.titles.map((x) => (x.id === id ? { ...x, ...patch } : x)) }));
 
   // Exposed for automated tests, which cannot drive the folder picker. Re-registered whenever the handlers change.
@@ -625,7 +644,9 @@ export function VideoEditorWidget() {
           </div>
         </div>
 
-        <div className="panel flex min-w-0 flex-col">
+        {/* The inspector never grows past the preview: it scrolls inside, so the timeline stays within reach. */}
+        <div className="relative min-h-[360px]">
+          <div className="panel flex min-w-0 flex-col max-lg:max-h-[60vh] lg:absolute lg:inset-0">
           <div className="flex flex-wrap gap-1 border-b border-edge px-2 py-1.5">
             {TABS.map(([id, label, Icon]) => (
               <button key={id} type="button" onClick={() => setTab(id)} className={cn("flex h-7 items-center gap-1 rounded-[var(--radius-sm)] px-2 text-[12.5px]", tab === id ? "bg-accent font-medium text-on-accent" : "text-muted hover:bg-raised hover:text-ink")}>
@@ -633,7 +654,7 @@ export function VideoEditorWidget() {
               </button>
             ))}
           </div>
-          <div className="min-h-[260px] space-y-3 p-3 text-[13px]">
+          <div className="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain p-3 text-[13px]">
             {tab === "trim" && (
               <>
                 <p className="text-muted">{current ? `${project.media[current.media]?.name} · ${fmtTime(current.in)} → ${fmtTime(current.out)} (${fmtTime(current.out - current.in)})` : "Select a clip on the timeline, or move the playhead and use the buttons."}</p>
@@ -817,7 +838,7 @@ export function VideoEditorWidget() {
             )}
             {tab === "titles" && (
               <>
-                <div className="flex flex-wrap gap-1.5">
+                <div className="sticky top-0 z-10 -mx-3 -mt-3 flex flex-wrap gap-1.5 bg-surface px-3 pt-3 pb-2">
                   <button type="button" onClick={() => addTitle("intro")} className={GHOST}>
                     + Intro card
                   </button>
@@ -832,16 +853,29 @@ export function VideoEditorWidget() {
                     {logo ? "Replace logo" : "+ Logo watermark"}
                   </button>
                 </div>
-                <p className="text-[12px] text-faint">Titles that overlap in time are all drawn — give them different positions.</p>
-                {project.titles.map((t) => (
-                  <div key={t.id} className="space-y-1.5 rounded-[var(--radius-sm)] border border-edge p-2">
-                    <div className="flex items-center gap-2">
-                      <span className="text-[12px] capitalize text-faint">{t.kind === "lowerThird" ? "lower third" : t.kind}</span>
-                      <input value={t.text} onChange={(e) => setProject((p) => ({ ...p, titles: p.titles.map((x) => (x.id === t.id ? { ...x, text: e.target.value } : x)) }))} className={INPUT} aria-label="Title text" />
-                      <button type="button" onClick={() => setProject((p) => ({ ...p, titles: p.titles.filter((x) => x.id !== t.id) }))} className="text-faint hover:text-danger">
+                {project.titles.length > 0 && <p className="text-[12px] text-faint">In time order. Open one to edit it; titles that overlap in time are all drawn, so give them different positions.</p>}
+                {[...project.titles]
+                  .sort((a, b) => a.start - b.start)
+                  .map((t) => {
+                    const open = selectedTitle === t.id;
+                    return (
+                  <div key={t.id} className={cn("rounded-[var(--radius-sm)] border", open ? "border-accent" : "border-edge")}>
+                    <div className="flex items-center gap-1.5 pr-1.5">
+                      <button type="button" onClick={() => focusTitle(open ? null : t)} aria-expanded={open} className="flex h-8 min-w-0 flex-1 items-center gap-2 px-2 text-left text-[12.5px] hover:bg-raised">
+                        <ChevronRight size={13} className={cn("shrink-0 text-faint transition-transform", open && "rotate-90")} />
+                        <span className="shrink-0 text-[11px] uppercase tracking-wide text-faint">{KIND_LABELS[t.kind]}</span>
+                        <span className="min-w-0 flex-1 truncate text-ink">{t.text || "Untitled"}</span>
+                        <span className="shrink-0 font-mono text-[11px] text-faint tabular">
+                          {fmtTime(t.start)}–{fmtTime(t.start + t.duration)} · {POSITION_NAMES[t.position]}
+                        </span>
+                      </button>
+                      <button type="button" onClick={() => removeTitle(t.id)} className="text-faint hover:text-danger" aria-label="Delete title">
                         <Trash2 size={13} />
                       </button>
                     </div>
+                    {open && (
+                    <div className="space-y-1.5 border-t border-edge p-2">
+                    <input value={t.text} onChange={(e) => setProject((p) => ({ ...p, titles: p.titles.map((x) => (x.id === t.id ? { ...x, text: e.target.value } : x)) }))} className={INPUT} aria-label="Title text" />
                     <input value={t.subtitle ?? ""} onChange={(e) => setProject((p) => ({ ...p, titles: p.titles.map((x) => (x.id === t.id ? { ...x, subtitle: e.target.value } : x)) }))} placeholder="Subtitle (optional)" className={INPUT} aria-label="Subtitle" />
                     <div className="grid grid-cols-3 gap-2 text-[12px] text-muted">
                       <label>
@@ -860,7 +894,7 @@ export function VideoEditorWidget() {
                     <div className="flex flex-wrap items-center gap-x-3 gap-y-2 text-[12px] text-muted">
                       <span className="grid grid-cols-3 gap-0.5" title="Position in the frame" role="group" aria-label="Position">
                         {TITLE_POSITIONS.map((pos) => (
-                          <button key={pos} type="button" onClick={() => patchTitle(t.id, { position: pos })} aria-label={`Position ${pos}`} aria-pressed={t.position === pos} className={cn("h-4 w-4 rounded-[2px] border", t.position === pos ? "border-accent bg-accent" : "border-edge bg-base hover:border-accent")} />
+                          <button key={pos} type="button" onClick={() => patchTitle(t.id, { position: pos })} aria-label={POSITION_NAMES[pos]} title={POSITION_NAMES[pos]} aria-pressed={t.position === pos} className={cn("h-4 w-4 rounded-[2px] border", t.position === pos ? "border-accent bg-accent" : "border-edge bg-base hover:border-accent")} />
                         ))}
                       </span>
                       <label className="flex items-center gap-1">
@@ -898,8 +932,11 @@ export function VideoEditorWidget() {
                         <span className="font-mono tabular">{Math.round(t.size * 100)}%</span>
                       </label>
                     </div>
+                    </div>
+                    )}
                   </div>
-                ))}
+                    );
+                  })}
                 {project.watermark.media && (
                   <div className="space-y-2 border-t border-edge pt-2">
                     <div className="flex flex-wrap items-center gap-1.5 text-muted">
@@ -986,6 +1023,7 @@ export function VideoEditorWidget() {
               </>
             )}
           </div>
+          </div>
         </div>
       </div>
 
@@ -1030,9 +1068,20 @@ export function VideoEditorWidget() {
             {/* title lane */}
             <div className="relative mt-1 h-5">
               {project.titles.map((t) => (
-                <div key={t.id} className="absolute top-0 h-full truncate rounded-[3px] bg-[#e5484d]/70 px-1 text-[10.5px] text-white" style={{ left: t.start * pxPerSec, width: Math.max(4, t.duration * pxPerSec) }} title={t.text}>
+                <button
+                  key={t.id}
+                  type="button"
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onClick={() => {
+                    setTab("titles");
+                    focusTitle(t);
+                  }}
+                  className={cn("absolute top-0 h-full truncate rounded-[3px] bg-[#e5484d]/70 px-1 text-left text-[10.5px] text-white", selectedTitle === t.id && "ring-2 ring-white/90")}
+                  style={{ left: t.start * pxPerSec, width: Math.max(4, t.duration * pxPerSec) }}
+                  title={t.text}
+                >
                   {t.text}
-                </div>
+                </button>
               ))}
             </div>
             {/* music lanes */}
