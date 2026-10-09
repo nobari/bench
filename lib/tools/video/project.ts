@@ -93,6 +93,54 @@ export interface Title {
   duration: number;
   /** For the intro: fade in from black over this many seconds. */
   fade: number;
+  /** Where the text sits: top/middle/bottom × left/centre/right. */
+  position: TitlePosition;
+  /** CSS colours; an empty background means no backing box. */
+  color: string;
+  background: string;
+  font: TitleFont;
+  /** Text height as a fraction of the frame height. */
+  size: number;
+}
+
+export type TitlePosition = "tl" | "tc" | "tr" | "ml" | "mc" | "mr" | "bl" | "bc" | "br";
+export const TITLE_POSITIONS: TitlePosition[] = ["tl", "tc", "tr", "ml", "mc", "mr", "bl", "bc", "br"];
+export const TITLE_FONTS = {
+  sans: "ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif",
+  serif: "ui-serif, Georgia, 'Times New Roman', serif",
+  mono: "ui-monospace, SFMono-Regular, Menlo, monospace",
+  rounded: "ui-rounded, 'Avenir Next Rounded', 'Nunito', system-ui, sans-serif",
+} as const;
+export type TitleFont = keyof typeof TITLE_FONTS;
+
+const TITLE_DEFAULTS: Record<Title["kind"], Pick<Title, "position" | "color" | "background" | "font" | "size" | "duration">> = {
+  intro: { position: "mc", color: "#ffffff", background: "", font: "sans", size: 0.07, duration: 4 },
+  title: { position: "mc", color: "#ffffff", background: "", font: "sans", size: 0.06, duration: 5 },
+  lowerThird: { position: "bl", color: "#ffffff", background: "rgba(0,0,0,0.55)", font: "sans", size: 0.04, duration: 5 },
+};
+
+export function newTitle(kind: Title["kind"], start: number, text: string, subtitle = ""): Title {
+  const d = TITLE_DEFAULTS[kind];
+  return { id: newId(), kind, text, subtitle, start, duration: d.duration, fade: 1, position: d.position, color: d.color, background: d.background, font: d.font, size: d.size };
+}
+
+/** Fill in the fields older project files did not have. */
+export function normalizeTitle(t: Partial<Title> & { kind: Title["kind"] }): Title {
+  const d = TITLE_DEFAULTS[t.kind] ?? TITLE_DEFAULTS.title;
+  return {
+    id: t.id ?? newId(),
+    kind: t.kind,
+    text: t.text ?? "",
+    subtitle: t.subtitle ?? "",
+    start: t.start ?? 0,
+    duration: t.duration ?? d.duration,
+    fade: t.fade ?? 1,
+    position: TITLE_POSITIONS.includes(t.position as TitlePosition) ? (t.position as TitlePosition) : d.position,
+    color: t.color ?? d.color,
+    background: t.background ?? d.background,
+    font: t.font && t.font in TITLE_FONTS ? t.font : d.font,
+    size: t.size ?? d.size,
+  };
 }
 
 export interface Watermark {
@@ -117,6 +165,13 @@ export interface ExportSettings {
   smartCopy: boolean;
 }
 
+export type ProxyHeight = 1080 | 720 | 360 | 0;
+export interface PreviewSettings {
+  /** Proxy size for preview; 0 previews the full-resolution source. */
+  proxyHeight: ProxyHeight;
+}
+export const DEFAULT_PREVIEW: PreviewSettings = { proxyHeight: 1080 };
+
 export interface Project {
   version: 1;
   id: string;
@@ -129,7 +184,8 @@ export interface Project {
   titles: Title[];
   watermark: Watermark;
   export: ExportSettings;
-  /** Proxy state per media id: whether a 1080p proxy exists. */
+  preview: PreviewSettings;
+  /** Proxy state per media id: whether a proxy exists (and which file). */
   proxies: Record<string, { ready: boolean; file?: string }>;
 }
 
@@ -139,7 +195,7 @@ export const newId = () => Math.random().toString(36).slice(2, 10);
 
 export function newProject(name = "Untitled drive"): Project {
   const now = Date.now();
-  return { version: 1, id: newId(), name, createdAt: now, updatedAt: now, media: {}, clips: [], music: [], titles: [], watermark: { media: null, corner: "br", size: 0.08, opacity: 0.85, margin: 0.03 }, export: { ...DEFAULT_EXPORT }, proxies: {} };
+  return { version: 1, id: newId(), name, createdAt: now, updatedAt: now, media: {}, clips: [], music: [], titles: [], watermark: { media: null, corner: "br", size: 0.08, opacity: 0.85, margin: 0.03 }, export: { ...DEFAULT_EXPORT }, preview: { ...DEFAULT_PREVIEW }, proxies: {} };
 }
 
 /* ---------------------------------------------------------- timeline */
@@ -198,9 +254,39 @@ export function removeRange(clips: Clip[], from: number, to: number): Clip[] {
   return out;
 }
 
-/** Consecutive recordings from the same camera: order by name (DJI numbers them) and butt them together. */
+/**
+ * Sort key for a camera file: the date-time embedded in its name if any
+ * (DJI_20240915103012_0001_D, PXL_20240915_103012, 2024-09-15 10.30.12),
+ * then its sequence number, then GoPro chapter (GX01nnnn, GX02nnnn…).
+ */
+export function recordingKey(name: string): { time: number; seq: number; chapter: number } {
+  const base = name.replace(/\.[^.]+$/, "");
+  const dt = base.match(/(20\d{2})[-_.]?(\d{2})[-_.]?(\d{2})[-_ T.]?(\d{2})[-_.:]?(\d{2})[-_.:]?(\d{2})?/);
+  const month = dt ? Number(dt[2]) : 0, day = dt ? Number(dt[3]) : 0, hour = dt ? Number(dt[4]) : 0, minute = dt ? Number(dt[5]) : 0;
+  const valid = !!dt && month >= 1 && month <= 12 && day >= 1 && day <= 31 && hour <= 23 && minute <= 59;
+  const time = valid ? Date.UTC(Number(dt![1]), month - 1, day, hour, minute, Number(dt![6] ?? 0)) : 0;
+  const gp = base.match(/^G[HX](\d{2})(\d{4})$/i);
+  if (gp) return { time, seq: Number(gp[2]), chapter: Number(gp[1]) };
+  const rest = valid ? base.slice(dt!.index! + dt![0].length) : base;
+  const seqMatch = rest.match(/(\d{2,})/) ?? base.match(/(\d+)(?!.*\d)/);
+  return { time, seq: seqMatch ? Number(seqMatch[1]) : 0, chapter: 0 };
+}
+
+/** Consecutive recordings from the same camera in shooting order, ready to butt together. */
 export function orderRecordings(media: MediaRef[]): MediaRef[] {
-  return [...media].sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" }));
+  return [...media].sort((a, b) => {
+    const ka = recordingKey(a.name), kb = recordingKey(b.name);
+    return ka.time - kb.time || ka.seq - kb.seq || ka.chapter - kb.chapter || a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" });
+  });
+}
+
+/** Swap an item with its neighbour — reordering clips changes playback order. */
+export function moveItem<T extends { id: string }>(list: T[], id: string, dir: -1 | 1): T[] {
+  const i = list.findIndex((x) => x.id === id), j = i + dir;
+  if (i < 0 || j < 0 || j >= list.length) return list;
+  const out = [...list];
+  [out[i], out[j]] = [out[j], out[i]];
+  return out;
 }
 
 /* --------------------------------------------------------------- audio */
@@ -228,14 +314,19 @@ export const musicLength = (m: MusicTrack) => Math.max(0, m.out - m.in);
  * Gain (linear) for a music track at a timeline instant: base gain, keyframes,
  * fade in/out, and an equal-power crossfade where two tracks on the same lane overlap.
  */
-export function musicGainAt(track: MusicTrack, all: MusicTrack[], timelineT: number): number {
+export function musicGainAt(track: MusicTrack, all: MusicTrack[], timelineT: number, timelineEnd = Infinity): number {
   if (track.muted) return 0;
   const local = timelineT - track.start;
   const len = musicLength(track);
-  if (local < 0 || local > len) return 0;
+  // A track that runs past the end of the video is cut there; its fade-out moves to meet the cut (1 s if it had none).
+  const end = Math.min(track.start + len, timelineEnd);
+  const cut = end < track.start + len;
+  const fadeOut = cut && track.fadeOut === 0 ? 1 : track.fadeOut;
+  if (local < 0 || timelineT > end) return 0;
   let g = dbToGain(keyframeDb(track.keyframes, local, track.gainDb));
   if (track.fadeIn > 0 && local < track.fadeIn) g *= Math.sin(((local / track.fadeIn) * Math.PI) / 2);
-  if (track.fadeOut > 0 && local > len - track.fadeOut) g *= Math.sin((((len - local) / track.fadeOut) * Math.PI) / 2);
+  const tail = end - timelineT;
+  if (fadeOut > 0 && tail < fadeOut) g *= Math.sin(((tail / fadeOut) * Math.PI) / 2);
   // Equal-power crossfade with the next/previous track on the same lane.
   for (const o of all) {
     if (o.id === track.id || o.lane !== track.lane || o.muted) continue;
@@ -248,6 +339,29 @@ export function musicGainAt(track: MusicTrack, all: MusicTrack[], timelineT: num
     g *= tStart <= oStart ? Math.cos((f * Math.PI) / 2) : Math.sin((f * Math.PI) / 2);
   }
   return g;
+}
+
+/** Where a track actually stops: its own end, or the end of the video if that comes first. */
+export const effectiveMusicEnd = (track: MusicTrack, timelineEnd: number) => Math.min(track.start + musicLength(track), timelineEnd);
+
+/** Move a music track earlier or later on its lane; the lane is re-laid keeping each slot's overlap. */
+export function reorderMusic(music: MusicTrack[], id: string, dir: -1 | 1): MusicTrack[] {
+  const track = music.find((m) => m.id === id);
+  if (!track) return music;
+  const lane = music.filter((m) => m.lane === track.lane).sort((a, b) => a.start - b.start);
+  const overlaps = lane.map((m, i) => (i === 0 ? 0 : lane[i - 1].start + musicLength(lane[i - 1]) - m.start));
+  const i = lane.findIndex((m) => m.id === id), j = i + dir;
+  if (j < 0 || j >= lane.length) return music;
+  const order = [...lane];
+  [order[i], order[j]] = [order[j], order[i]];
+  let cursor = lane[0].start;
+  const placed = new Map<string, number>();
+  order.forEach((m, k) => {
+    const start = Math.max(0, k === 0 ? cursor : cursor - overlaps[k]);
+    placed.set(m.id, start);
+    cursor = start + musicLength(m);
+  });
+  return music.map((m) => (placed.has(m.id) ? { ...m, start: placed.get(m.id)! } : m));
 }
 
 /** Overlaps on the same lane become crossfades; report them so the UI can show the duration. */
@@ -357,7 +471,7 @@ export function deserialize(json: string): Project | null {
   try {
     const p = JSON.parse(json) as Project;
     if (p?.version !== 1 || !Array.isArray(p.clips) || !p.media) return null;
-    return { ...newProject(), ...p, export: { ...DEFAULT_EXPORT, ...p.export } };
+    return { ...newProject(), ...p, export: { ...DEFAULT_EXPORT, ...p.export }, preview: { ...DEFAULT_PREVIEW, ...(p.preview ?? {}) }, titles: (p.titles ?? []).map((t) => normalizeTitle(t)) };
   } catch {
     return null;
   }

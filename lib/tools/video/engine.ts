@@ -24,7 +24,7 @@ import {
   type VideoCodec,
 } from "mediabunny";
 import { GRADE_FRAGMENT_SHADER, buildDlogLut, lutTexture, type Lut3D } from "./lut";
-import { dbToGain, musicGainAt, placeClips, planExport, type Clip, type ExportSpan, type Grade, type MediaRef, type Project, type Title, type Transform } from "./project";
+import { TITLE_FONTS, dbToGain, musicGainAt, placeClips, planExport, type Clip, type ExportSpan, type Grade, type MediaRef, type Project, type Title, type Transform } from "./project";
 
 export interface Probe {
   duration: number;
@@ -50,37 +50,66 @@ export async function probe(file: File): Promise<Probe> {
 
 /* ------------------------------------------------------------- proxies */
 
-export const PROXY_HEIGHT = 1080;
-
-/** A 1080p H.264 proxy of a source file, written to `writable` as it encodes. Returns the proxy's frame rate. */
-export async function buildProxy(file: File, writable: WritableStream<StreamTargetChunk>, onProgress?: (p: number) => void, signal?: AbortSignal): Promise<void> {
+/**
+ * An H.264 proxy of a source file at the chosen height, with the clip's own
+ * sound as AAC, written to `writable` as it encodes. The preview plays this
+ * instead of the 8K original; export never touches it.
+ */
+export async function buildProxy(file: File, writable: WritableStream<StreamTargetChunk>, height: number, onProgress?: (p: number) => void, signal?: AbortSignal): Promise<void> {
   const input = new Input({ source: new BlobSource(file), formats: ALL_FORMATS });
   const track = await input.getPrimaryVideoTrack();
   if (!track) throw new Error("No video track.");
-  const scale = Math.min(1, PROXY_HEIGHT / track.displayHeight);
+  const scale = Math.min(1, height / track.displayHeight);
   const w = Math.round((track.displayWidth * scale) / 2) * 2, h = Math.round((track.displayHeight * scale) / 2) * 2;
   const duration = await input.computeDuration();
   const output = new Output({ format: new Mp4OutputFormat({ fastStart: "in-memory" }), target: new StreamTarget(writable, { chunked: true }) });
   const canvas = new OffscreenCanvas(w, h);
   const ctx = canvas.getContext("2d")!;
-  const source = new CanvasSource(canvas, { codec: "avc", bitrate: 8e6, keyFrameInterval: 1, latencyMode: "realtime" });
+  // Bitrate follows the picture size: ~4 Mbit/s at 1080p, ~0.5 at 360p. Realtime mode keeps the encoder responsive.
+  const source = new CanvasSource(canvas, { codec: "avc", bitrate: Math.round(h * h * 3.6), keyFrameInterval: 1, latencyMode: "realtime" });
   output.addVideoTrack(source, { frameRate: 30 });
+  const audioTrack = await input.getPrimaryAudioTrack();
+  const audioSource = audioTrack && (await audioTrack.canDecode()) ? new AudioSampleSource({ codec: "aac", bitrate: 96000 }) : null;
+  if (audioSource) output.addAudioTrack(audioSource);
   await output.start();
-  const sink = new VideoSampleSink(track);
-  // Proxies run at a fixed 30 fps and skip frames beyond it: scrubbing needs responsiveness, not every frame.
-  let last = -1;
-  for await (const sample of sink.samples()) {
-    if (signal?.aborted) throw new DOMException("Cancelled", "AbortError");
-    const t = sample.timestamp;
-    if (t - last >= 1 / 30 - 1e-4) {
-      ctx.drawImage(sample.toCanvasImageSource(), 0, 0, w, h);
-      await source.add(t, 1 / 30);
-      last = t;
-      onProgress?.(Math.min(1, t / Math.max(1e-6, duration)));
+  const cancelled = () => signal?.aborted ?? false;
+  const video = (async () => {
+    const sink = new VideoSampleSink(track);
+    // Proxies run at a fixed 30 fps and skip frames beyond it: scrubbing needs responsiveness, not every frame.
+    let last = -1;
+    for await (const sample of sink.samples()) {
+      if (cancelled()) {
+        sample.close();
+        break;
+      }
+      const t = sample.timestamp;
+      if (t - last >= 1 / 30 - 1e-4) {
+        ctx.drawImage(sample.toCanvasImageSource(), 0, 0, w, h);
+        await source.add(t, 1 / 30);
+        last = t;
+        onProgress?.(Math.min(1, t / Math.max(1e-6, duration)));
+      }
+      sample.close();
     }
-    sample.close();
+    source.close();
+  })();
+  const audio = (async () => {
+    if (!audioSource || !audioTrack) return;
+    for await (const sample of new AudioSampleSink(audioTrack).samples()) {
+      if (cancelled()) {
+        sample.close();
+        break;
+      }
+      await audioSource.add(sample);
+      sample.close();
+    }
+    audioSource.close();
+  })();
+  await Promise.all([video, audio]);
+  if (cancelled()) {
+    await output.cancel();
+    throw new DOMException("Cancelled", "AbortError");
   }
-  source.close();
   await output.finalize();
 }
 
@@ -200,6 +229,44 @@ void main() { vUv = aUv; vec3 p = uTransform * vec3(aPos, 1.0); gl_Position = ve
 
 /* ------------------------------------------------------------- overlays */
 
+/** One title (text + optional subtitle) at its anchor, with its colour, font, size and optional backing box. */
+function drawTitleBlock(ctx: OffscreenCanvasRenderingContext2D, w: number, h: number, title: Title) {
+  const font = TITLE_FONTS[title.font] ?? TITLE_FONTS.sans;
+  const px = Math.max(8, Math.round(h * title.size));
+  const pad = w * 0.04;
+  const lines = [{ text: title.text, size: px, weight: 600, alpha: 1 }];
+  if (title.subtitle) lines.push({ text: title.subtitle, size: Math.round(px * 0.5), weight: 400, alpha: 0.85 });
+  const gap = px * 0.35;
+  const widths = lines.map((l) => {
+    ctx.font = `${l.weight} ${l.size}px ${font}`;
+    return ctx.measureText(l.text).width;
+  });
+  const blockW = Math.max(...widths), blockH = lines.reduce((a, l) => a + l.size, 0) + gap * (lines.length - 1);
+  const row = title.position[0], col = title.position[1];
+  const x = col === "l" ? pad : col === "r" ? w - pad - blockW : (w - blockW) / 2;
+  const y = row === "t" ? pad : row === "b" ? h - pad - blockH : (h - blockH) / 2;
+  const base = ctx.globalAlpha;
+  if (title.background) {
+    const bp = px * 0.4;
+    ctx.fillStyle = title.background;
+    ctx.fillRect(x - bp, y - bp, blockW + bp * 2, blockH + bp * 2);
+  } else {
+    ctx.shadowColor = "rgba(0,0,0,0.6)";
+    ctx.shadowBlur = px * 0.15;
+  }
+  ctx.textBaseline = "top";
+  ctx.textAlign = col === "l" ? "left" : col === "r" ? "right" : "center";
+  const tx = col === "l" ? x : col === "r" ? x + blockW : x + blockW / 2;
+  let cy = y;
+  for (const l of lines) {
+    ctx.font = `${l.weight} ${l.size}px ${font}`;
+    ctx.fillStyle = title.color;
+    ctx.globalAlpha = base * l.alpha;
+    ctx.fillText(l.text, tx, cy);
+    cy += l.size + gap;
+  }
+}
+
 /** Titles, intro card and watermark drawn with 2D canvas on top of the graded frame. */
 export function drawOverlays(ctx: OffscreenCanvasRenderingContext2D, w: number, h: number, t: number, project: Project, logo: ImageBitmap | null) {
   for (const title of project.titles) {
@@ -209,46 +276,12 @@ export function drawOverlays(ctx: OffscreenCanvasRenderingContext2D, w: number, 
     const fadeOut = title.fade > 0 ? Math.min(1, (title.start + title.duration - t) / title.fade) : 1;
     const alpha = Math.min(fadeIn, fadeOut);
     ctx.save();
-    ctx.globalAlpha = alpha;
     if (title.kind === "intro") {
       ctx.fillStyle = "#000";
-      ctx.globalAlpha = 1;
       ctx.fillRect(0, 0, w, h);
-      ctx.globalAlpha = alpha;
-      ctx.fillStyle = "#fff";
-      ctx.textAlign = "center";
-      ctx.font = `600 ${Math.round(h * 0.07)}px ui-sans-serif, system-ui, sans-serif`;
-      ctx.fillText(title.text, w / 2, h / 2 - (title.subtitle ? h * 0.02 : 0));
-      if (title.subtitle) {
-        ctx.font = `400 ${Math.round(h * 0.035)}px ui-sans-serif, system-ui, sans-serif`;
-        ctx.fillStyle = "rgba(255,255,255,0.8)";
-        ctx.fillText(title.subtitle, w / 2, h / 2 + h * 0.06);
-      }
-    } else if (title.kind === "title") {
-      ctx.fillStyle = "#fff";
-      ctx.textAlign = "center";
-      ctx.shadowColor = "rgba(0,0,0,0.6)";
-      ctx.shadowBlur = h * 0.01;
-      ctx.font = `600 ${Math.round(h * 0.06)}px ui-sans-serif, system-ui, sans-serif`;
-      ctx.fillText(title.text, w / 2, h * 0.5);
-      if (title.subtitle) {
-        ctx.font = `400 ${Math.round(h * 0.03)}px ui-sans-serif, system-ui, sans-serif`;
-        ctx.fillText(title.subtitle, w / 2, h * 0.57);
-      }
-    } else {
-      const pad = w * 0.04, boxH = h * 0.11;
-      ctx.fillStyle = "rgba(0,0,0,0.55)";
-      ctx.fillRect(pad, h - pad - boxH, w * 0.4, boxH);
-      ctx.fillStyle = "#fff";
-      ctx.textAlign = "left";
-      ctx.font = `600 ${Math.round(h * 0.04)}px ui-sans-serif, system-ui, sans-serif`;
-      ctx.fillText(title.text, pad * 1.4, h - pad - boxH * 0.55);
-      if (title.subtitle) {
-        ctx.font = `400 ${Math.round(h * 0.025)}px ui-sans-serif, system-ui, sans-serif`;
-        ctx.fillStyle = "rgba(255,255,255,0.85)";
-        ctx.fillText(title.subtitle, pad * 1.4, h - pad - boxH * 0.2);
-      }
     }
+    ctx.globalAlpha = alpha;
+    drawTitleBlock(ctx, w, h, title);
     ctx.restore();
   }
   if (logo && project.watermark.media) {
@@ -358,7 +391,7 @@ export async function mixAudio(input: MixInput, from: number, to: number, onBloc
       if (m.muted || t + n / sampleRate < m.start || t > m.start + (m.out - m.in)) continue;
       const s = await pull(m.media, m.in + (t - m.start), n);
       for (let i = 0; i < n; i++) {
-        const g = musicGainAt(m, project.music, t + i / sampleRate);
+        const g = musicGainAt(m, project.music, t + i / sampleRate, to);
         mix[i * 2] += s[i * 2] * g;
         mix[i * 2 + 1] += s[i * 2 + 1] * g;
       }

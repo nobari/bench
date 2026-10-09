@@ -6,26 +6,36 @@ import {
   DEFAULT_EXPORT,
   NEUTRAL_GRADE,
   NEUTRAL_TRANSFORM,
+  TITLE_FONTS,
+  TITLE_POSITIONS,
   appendMusic,
   applyGradeTo,
   clipAt,
   crossfades,
+  dbToGain,
+  effectiveMusicEnd,
   estimateExport,
   fmtTime,
+  moveItem,
+  musicGainAt,
   musicLength,
   newId,
   newProject,
+  newTitle,
   orderRecordings,
   placeClips,
   planExport,
   removeRange,
+  reorderMusic,
   splitClip,
   timelineDuration,
   type Clip,
   type MediaRef,
   type MusicTrack,
   type Project,
+  type ProxyHeight,
   type Title,
+  type TitleFont,
 } from "@/lib/tools/video/project";
 import { Grader, buildProxy, drawOverlays, encoderSupport, exportProject, probe } from "@/lib/tools/video/engine";
 import { ProjectStore, hasFileSystemAccess } from "@/lib/tools/video/store";
@@ -37,6 +47,8 @@ const GHOST = "inline-flex h-8 items-center gap-1.5 rounded-[var(--radius-sm)] b
 const PRIMARY = "inline-flex h-9 items-center gap-2 rounded-[var(--radius-sm)] bg-accent px-3.5 text-sm font-medium text-on-accent hover:bg-[var(--color-accent-hover)] disabled:opacity-40";
 const RANGE = "h-1.5 w-full cursor-pointer appearance-none rounded-full bg-raised accent-[var(--accent)]";
 const LANE_COLORS = ["#8cc63f", "#5ab3d6", "#d9a400"];
+const DEFAULT_PREVIEW_HEIGHT: ProxyHeight = 1080;
+const toHex = (c: string) => (/^#[0-9a-fA-F]{6}$/.test(c) ? c : "#ffffff");
 type Tab = "trim" | "transform" | "colour" | "audio" | "titles" | "export";
 const TABS: [Tab, string, typeof Scissors][] = [
   ["trim", "Trim", Scissors],
@@ -94,6 +106,12 @@ export function VideoEditorWidget() {
   const timelineRef = useRef<HTMLDivElement>(null);
   const [history, setHistory] = useState<Project[]>([]);
   const [timelineWidth, setTimelineWidth] = useState(800);
+  const [seekToken, setSeekToken] = useState(0);
+  const audioCtxRef = useRef<AudioContext | null>(null);
+  const musicBuffers = useRef<Map<string, AudioBuffer>>(new Map());
+  const musicNodes = useRef<Map<string, { src: AudioBufferSourceNode; gain: GainNode }>>(new Map());
+  const playheadRef = useRef(0);
+  const previewRef = useRef(DEFAULT_PREVIEW_HEIGHT);
 
   const duration = timelineDuration(project);
   const placed = useMemo(() => placeClips(project.clips), [project.clips]);
@@ -132,15 +150,53 @@ export function VideoEditorWidget() {
     return () => ro.disconnect();
   }, []);
 
+  useEffect(() => {
+    playheadRef.current = playhead;
+  }, [playhead]);
+  useEffect(() => {
+    previewRef.current = project.preview.proxyHeight;
+  }, [project.preview.proxyHeight]);
+
+  // Music for the preview is decoded once into Web Audio buffers; export mixes from the files independently.
+  const decodeMusic = useCallback(async (mediaId: string, file: File) => {
+    if (musicBuffers.current.has(mediaId)) return;
+    const ctx = (audioCtxRef.current ??= new AudioContext());
+    try {
+      musicBuffers.current.set(mediaId, await ctx.decodeAudioData(await file.arrayBuffer()));
+    } catch {
+      /* undecodable in the browser: silent in the preview, still mixed on export */
+    }
+  }, []);
+  const primeMusic = useCallback(
+    async (p: Project) => {
+      for (const m of p.music) {
+        const f = await store.getFile(m.media);
+        if (f) await decodeMusic(m.media, f);
+      }
+    },
+    [store, decodeMusic],
+  );
+  const togglePlay = useCallback(() => {
+    void audioCtxRef.current?.resume();
+    setPlaying((p) => !p);
+  }, []);
+
   const loadProxies = useCallback(
     async (p: Project) => {
+      // Proxies from another size setting (or the silent ones older versions made) are stale: preview the originals until they are rebuilt.
+      const stale: string[] = [];
       for (const [id, px] of Object.entries(p.proxies)) {
         if (!px.ready || !px.file || proxyUrls.current.has(id)) continue;
+        if (!px.file.includes(`.proxy${p.preview.proxyHeight}.`)) {
+          stale.push(id);
+          continue;
+        }
         const f = await store.proxyFile(px.file);
         if (f) proxyUrls.current.set(id, URL.createObjectURL(f));
       }
+      if (stale.length) setProject((q) => ({ ...q, proxies: Object.fromEntries(Object.entries(q.proxies).map(([id, px]) => [id, stale.includes(id) ? { ready: false } : px])) }));
     },
-    [store],
+    [store, setProject],
   );
 
   useEffect(() => {
@@ -156,6 +212,7 @@ export function VideoEditorWidget() {
         void store.save(project);
       } else if (e.key === " " && !(e.target as HTMLElement).closest("input, textarea, select")) {
         e.preventDefault();
+        void audioCtxRef.current?.resume();
         setPlaying((p) => !p);
       }
     };
@@ -180,12 +237,13 @@ export function VideoEditorWidget() {
         setRecovered(loaded.recovered);
         for (const m of Object.values(loaded.project.media)) await store.resolveByName(m.id, m.name);
         await loadProxies(loaded.project);
+        await primeMusic(loaded.project);
       }
     })().catch(() => undefined);
     return () => {
       active = false;
     };
-  }, [store, loadProxies]);
+  }, [store, loadProxies, primeMusic]);
 
   const chooseFolder = async () => {
     try {
@@ -197,6 +255,7 @@ export function VideoEditorWidget() {
         setRecovered(loaded.recovered);
         for (const m of Object.values(loaded.project.media)) await store.resolveByName(m.id, m.name);
         await loadProxies(loaded.project);
+        await primeMusic(loaded.project);
         setStatus(loaded.recovered ? "Recovered from autosave" : "Project opened");
       } else {
         await store.save(project);
@@ -231,16 +290,21 @@ export function VideoEditorWidget() {
       clips: [...p.clips, ...ordered.map((m): Clip => ({ id: newId(), media: m.id, in: 0, out: m.duration, transform: { ...NEUTRAL_TRANSFORM, crop: { ...NEUTRAL_TRANSFORM.crop } }, grade: { ...NEUTRAL_GRADE }, gainDb: 0, muted: false }))],
     }));
     // Proxies in the background, one at a time.
-    if (store.hasFolder) for (const m of ordered) await makeProxy(m, files.find((f) => f.name === m.name)!);
+    if (store.hasFolder) for (const m of ordered) await makeProxy(m, files.find((f) => f.name === m.name)!, previewRef.current);
   };
 
-  const makeProxy = async (m: MediaRef, file: File) => {
+  const makeProxy = async (m: MediaRef, file: File, height: ProxyHeight) => {
+    if (!height) {
+      proxyUrls.current.delete(m.id);
+      setProject((p) => ({ ...p, proxies: { ...p.proxies, [m.id]: { ready: false } } }));
+      return;
+    }
     const abort = new AbortController();
-    setJob({ kind: "proxy", label: `Proxy for ${m.name}`, fraction: 0, abort });
+    setJob({ kind: "proxy", label: `${height}p proxy for ${m.name}`, fraction: 0, abort });
     try {
-      const name = `${m.id}.proxy.mp4`;
+      const name = `${m.id}.proxy${height}.mp4`;
       const { writable } = await store.createWritable(name, "proxies");
-      await buildProxy(file, writable as unknown as WritableStream<import("mediabunny").StreamTargetChunk>, (f) => setJob((j) => (j ? { ...j, fraction: f } : j)), abort.signal);
+      await buildProxy(file, writable as unknown as WritableStream<import("mediabunny").StreamTargetChunk>, height, (f) => setJob((j) => (j ? { ...j, fraction: f } : j)), abort.signal);
       const pf = await store.proxyFile(name);
       if (pf) proxyUrls.current.set(m.id, URL.createObjectURL(pf));
       setProject((p) => ({ ...p, proxies: { ...p.proxies, [m.id]: { ready: true, file: name } } }));
@@ -248,6 +312,17 @@ export function VideoEditorWidget() {
       if ((e as DOMException).name !== "AbortError") setError(`Proxy failed for ${m.name}: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
       setJob(null);
+    }
+  };
+
+  const rebuildProxies = async () => {
+    const h = previewRef.current;
+    for (const id of [...new Set(project.clips.map((c) => c.media))]) {
+      const f = await store.getFile(id), m = project.media[id];
+      if (f && m) {
+        proxyUrls.current.delete(id);
+        await makeProxy(m, f, h);
+      }
     }
   };
 
@@ -259,6 +334,7 @@ export function VideoEditorWidget() {
         const info = await probe(f);
         const ref: MediaRef = { id, name: f.name, size: f.size, duration: info.duration, hasAudio: true, sampleRate: info.sampleRate };
         setProject((p) => ({ ...p, media: { ...p.media, [id]: ref }, music: [...p.music, appendMusic(p.music, { id: newId(), media: id, lane: 0, in: 0, out: info.duration, gainDb: -12, muted: false, fadeIn: 2, fadeOut: 3, keyframes: [] })] }));
+        await decodeMusic(id, f);
       } catch (e) {
         setError(`${f.name}: ${e instanceof Error ? e.message : "couldn't read the file."}`);
       }
@@ -299,9 +375,50 @@ export function VideoEditorWidget() {
     if (!v || !under || !previewSrc) return;
     if (v.src !== previewSrc) v.src = previewSrc;
     if (Math.abs(v.currentTime - under.sourceTime) > 0.3) v.currentTime = under.sourceTime;
+    // The clip's own sound, at its gain (an element can't go above unity; export can).
+    const gain = under.clip.muted ? 0 : Math.min(1, dbToGain(under.clip.gainDb));
+    v.volume = gain;
+    v.muted = gain === 0;
     if (playing) void v.play().catch(() => undefined);
     else v.pause();
   }, [previewSrc, under, playing]);
+
+  // Music in the preview: Web Audio sources started at the right offsets whenever playback (re)starts or the user seeks.
+  useEffect(() => {
+    const ctx = audioCtxRef.current;
+    const nodes = musicNodes.current;
+    const stopAll = () => {
+      for (const node of nodes.values()) {
+        try {
+          node.src.stop();
+        } catch {
+          /* already stopped */
+        }
+      }
+      nodes.clear();
+    };
+    if (!playing || !ctx) {
+      stopAll();
+      return;
+    }
+    const at = playheadRef.current;
+    for (const m of project.music) {
+      if (m.muted) continue;
+      const buf = musicBuffers.current.get(m.media);
+      if (!buf) continue;
+      const end = effectiveMusicEnd(m, duration);
+      if (at >= end) continue;
+      const src = ctx.createBufferSource();
+      src.buffer = buf;
+      const gain = ctx.createGain();
+      gain.gain.value = 0;
+      src.connect(gain).connect(ctx.destination);
+      const delay = Math.max(0, m.start - at), offset = m.in + Math.max(0, at - m.start);
+      src.start(ctx.currentTime + delay, offset, Math.max(0.01, end - Math.max(at, m.start)));
+      nodes.set(m.id, { src, gain });
+    }
+    return stopAll;
+  }, [playing, seekToken, project.music, duration]);
   useEffect(() => {
     if (!playing) return;
     let raf = 0;
@@ -332,6 +449,11 @@ export function VideoEditorWidget() {
           const ctx = c.getContext("2d")!;
           ctx.drawImage(graderRef.current.canvas, 0, 0);
           drawOverlays(ctx as unknown as OffscreenCanvasRenderingContext2D, w, h, playhead, project, logo);
+          // Music gains follow the playhead so fades and crossfades are audible in the preview.
+          for (const [id, node] of musicNodes.current) {
+            const m = project.music.find((x) => x.id === id);
+            node.gain.gain.value = m ? musicGainAt(m, project.music, playhead, duration) : 0;
+          }
         } catch {
           /* WebGL unavailable: fall back to the raw video element behind the canvas */
         }
@@ -340,14 +462,13 @@ export function VideoEditorWidget() {
     };
     raf = requestAnimationFrame(draw);
     return () => cancelAnimationFrame(raf);
-  }, [under, playhead, project, logo]);
+  }, [under, playhead, project, logo, duration]);
 
   const update = (id: string, patch: Partial<Clip>) => setProject((p) => ({ ...p, clips: p.clips.map((c) => (c.id === id ? { ...c, ...patch } : c)) }));
   const updateMusic = (id: string, patch: Partial<MusicTrack>) => setProject((p) => ({ ...p, music: p.music.map((m) => (m.id === id ? { ...m, ...patch } : m)) }));
-  const addTitle = (kind: Title["kind"]) => {
-    const t: Title = { id: newId(), kind, text: kind === "intro" ? project.name : "Title", subtitle: kind === "intro" ? new Date().toLocaleDateString() : "", start: kind === "intro" ? 0 : playhead, duration: kind === "intro" ? 4 : 5, fade: 1 };
-    setProject((p) => ({ ...p, titles: [...p.titles, t] }));
-  };
+  const addTitle = (kind: Title["kind"]) =>
+    setProject((p) => ({ ...p, titles: [...p.titles, newTitle(kind, kind === "intro" ? 0 : playhead, kind === "intro" ? p.name : kind === "lowerThird" ? "Location" : "Title", kind === "intro" ? new Date().toLocaleDateString() : "")] }));
+  const patchTitle = (id: string, patch: Partial<Title>) => setProject((p) => ({ ...p, titles: p.titles.map((x) => (x.id === id ? { ...x, ...patch } : x)) }));
 
   // Exposed for automated tests, which cannot drive the folder picker. Re-registered whenever the handlers change.
   useEffect(() => {
@@ -359,6 +480,7 @@ export function VideoEditorWidget() {
       addVideos,
       addMusic,
       getProject: () => project,
+      audioState: () => ({ ctx: audioCtxRef.current?.state ?? null, nodes: musicNodes.current.size, buffers: musicBuffers.current.size, video: videoRef.current ? { muted: videoRef.current.muted, volume: videoRef.current.volume, paused: videoRef.current.paused } : null }),
     };
   });
 
@@ -389,6 +511,7 @@ export function VideoEditorWidget() {
   const seekFromEvent = (e: React.PointerEvent<HTMLDivElement>) => {
     const r = e.currentTarget.getBoundingClientRect();
     setPlayhead(Math.max(0, Math.min(duration, (e.clientX - r.left + e.currentTarget.scrollLeft) / pxPerSec)));
+    setSeekToken((t) => t + 1);
   };
   const first = project.media[project.clips[0]?.media ?? ""];
   const previewAspect = first?.width && first.height ? first.width / first.height : 16 / 9;
@@ -460,7 +583,7 @@ export function VideoEditorWidget() {
               void addMusic(fs.filter((f) => f.type.startsWith("audio/")));
             }}
           >
-            <video ref={videoRef} muted playsInline className="absolute inset-0 h-full w-full object-contain opacity-0" />
+            <video ref={videoRef} playsInline className="absolute inset-0 h-full w-full object-contain opacity-0" />
             <canvas ref={canvasRef} width={1280} height={Math.round(1280 / previewAspect)} className="absolute inset-0 h-full w-full object-contain" />
             {!project.clips.length && (
               <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 p-6 text-center text-[13.5px] text-white/80">
@@ -471,7 +594,7 @@ export function VideoEditorWidget() {
             )}
           </div>
           <div className="mt-2 flex flex-wrap items-center gap-2">
-            <button type="button" onClick={() => setPlaying((p) => !p)} disabled={!project.clips.length} className={cn(PRIMARY, "h-8 px-3 text-[13px]")}>
+            <button type="button" onClick={togglePlay} disabled={!project.clips.length} className={cn(PRIMARY, "h-8 px-3 text-[13px]")}>
               {playing ? <Pause size={13} /> : <Play size={13} />}
               {playing ? "Pause" : "Play"}
             </button>
@@ -480,9 +603,21 @@ export function VideoEditorWidget() {
             </span>
             {under && (
               <span className="truncate text-[12px] text-faint">
-                {project.media[under.clip.media]?.name} · {project.proxies[under.clip.media]?.ready ? "proxy" : "full-res (no proxy yet)"}
+                {project.media[under.clip.media]?.name} · {project.proxies[under.clip.media]?.ready ? `${project.preview.proxyHeight}p proxy` : project.preview.proxyHeight ? "full-res (no proxy yet)" : "full-res"}
               </span>
             )}
+            <label className="flex items-center gap-1.5 text-[12px] text-muted" title="Smaller proxies render faster and scrub more smoothly; larger ones show the grade in more detail. Export always uses the originals.">
+              Proxy
+              <select value={project.preview.proxyHeight} onChange={(e) => setProject((p) => ({ ...p, preview: { ...p.preview, proxyHeight: Number(e.target.value) as ProxyHeight } }))} className={cn(SEL, "h-7 text-[12px]")}>
+                <option value={1080}>1080p</option>
+                <option value={720}>720p</option>
+                <option value={360}>360p</option>
+                <option value={0}>Off — preview the originals</option>
+              </select>
+            </label>
+            <button type="button" onClick={() => void rebuildProxies()} disabled={!project.clips.length || !!job || !folder} className={cn(GHOST, "h-7 text-[12px]")} title="Render the proxies again at the chosen size">
+              Rebuild proxies
+            </button>
             <label className="ml-auto flex items-center gap-1.5 text-[12px] text-muted">
               Zoom
               <input type="range" min={1} max={40} step={1} value={zoom} onChange={(e) => setZoom(Number(e.target.value))} className={cn(RANGE, "w-28")} />
@@ -514,6 +649,12 @@ export function VideoEditorWidget() {
                   </button>
                   <button type="button" disabled={!current} onClick={() => current && setProject((p) => ({ ...p, clips: p.clips.filter((c) => c.id !== current.id) }))} className={cn(GHOST, "hover:border-danger hover:text-danger")}>
                     <Trash2 size={13} /> Delete clip
+                  </button>
+                  <button type="button" disabled={!current || placed.findIndex((c) => c.id === current.id) === 0} onClick={() => current && setProject((p) => ({ ...p, clips: moveItem(p.clips, current.id, -1) }))} className={GHOST} title="Play this clip before the previous one">
+                    ◀ Move earlier
+                  </button>
+                  <button type="button" disabled={!current || placed.findIndex((c) => c.id === current.id) === placed.length - 1} onClick={() => current && setProject((p) => ({ ...p, clips: moveItem(p.clips, current.id, 1) }))} className={GHOST} title="Play this clip after the next one">
+                    Move later ▶
                   </button>
                 </div>
                 <RangeCut duration={duration} onCut={(a, b) => setProject((p) => ({ ...p, clips: removeRange(p.clips, a, b) }))} />
@@ -608,6 +749,19 @@ export function VideoEditorWidget() {
                         <Trash2 size={13} />
                       </button>
                     </div>
+                    <div className="flex flex-wrap gap-1.5">
+                      <button type="button" onClick={() => setProject((p) => ({ ...p, music: reorderMusic(p.music, currentMusic.id, -1) }))} className={GHOST}>
+                        ◀ Earlier on this lane
+                      </button>
+                      <button type="button" onClick={() => setProject((p) => ({ ...p, music: reorderMusic(p.music, currentMusic.id, 1) }))} className={GHOST}>
+                        Later on this lane ▶
+                      </button>
+                    </div>
+                    {effectiveMusicEnd(currentMusic, duration) < currentMusic.start + musicLength(currentMusic) && (
+                      <p className="text-[12px] text-faint">
+                        Runs past the end of the video, so it is cut at {fmtTime(duration)} and fades out over {currentMusic.fadeOut || 1} s before that.
+                      </p>
+                    )}
                     <div className="grid grid-cols-2 gap-2">
                       <label className="text-[12.5px] text-muted">
                         Starts at (s)
@@ -678,6 +832,7 @@ export function VideoEditorWidget() {
                     {logo ? "Replace logo" : "+ Logo watermark"}
                   </button>
                 </div>
+                <p className="text-[12px] text-faint">Titles that overlap in time are all drawn — give them different positions.</p>
                 {project.titles.map((t) => (
                   <div key={t.id} className="space-y-1.5 rounded-[var(--radius-sm)] border border-edge p-2">
                     <div className="flex items-center gap-2">
@@ -700,6 +855,47 @@ export function VideoEditorWidget() {
                       <label>
                         Fade (s)
                         <input type="number" step={0.25} value={t.fade} onChange={(e) => setProject((p) => ({ ...p, titles: p.titles.map((x) => (x.id === t.id ? { ...x, fade: Math.max(0, Number(e.target.value)) } : x)) }))} className={cn(INPUT, "mt-0.5 font-mono")} />
+                      </label>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-2 text-[12px] text-muted">
+                      <span className="grid grid-cols-3 gap-0.5" title="Position in the frame" role="group" aria-label="Position">
+                        {TITLE_POSITIONS.map((pos) => (
+                          <button key={pos} type="button" onClick={() => patchTitle(t.id, { position: pos })} aria-label={`Position ${pos}`} aria-pressed={t.position === pos} className={cn("h-4 w-4 rounded-[2px] border", t.position === pos ? "border-accent bg-accent" : "border-edge bg-base hover:border-accent")} />
+                        ))}
+                      </span>
+                      <label className="flex items-center gap-1">
+                        Text
+                        <input type="color" value={toHex(t.color)} onChange={(e) => patchTitle(t.id, { color: e.target.value })} className="h-6 w-8 cursor-pointer rounded border border-edge bg-base p-0" aria-label="Text colour" />
+                      </label>
+                      <label className="flex items-center gap-1">
+                        Box
+                        <select
+                          value={t.background === "" ? "none" : t.background === "rgba(0,0,0,0.55)" ? "dark" : t.background === "rgba(255,255,255,0.85)" ? "light" : "custom"}
+                          onChange={(e) => patchTitle(t.id, { background: e.target.value === "none" ? "" : e.target.value === "dark" ? "rgba(0,0,0,0.55)" : e.target.value === "light" ? "rgba(255,255,255,0.85)" : toHex(t.background) === "#ffffff" ? "#000000" : toHex(t.background) })}
+                          className={cn(SEL, "h-6 text-[12px]")}
+                          aria-label="Background"
+                        >
+                          <option value="none">none</option>
+                          <option value="dark">dark</option>
+                          <option value="light">light</option>
+                          <option value="custom">custom…</option>
+                        </select>
+                        {t.background && !/^rgba/.test(t.background) && <input type="color" value={toHex(t.background)} onChange={(e) => patchTitle(t.id, { background: e.target.value })} className="h-6 w-8 cursor-pointer rounded border border-edge bg-base p-0" aria-label="Background colour" />}
+                      </label>
+                      <label className="flex items-center gap-1">
+                        Font
+                        <select value={t.font} onChange={(e) => patchTitle(t.id, { font: e.target.value as TitleFont })} className={cn(SEL, "h-6 text-[12px]")} aria-label="Font">
+                          {(Object.keys(TITLE_FONTS) as TitleFont[]).map((f) => (
+                            <option key={f} value={f}>
+                              {f}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label className="flex min-w-[140px] flex-1 items-center gap-1">
+                        Size
+                        <input type="range" min={0.02} max={0.16} step={0.005} value={t.size} onChange={(e) => patchTitle(t.id, { size: Number(e.target.value) })} className={RANGE} aria-label="Text size" />
+                        <span className="font-mono tabular">{Math.round(t.size * 100)}%</span>
                       </label>
                     </div>
                   </div>
@@ -816,6 +1012,7 @@ export function VideoEditorWidget() {
                     setSelected(c.id);
                     setSelectedMusic(null);
                     setPlayhead(c.start);
+                    setSeekToken((t) => t + 1);
                   }}
                   className={cn("absolute top-0 h-full overflow-hidden rounded-[var(--radius-sm)] border px-2 text-left text-[11.5px]", selected === c.id ? "border-accent bg-accent-soft text-ink" : "border-edge bg-raised text-muted")}
                   style={{ left: c.start * pxPerSec, width: Math.max(4, (c.end - c.start) * pxPerSec - 1) }}
@@ -852,10 +1049,11 @@ export function VideoEditorWidget() {
                       setTab("audio");
                     }}
                     className={cn("absolute top-0 h-full truncate rounded-[3px] border px-1.5 text-left text-[11px]", selectedMusic === m.id ? "border-ink" : "border-transparent", m.muted && "opacity-40")}
-                    style={{ left: m.start * pxPerSec, width: Math.max(4, musicLength(m) * pxPerSec), backgroundColor: LANE_COLORS[lane] + "66" }}
+                    style={{ left: m.start * pxPerSec, width: Math.max(4, (effectiveMusicEnd(m, duration) - m.start) * pxPerSec), backgroundColor: LANE_COLORS[lane] + "66" }}
                     title={project.media[m.media]?.name}
                   >
                     {project.media[m.media]?.name} {m.gainDb <= -60 ? "(off)" : `${m.gainDb} dB`}
+                    {effectiveMusicEnd(m, duration) < m.start + musicLength(m) ? " · cut at the end" : ""}
                   </button>
                 ))}
               </div>
