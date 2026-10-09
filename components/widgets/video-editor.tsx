@@ -1,14 +1,17 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, ChevronRight, Clapperboard, Crop, Download, FolderOpen, Loader, Music, Pause, Play, Save, Scissors, SlidersHorizontal, Trash2, Type, Upload, Volume2 } from "lucide-react";
+import { AlertTriangle, ChevronRight, Clapperboard, Crop, Download, FolderOpen, Loader, Maximize2, Minimize2, Music, Pause, Play, Save, Scissors, SlidersHorizontal, Trash2, Type, Upload, Volume2 } from "lucide-react";
 import {
+  DEFAULT_CLIP_GAIN_DB,
   DEFAULT_EXPORT,
   NEUTRAL_GRADE,
   NEUTRAL_TRANSFORM,
   TITLE_FONTS,
   TITLE_POSITIONS,
+  TRANSITIONS,
   appendMusic,
+  applyAudioTo,
   applyGradeTo,
   clipAt,
   crossfades,
@@ -29,6 +32,9 @@ import {
   reorderMusic,
   splitClip,
   timelineDuration,
+  titleLanes,
+  transitionAt,
+  transitionWindows,
   type Clip,
   type MediaRef,
   type MusicTrack,
@@ -37,7 +43,9 @@ import {
   type Title,
   type TitleFont,
   type TitlePosition,
+  type TransitionKind,
 } from "@/lib/tools/video/project";
+import { drawTransition } from "@/lib/tools/video/transitions";
 import { Grader, buildProxy, drawOverlays, encoderSupport, exportProject, probe } from "@/lib/tools/video/engine";
 import { ProjectStore, hasFileSystemAccess } from "@/lib/tools/video/store";
 import { cn } from "@/lib/utils";
@@ -116,9 +124,28 @@ export function VideoEditorWidget() {
   const musicNodes = useRef<Map<string, { src: AudioBufferSourceNode; gain: GainNode }>>(new Map());
   const playheadRef = useRef(0);
   const previewRef = useRef(DEFAULT_PREVIEW_HEIGHT);
+  // Second, silent video element for the clip on the other side of a transition.
+  const altRef = useRef<HTMLVideoElement>(null);
+  const scratchRef = useRef<{ a: OffscreenCanvas; b: OffscreenCanvas; s: OffscreenCanvas; w: number; h: number } | null>(null);
+  const pendingUrls = useRef<Set<string>>(new Set());
+  const previewBoxRef = useRef<HTMLDivElement>(null);
+  const [fullscreen, setFullscreen] = useState(false);
+  useEffect(() => {
+    const onChange = () => setFullscreen(!!document.fullscreenElement);
+    document.addEventListener("fullscreenchange", onChange);
+    return () => document.removeEventListener("fullscreenchange", onChange);
+  }, []);
+  const toggleFullscreen = () => {
+    const el = previewBoxRef.current;
+    if (!el) return;
+    if (document.fullscreenElement) void document.exitFullscreen().catch(() => undefined);
+    else void el.requestFullscreen().catch(() => undefined);
+  };
 
   const duration = timelineDuration(project);
   const placed = useMemo(() => placeClips(project.clips), [project.clips]);
+  const windows = useMemo(() => transitionWindows(placed, project.transition), [placed, project.transition]);
+  const titleLaneOf = useMemo(() => titleLanes(project.titles), [project.titles]);
   const spans = useMemo(() => planExport(project), [project]);
   const estimate = useMemo(() => estimateExport(project, spans), [project, spans]);
   const current = selected ? project.clips.find((c) => c.id === selected) : undefined;
@@ -184,6 +211,21 @@ export function VideoEditorWidget() {
     void audioCtxRef.current?.resume();
     setPlaying((p) => !p);
   }, []);
+
+  // Preview URL for a media id: the proxy if there is one, else the original — created on first use.
+  const previewUrlFor = useCallback(
+    (id: string): string | undefined => {
+      const url = proxyUrls.current.get(id);
+      if (url || pendingUrls.current.has(id)) return url;
+      pendingUrls.current.add(id);
+      void store.getFile(id).then((f) => {
+        if (f && !proxyUrls.current.has(id)) proxyUrls.current.set(id, URL.createObjectURL(f));
+        pendingUrls.current.delete(id);
+      });
+      return undefined;
+    },
+    [store],
+  );
 
   const loadProxies = useCallback(
     async (p: Project) => {
@@ -291,7 +333,7 @@ export function VideoEditorWidget() {
     setProject((p) => ({
       ...p,
       media: { ...p.media, ...Object.fromEntries(ordered.map((m) => [m.id, m])) },
-      clips: [...p.clips, ...ordered.map((m): Clip => ({ id: newId(), media: m.id, in: 0, out: m.duration, transform: { ...NEUTRAL_TRANSFORM, crop: { ...NEUTRAL_TRANSFORM.crop } }, grade: { ...NEUTRAL_GRADE }, gainDb: 0, muted: false }))],
+      clips: [...p.clips, ...ordered.map((m): Clip => ({ id: newId(), media: m.id, in: 0, out: m.duration, transform: { ...NEUTRAL_TRANSFORM, crop: { ...NEUTRAL_TRANSFORM.crop } }, grade: { ...NEUTRAL_GRADE }, gainDb: DEFAULT_CLIP_GAIN_DB, muted: false }))],
     }));
     // Proxies in the background, one at a time.
     if (store.hasFolder) for (const m of ordered) await makeProxy(m, files.find((f) => f.name === m.name)!, previewRef.current);
@@ -449,9 +491,56 @@ export function VideoEditorWidget() {
         const w = c.width, h = c.height;
         try {
           if (!graderRef.current || graderRef.current.canvas.width !== w) graderRef.current = new Grader(w, h);
-          graderRef.current.draw(v, under.clip.grade, under.clip.transform, v.videoWidth, v.videoHeight);
+          const grader = graderRef.current;
           const ctx = c.getContext("2d")!;
-          ctx.drawImage(graderRef.current.canvas, 0, 0);
+          const alt = altRef.current;
+          const tr = windows.length ? transitionAt(windows, playhead) : null;
+          let composed = false;
+          if (tr && alt) {
+            const outgoingIsUnder = tr.window.outgoing.id === under.clip.id;
+            const other = outgoingIsUnder ? tr.window.incoming : tr.window.outgoing;
+            const url = previewUrlFor(other.media);
+            if (url) {
+              if (alt.dataset.src !== url) {
+                alt.src = url;
+                alt.dataset.src = url;
+              }
+              const want = Math.max(0, other.in + (playhead - other.start));
+              if (playing) {
+                if (alt.paused) void alt.play().catch(() => undefined);
+                if (Math.abs(alt.currentTime - want) > 0.3) alt.currentTime = want;
+              } else {
+                if (!alt.paused) alt.pause();
+                if (Math.abs(alt.currentTime - want) > 0.05) alt.currentTime = want;
+              }
+              if (alt.readyState >= 2) {
+                if (!scratchRef.current || scratchRef.current.w !== w || scratchRef.current.h !== h) scratchRef.current = { a: new OffscreenCanvas(w, h), b: new OffscreenCanvas(w, h), s: new OffscreenCanvas(w, h), w, h };
+                const sc = scratchRef.current;
+                grader.draw(v, under.clip.grade, under.clip.transform, v.videoWidth, v.videoHeight);
+                sc.a.getContext("2d")!.drawImage(grader.canvas, 0, 0);
+                grader.draw(alt, other.grade, other.transform, alt.videoWidth, alt.videoHeight);
+                sc.b.getContext("2d")!.drawImage(grader.canvas, 0, 0);
+                drawTransition(ctx, outgoingIsUnder ? sc.a : sc.b, outgoingIsUnder ? sc.b : sc.a, w, h, project.transition.kind, tr.progress, sc.s);
+                composed = true;
+              }
+            }
+          } else if (alt) {
+            if (!alt.paused) alt.pause();
+            // Cue the next transition's other side while playing so it is decoded by the time the cut arrives.
+            const next = playing ? windows.find((x) => x.start > playhead && x.start - playhead < 2) : undefined;
+            if (next) {
+              const url = previewUrlFor(next.incoming.media);
+              if (url && alt.dataset.src !== url) {
+                alt.src = url;
+                alt.dataset.src = url;
+                alt.currentTime = Math.max(0, next.incoming.in + (next.start - next.incoming.start));
+              }
+            }
+          }
+          if (!composed) {
+            grader.draw(v, under.clip.grade, under.clip.transform, v.videoWidth, v.videoHeight);
+            ctx.drawImage(grader.canvas, 0, 0);
+          }
           drawOverlays(ctx as unknown as OffscreenCanvasRenderingContext2D, w, h, playhead, project, logo);
           // Music gains follow the playhead so fades and crossfades are audible in the preview.
           for (const [id, node] of musicNodes.current) {
@@ -466,7 +555,7 @@ export function VideoEditorWidget() {
     };
     raf = requestAnimationFrame(draw);
     return () => cancelAnimationFrame(raf);
-  }, [under, playhead, project, logo, duration]);
+  }, [under, playhead, project, logo, duration, windows, playing, previewUrlFor]);
 
   const update = (id: string, patch: Partial<Clip>) => setProject((p) => ({ ...p, clips: p.clips.map((c) => (c.id === id ? { ...c, ...patch } : c)) }));
   const updateMusic = (id: string, patch: Partial<MusicTrack>) => setProject((p) => ({ ...p, music: p.music.map((m) => (m.id === id ? { ...m, ...patch } : m)) }));
@@ -587,8 +676,10 @@ export function VideoEditorWidget() {
       <div className="grid gap-3 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
         <div className="panel p-2">
           <div
-            className={cn("relative overflow-hidden rounded-[var(--radius-sm)] bg-black", dragOver && "ring-2 ring-accent")}
+            ref={previewBoxRef}
+            className={cn("group relative overflow-hidden rounded-[var(--radius-sm)] bg-black", dragOver && "ring-2 ring-accent")}
             style={{ aspectRatio: String(previewAspect) }}
+            onDoubleClick={toggleFullscreen}
             onDragOver={(e) => {
               e.preventDefault();
               setDragOver(true);
@@ -603,7 +694,26 @@ export function VideoEditorWidget() {
             }}
           >
             <video ref={videoRef} playsInline className="absolute inset-0 h-full w-full object-contain opacity-0" />
+            <video ref={altRef} muted playsInline className="pointer-events-none absolute inset-0 h-full w-full object-contain opacity-0" />
             <canvas ref={canvasRef} width={1280} height={Math.round(1280 / previewAspect)} className="absolute inset-0 h-full w-full object-contain" />
+            {project.clips.length > 0 && (
+              <button type="button" onClick={toggleFullscreen} aria-label={fullscreen ? "Exit full screen" : "Full screen"} title={fullscreen ? "Exit full screen (Esc)" : "Full screen (double-click the preview)"} className="absolute top-2 right-2 rounded-[var(--radius-sm)] bg-black/50 p-1.5 text-white/90 opacity-0 transition-opacity group-hover:opacity-100 focus:opacity-100 hover:bg-black/70">
+                {fullscreen ? <Minimize2 size={15} /> : <Maximize2 size={15} />}
+              </button>
+            )}
+            {fullscreen && (
+              <div className="absolute inset-x-0 bottom-0 flex items-center gap-3 bg-gradient-to-t from-black/70 to-transparent px-4 pt-8 pb-3 text-white opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+                <button type="button" onClick={togglePlay} className="flex h-9 items-center gap-1.5 rounded-[var(--radius-sm)] bg-white/15 px-3 text-[13px] hover:bg-white/25">
+                  {playing ? <Pause size={14} /> : <Play size={14} />}
+                  {playing ? "Pause" : "Play"}
+                </button>
+                <span className="font-mono text-[13px] tabular">
+                  {fmtTime(playhead, first?.fps)} <span className="text-white/60">/ {fmtTime(duration)}</span>
+                </span>
+                {under && <span className="truncate text-[12px] text-white/60">{project.media[under.clip.media]?.name}</span>}
+                <span className="ml-auto text-[12px] text-white/60">Space plays · Esc leaves full screen</span>
+              </div>
+            )}
             {!project.clips.length && (
               <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 p-6 text-center text-[13.5px] text-white/80">
                 <Clapperboard size={28} />
@@ -636,6 +746,9 @@ export function VideoEditorWidget() {
             </label>
             <button type="button" onClick={() => void rebuildProxies()} disabled={!project.clips.length || !!job || !folder} className={cn(GHOST, "h-7 text-[12px]")} title="Render the proxies again at the chosen size">
               Rebuild proxies
+            </button>
+            <button type="button" onClick={toggleFullscreen} disabled={!project.clips.length} className={cn(GHOST, "h-7 text-[12px]")} title="Watch the preview full screen">
+              <Maximize2 size={12} /> Full screen
             </button>
             <label className="ml-auto flex items-center gap-1.5 text-[12px] text-muted">
               Zoom
@@ -679,6 +792,27 @@ export function VideoEditorWidget() {
                   </button>
                 </div>
                 <RangeCut duration={duration} onCut={(a, b) => setProject((p) => ({ ...p, clips: removeRange(p.clips, a, b) }))} />
+                <div className="space-y-2 rounded-[var(--radius-sm)] border border-edge p-2">
+                  <div className="flex items-center justify-between text-[12.5px]">
+                    <span className="font-medium text-ink">Transitions at every cut</span>
+                    <span className="text-faint">{placed.length > 1 ? `${placed.length - 1} cut${placed.length === 2 ? "" : "s"}` : "no cuts yet"}</span>
+                  </div>
+                  <select value={project.transition.kind} onChange={(e) => setProject((p) => ({ ...p, transition: { ...p.transition, kind: e.target.value as TransitionKind } }))} className={SEL} aria-label="Transition">
+                    <option value="none">None — hard cuts</option>
+                    {TRANSITIONS.map((t) => (
+                      <option key={t.kind} value={t.kind}>
+                        {t.name}
+                      </option>
+                    ))}
+                  </select>
+                  {project.transition.kind !== "none" && (
+                    <>
+                      <p className="text-[12px] text-faint">{TRANSITIONS.find((t) => t.kind === project.transition.kind)?.hint}</p>
+                      <Slider label="Length" value={project.transition.duration} min={0.25} max={3} step={0.25} onChange={(v) => setProject((p) => ({ ...p, transition: { ...p.transition, duration: v } }))} format={(v) => `${v} s, centred on the cut`} />
+                    </>
+                  )}
+                  <p className="text-[12px] text-faint">One setting for all splits: every cut gets this transition, or none do. Where a recording has no spare frames past a cut, its last frame holds through the transition.</p>
+                </div>
                 {current && (
                   <div className="grid grid-cols-2 gap-2">
                     <label className="text-[12.5px] text-muted">
@@ -761,7 +895,20 @@ export function VideoEditorWidget() {
                     </>
                   )}
                 </div>
-                {current && <Slider label={`Original audio gain · ${project.media[current.media]?.name}`} value={current.gainDb} min={-60} max={12} step={0.5} onChange={(v) => update(current.id, { gainDb: v })} format={(v) => (v <= -60 ? "off" : `${v > 0 ? "+" : ""}${v} dB`)} />}
+                {current && (
+                  <>
+                    <Slider label={`Original audio gain · ${project.media[current.media]?.name}`} value={current.gainDb} min={-60} max={12} step={0.5} onChange={(v) => update(current.id, { gainDb: v })} format={(v) => (v <= -60 ? "off" : `${v > 0 ? "+" : ""}${v} dB`)} />
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <button type="button" onClick={() => setProject((p) => ({ ...p, clips: applyAudioTo(p.clips, current.id, "all") }))} disabled={project.clips.length < 2} className={cn(GHOST, "border-accent text-accent")} title="Give every clip this gain and mute setting">
+                        Apply to all clips
+                      </button>
+                      <button type="button" onClick={() => update(current.id, { gainDb: DEFAULT_CLIP_GAIN_DB })} className={GHOST}>
+                        Reset to {DEFAULT_CLIP_GAIN_DB} dB
+                      </button>
+                      <span className="text-[12px] text-faint">New clips start at {DEFAULT_CLIP_GAIN_DB} dB so road noise sits under the music.</span>
+                    </div>
+                  </>
+                )}
                 {currentMusic ? (
                   <div className="space-y-2 border-t border-edge pt-2">
                     <div className="flex items-center justify-between">
@@ -1064,9 +1211,20 @@ export function VideoEditorWidget() {
                   </span>
                 </button>
               ))}
+              {windows.map((w) => (
+                <div
+                  key={w.incoming.id}
+                  className="pointer-events-none absolute top-0 flex h-full items-center justify-center border-x border-ink/60 bg-white/50 text-[11px] text-ink"
+                  style={{ left: w.start * pxPerSec, width: Math.max(8, (w.end - w.start) * pxPerSec) }}
+                  title={`${TRANSITIONS.find((t) => t.kind === project.transition.kind)?.name} · ${(w.end - w.start).toFixed(2)} s`}
+                  data-transition
+                >
+                  ⋈
+                </div>
+              ))}
             </div>
-            {/* title lane */}
-            <div className="relative mt-1 h-5">
+            {/* title lanes: overlapping titles stack */}
+            <div className="relative mt-1" style={{ height: titleLaneOf.count * 22 - 2 }}>
               {project.titles.map((t) => (
                 <button
                   key={t.id}
@@ -1076,8 +1234,8 @@ export function VideoEditorWidget() {
                     setTab("titles");
                     focusTitle(t);
                   }}
-                  className={cn("absolute top-0 h-full truncate rounded-[3px] bg-[#e5484d]/70 px-1 text-left text-[10.5px] text-white", selectedTitle === t.id && "ring-2 ring-white/90")}
-                  style={{ left: t.start * pxPerSec, width: Math.max(4, t.duration * pxPerSec) }}
+                  className={cn("absolute h-5 truncate rounded-[3px] bg-[#e5484d]/70 px-1 text-left text-[10.5px] text-white", selectedTitle === t.id && "ring-2 ring-white/90")}
+                  style={{ left: t.start * pxPerSec, width: Math.max(4, t.duration * pxPerSec), top: (titleLaneOf.lanes[t.id] ?? 0) * 22 }}
                   title={t.text}
                 >
                   {t.text}

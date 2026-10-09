@@ -19,12 +19,14 @@ import {
   Output,
   StreamTarget,
   VideoSampleSink,
+  type VideoSample,
   canEncodeVideo,
   type StreamTargetChunk,
   type VideoCodec,
 } from "mediabunny";
 import { GRADE_FRAGMENT_SHADER, buildDlogLut, lutTexture, type Lut3D } from "./lut";
-import { TITLE_FONTS, dbToGain, musicGainAt, placeClips, planExport, type Clip, type ExportSpan, type Grade, type MediaRef, type Project, type Title, type Transform } from "./project";
+import { TITLE_FONTS, dbToGain, musicGainAt, placeClips, planExport, transitionAt, transitionWindows, type Clip, type ExportSpan, type Grade, type MediaRef, type PlacedClip, type Project, type Title, type Transform, type TransitionWindow } from "./project";
+import { drawTransition } from "./transitions";
 
 export interface Probe {
   duration: number;
@@ -421,6 +423,56 @@ const PRESET_LATENCY: Record<Project["export"]["preset"], "quality" | "realtime"
  * decode, grade on the GPU, draw overlays and re-encode. Audio is mixed and
  * encoded separately. One continuous output file streams to `writable`.
  */
+/**
+ * Frames of the clip on the other side of a transition, decoded sequentially
+ * and held at the last decoded frame when the footage runs out (no handles).
+ */
+class NeighbourFrames {
+  private key = "";
+  private iter: AsyncIterator<VideoSample> | null = null;
+  private current: VideoSample | null = null;
+  private pending: VideoSample | null = null;
+  private done = false;
+  constructor(private openInput: (mediaId: string) => Promise<Input>) {}
+
+  async frameAt(clip: PlacedClip, window: TransitionWindow, sourceT: number): Promise<VideoSample | null> {
+    const key = `${clip.id}@${window.cut}`;
+    if (key !== this.key) {
+      await this.reset();
+      this.key = key;
+      const track = await (await this.openInput(clip.media)).getPrimaryVideoTrack();
+      if (!track) return null;
+      const from = Math.max(0, clip.in + (window.start - clip.start)), to = clip.in + (window.end - clip.start) + 0.5;
+      this.iter = new VideoSampleSink(track).samples(from, to)[Symbol.asyncIterator]();
+    }
+    while (this.iter && !this.done) {
+      if (!this.pending) {
+        const r = await this.iter.next();
+        if (r.done) {
+          this.done = true;
+          break;
+        }
+        this.pending = r.value;
+      }
+      if (!this.current || this.pending.timestamp <= sourceT + 1e-4) {
+        this.current?.close();
+        this.current = this.pending;
+        this.pending = null;
+      } else break;
+    }
+    return this.current;
+  }
+
+  async reset() {
+    this.current?.close();
+    this.pending?.close();
+    await this.iter?.return?.();
+    this.current = this.pending = null;
+    this.iter = null;
+    this.done = false;
+  }
+}
+
 export async function exportProject(opts: ExportOptions): Promise<{ bytesWritten: number; seconds: number }> {
   const { project, getFile, logo, signal } = opts;
   const first = project.media[project.clips[0]?.media ?? ""];
@@ -433,6 +485,9 @@ export async function exportProject(opts: ExportOptions): Promise<{ bytesWritten
   if (!(await canEncodeVideo(codec, { width: outW, height: outH, bitrate }))) throw new Error(`This browser can't encode ${codec.toUpperCase()} at ${outW}×${outH}. Try the other codec or a lower resolution.`);
   const spans = planExport(project);
   const total = spans.reduce((a, s) => a + (s.end - s.start), 0);
+  const windows = transitionWindows(placeClips(project.clips), project.transition);
+  const neighbour = new NeighbourFrames((id) => openInput(id));
+  let tmpA: OffscreenCanvas | null = null, tmpB: OffscreenCanvas | null = null, scratch: OffscreenCanvas | null = null;
   const output = new Output({ format: new Mp4OutputFormat({ fastStart: false }), target: new StreamTarget(opts.writable, { chunked: true }) });
   const canvas = new OffscreenCanvas(outW, outH);
   const ctx2d = canvas.getContext("2d")!;
@@ -471,10 +526,30 @@ export async function exportProject(opts: ExportOptions): Promise<{ bytesWritten
         throw new DOMException("Cancelled", "AbortError");
       }
       const timelineT = span.start + (sample.timestamp - span.sourceIn);
-      if (span.kind === "encode") {
+      const tr = windows.length && span.kind === "encode" ? transitionAt(windows, timelineT) : null;
+      let composed = false;
+      if (tr) {
+        // Inside a transition: grade both sides, then composite them.
+        const outgoingIsThis = tr.window.outgoing.id === clip.id;
+        const other = outgoingIsThis ? tr.window.incoming : tr.window.outgoing;
+        const frame = await neighbour.frameAt(other, tr.window, other.in + (timelineT - other.start));
+        if (frame) {
+          tmpA ??= new OffscreenCanvas(outW, outH);
+          tmpB ??= new OffscreenCanvas(outW, outH);
+          scratch ??= new OffscreenCanvas(outW, outH);
+          const om = project.media[other.media];
+          grader.draw(sample.toCanvasImageSource(), clip.grade, clip.transform, srcW, srcH);
+          tmpA.getContext("2d")!.drawImage(grader.canvas, 0, 0, outW, outH);
+          grader.draw(frame.toCanvasImageSource(), other.grade, other.transform, om?.width ?? frame.displayWidth, om?.height ?? frame.displayHeight);
+          tmpB.getContext("2d")!.drawImage(grader.canvas, 0, 0, outW, outH);
+          drawTransition(ctx2d, outgoingIsThis ? tmpA : tmpB, outgoingIsThis ? tmpB : tmpA, outW, outH, project.transition.kind, tr.progress, scratch);
+          composed = true;
+        }
+      }
+      if (!composed && span.kind === "encode") {
         grader.draw(sample.toCanvasImageSource(), clip.grade, clip.transform, srcW, srcH);
         ctx2d.drawImage(grader.canvas, 0, 0, outW, outH);
-      } else {
+      } else if (!composed) {
         ctx2d.drawImage(sample.toCanvasImageSource(), 0, 0, outW, outH);
       }
       drawOverlays(ctx2d, outW, outH, timelineT, project, logo);
@@ -484,6 +559,7 @@ export async function exportProject(opts: ExportOptions): Promise<{ bytesWritten
     }
     written += span.end - span.start;
   }
+  await neighbour.reset();
   videoSource.close();
   // Audio.
   await mixAudio({ project, getFile, sampleRate }, 0, total, async (samples, timestamp) => {

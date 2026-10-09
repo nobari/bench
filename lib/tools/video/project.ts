@@ -165,6 +165,72 @@ export interface ExportSettings {
   smartCopy: boolean;
 }
 
+export type TransitionKind = "none" | "dissolve" | "dipBlack" | "dipWhite" | "zoom" | "blur" | "wipe" | "push";
+export interface TransitionSettings {
+  /** One choice for every cut: each split gets this transition, or none do. */
+  kind: TransitionKind;
+  /** Seconds, centred on the cut. */
+  duration: number;
+}
+export const DEFAULT_TRANSITION: TransitionSettings = { kind: "none", duration: 1 };
+/** Transitions that suit road footage, in the order the menu shows them. */
+export const TRANSITIONS: { kind: Exclude<TransitionKind, "none">; name: string; hint: string }[] = [
+  { kind: "dissolve", name: "Cross dissolve", hint: "A soft blend — the classic for continuous driving." },
+  { kind: "dipBlack", name: "Dip to black", hint: "Stops, parking and jumps in time." },
+  { kind: "dipWhite", name: "Flash to white", hint: "Tunnel exits and driving into the sun." },
+  { kind: "zoom", name: "Drive through", hint: "The shot accelerates into the cut; the next one arrives close and settles." },
+  { kind: "blur", name: "Speed blur", hint: "A blur washes over the cut and clears on the new road." },
+  { kind: "wipe", name: "Road wipe", hint: "The new road sweeps in from the left behind a soft edge." },
+  { kind: "push", name: "Overtake", hint: "The next clip slides in from the right and pushes the old one out." },
+];
+
+export interface TransitionWindow {
+  outgoing: PlacedClip;
+  incoming: PlacedClip;
+  cut: number;
+  start: number;
+  end: number;
+}
+
+/**
+ * One window per cut between consecutive clips, centred on the cut so no
+ * timing shifts. A window never exceeds either clip's length, which also
+ * keeps neighbouring windows apart.
+ */
+export function transitionWindows(placed: PlacedClip[], s: TransitionSettings): TransitionWindow[] {
+  if (s.kind === "none" || !(s.duration > 0)) return [];
+  const out: TransitionWindow[] = [];
+  for (let i = 1; i < placed.length; i++) {
+    const a = placed[i - 1], b = placed[i];
+    const d = Math.min(s.duration, a.end - a.start, b.end - b.start);
+    if (d < 0.2) continue;
+    out.push({ outgoing: a, incoming: b, cut: b.start, start: b.start - d / 2, end: b.start + d / 2 });
+  }
+  return out;
+}
+
+/** The transition in progress at a timeline instant, with 0 → 1 progress across its window. */
+export function transitionAt(windows: TransitionWindow[], t: number): { window: TransitionWindow; progress: number } | null {
+  for (const w of windows) if (t >= w.start && t < w.end) return { window: w, progress: (t - w.start) / (w.end - w.start) };
+  return null;
+}
+
+/** Stack titles that overlap in time onto separate timeline lanes (first fit, in start order). */
+export function titleLanes(titles: Title[]): { lanes: Record<string, number>; count: number } {
+  const ends: number[] = [];
+  const lanes: Record<string, number> = {};
+  for (const t of [...titles].sort((a, b) => a.start - b.start || a.id.localeCompare(b.id))) {
+    let lane = ends.findIndex((e) => e <= t.start + 1e-6);
+    if (lane < 0) {
+      lane = ends.length;
+      ends.push(0);
+    }
+    ends[lane] = t.start + t.duration;
+    lanes[t.id] = lane;
+  }
+  return { lanes, count: Math.max(1, ends.length) };
+}
+
 export type ProxyHeight = 1080 | 720 | 360 | 0;
 export interface PreviewSettings {
   /** Proxy size for preview; 0 previews the full-resolution source. */
@@ -185,6 +251,7 @@ export interface Project {
   watermark: Watermark;
   export: ExportSettings;
   preview: PreviewSettings;
+  transition: TransitionSettings;
   /** Proxy state per media id: whether a proxy exists (and which file). */
   proxies: Record<string, { ready: boolean; file?: string }>;
 }
@@ -195,7 +262,7 @@ export const newId = () => Math.random().toString(36).slice(2, 10);
 
 export function newProject(name = "Untitled drive"): Project {
   const now = Date.now();
-  return { version: 1, id: newId(), name, createdAt: now, updatedAt: now, media: {}, clips: [], music: [], titles: [], watermark: { media: null, corner: "br", size: 0.08, opacity: 0.85, margin: 0.03 }, export: { ...DEFAULT_EXPORT }, preview: { ...DEFAULT_PREVIEW }, proxies: {} };
+  return { version: 1, id: newId(), name, createdAt: now, updatedAt: now, media: {}, clips: [], music: [], titles: [], watermark: { media: null, corner: "br", size: 0.08, opacity: 0.85, margin: 0.03 }, export: { ...DEFAULT_EXPORT }, preview: { ...DEFAULT_PREVIEW }, transition: { ...DEFAULT_TRANSITION }, proxies: {} };
 }
 
 /* ---------------------------------------------------------- timeline */
@@ -414,6 +481,7 @@ const isNeutralTransform = (t: Transform) => t.rotate === 0 && t.straighten === 
 export function planExport(p: Project): ExportSpan[] {
   const spans: ExportSpan[] = [];
   const placed = placeClips(p.clips);
+  const windows = transitionWindows(placed, p.transition);
   const sameCodec = (m: MediaRef | undefined) => !!m?.codec && m.codec.startsWith(p.export.codec);
   for (const c of placed) {
     const reasons: string[] = [];
@@ -428,12 +496,16 @@ export function planExport(p: Project): ExportSpan[] {
       spans.push({ kind: "encode", clipId: c.id, sourceIn: c.in, sourceOut: c.out, start: c.start, end: c.end, reasons });
       continue;
     }
-    // Titles only force re-encoding of the frames they cover.
+    // Titles and transitions only force re-encoding of the frames they cover.
     let cursor = c.start;
-    const cuts = overlays.map((t) => [Math.max(c.start, t.start), Math.min(c.end, t.start + t.duration)] as const).sort((a, b) => a[0] - b[0]);
-    for (const [ts, te] of cuts) {
+    const cuts: [number, number, string][] = [
+      ...overlays.map((t) => [Math.max(c.start, t.start), Math.min(c.end, t.start + t.duration), "title"] as [number, number, string]),
+      ...windows.filter((w) => w.start < c.end && w.end > c.start).map((w) => [Math.max(c.start, w.start), Math.min(c.end, w.end), "transition"] as [number, number, string]),
+    ].sort((a, b) => a[0] - b[0]);
+    for (const [ts, te, why] of cuts) {
+      if (te <= cursor) continue;
       if (ts > cursor) spans.push({ kind: "copy", clipId: c.id, sourceIn: c.in + (cursor - c.start), sourceOut: c.in + (ts - c.start), start: cursor, end: ts, reasons: [] });
-      spans.push({ kind: "encode", clipId: c.id, sourceIn: c.in + (Math.max(cursor, ts) - c.start), sourceOut: c.in + (te - c.start), start: Math.max(cursor, ts), end: te, reasons: ["title"] });
+      spans.push({ kind: "encode", clipId: c.id, sourceIn: c.in + (Math.max(cursor, ts) - c.start), sourceOut: c.in + (te - c.start), start: Math.max(cursor, ts), end: te, reasons: [why] });
       cursor = Math.max(cursor, te);
     }
     if (cursor < c.end) spans.push({ kind: "copy", clipId: c.id, sourceIn: c.in + (cursor - c.start), sourceOut: c.out, start: cursor, end: c.end, reasons: [] });
@@ -471,13 +543,23 @@ export function deserialize(json: string): Project | null {
   try {
     const p = JSON.parse(json) as Project;
     if (p?.version !== 1 || !Array.isArray(p.clips) || !p.media) return null;
-    return { ...newProject(), ...p, export: { ...DEFAULT_EXPORT, ...p.export }, preview: { ...DEFAULT_PREVIEW, ...(p.preview ?? {}) }, titles: (p.titles ?? []).map((t) => normalizeTitle(t)) };
+    return { ...newProject(), ...p, export: { ...DEFAULT_EXPORT, ...p.export }, preview: { ...DEFAULT_PREVIEW, ...(p.preview ?? {}) }, transition: { ...DEFAULT_TRANSITION, ...(p.transition ?? {}) }, titles: (p.titles ?? []).map((t) => normalizeTitle(t)) };
   } catch {
     return null;
   }
 }
 
 /** Copy one clip's grade onto others — "match the whole drive". */
+/** New clips start with their road noise well under the music. */
+export const DEFAULT_CLIP_GAIN_DB = -12;
+
+/** Copy one clip's original-audio gain and mute to the others. */
+export function applyAudioTo(clips: Clip[], fromId: string, toIds: string[] | "all"): Clip[] {
+  const src = clips.find((c) => c.id === fromId);
+  if (!src) return clips;
+  return clips.map((c) => (c.id !== fromId && (toIds === "all" || toIds.includes(c.id)) ? { ...c, gainDb: src.gainDb, muted: src.muted } : c));
+}
+
 export function applyGradeTo(clips: Clip[], fromId: string, toIds: string[] | "all"): Clip[] {
   const src = clips.find((c) => c.id === fromId);
   if (!src) return clips;
