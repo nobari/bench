@@ -78,6 +78,7 @@ const WIDGETS: Record<WidgetKey, React.ComponentType<Record<string, unknown>>> =
     () => import("@/components/widgets/image-converter").then((m) => m.ImageConverterWidget),
     { ssr: false, loading: Skeleton },
   ),
+  "video-editor": dynamic(() => import("@/components/widgets/video-editor").then((m) => m.VideoEditorWidget), { ssr: false, loading: Skeleton }),
   "slow-mo": dynamic(
     () => import("@/components/widgets/slow-mo").then((m) => m.SlowMoWidget),
     { ssr: false, loading: Skeleton },

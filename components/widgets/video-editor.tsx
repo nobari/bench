@@ -1,0 +1,899 @@
+"use client";
+
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { AlertTriangle, Clapperboard, Crop, Download, FolderOpen, Loader, Music, Pause, Play, Save, Scissors, SlidersHorizontal, Trash2, Type, Upload, Volume2 } from "lucide-react";
+import {
+  DEFAULT_EXPORT,
+  NEUTRAL_GRADE,
+  NEUTRAL_TRANSFORM,
+  appendMusic,
+  applyGradeTo,
+  clipAt,
+  crossfades,
+  estimateExport,
+  fmtTime,
+  musicLength,
+  newId,
+  newProject,
+  orderRecordings,
+  placeClips,
+  planExport,
+  removeRange,
+  splitClip,
+  timelineDuration,
+  type Clip,
+  type MediaRef,
+  type MusicTrack,
+  type Project,
+  type Title,
+} from "@/lib/tools/video/project";
+import { Grader, buildProxy, drawOverlays, encoderSupport, exportProject, probe } from "@/lib/tools/video/engine";
+import { ProjectStore, hasFileSystemAccess } from "@/lib/tools/video/store";
+import { cn } from "@/lib/utils";
+
+const SEL = "h-8 rounded-[var(--radius-sm)] border border-edge bg-base px-2 pr-7 text-[13px] text-ink outline-none focus:border-accent";
+const INPUT = "h-8 w-full rounded-[var(--radius-sm)] border border-edge bg-base px-2 text-[13px] text-ink outline-none focus:border-accent";
+const GHOST = "inline-flex h-8 items-center gap-1.5 rounded-[var(--radius-sm)] border border-edge px-2.5 text-[12.5px] text-muted transition-colors hover:border-accent hover:text-accent disabled:opacity-40";
+const PRIMARY = "inline-flex h-9 items-center gap-2 rounded-[var(--radius-sm)] bg-accent px-3.5 text-sm font-medium text-on-accent hover:bg-[var(--color-accent-hover)] disabled:opacity-40";
+const RANGE = "h-1.5 w-full cursor-pointer appearance-none rounded-full bg-raised accent-[var(--accent)]";
+const LANE_COLORS = ["#8cc63f", "#5ab3d6", "#d9a400"];
+type Tab = "trim" | "transform" | "colour" | "audio" | "titles" | "export";
+const TABS: [Tab, string, typeof Scissors][] = [
+  ["trim", "Trim", Scissors],
+  ["transform", "Rotate & crop", Crop],
+  ["colour", "Colour", SlidersHorizontal],
+  ["audio", "Audio", Volume2],
+  ["titles", "Titles & logo", Type],
+  ["export", "Export", Download],
+];
+
+interface Job {
+  kind: "proxy" | "export";
+  label: string;
+  fraction: number;
+  message?: string;
+  abort: AbortController;
+}
+
+function Slider({ label, value, min, max, step, onChange, format }: { label: string; value: number; min: number; max: number; step: number; onChange: (v: number) => void; format?: (v: number) => string }) {
+  return (
+    <label className="block text-[12.5px] text-muted">
+      <span className="flex items-center justify-between">
+        {label}
+        <span className="font-mono tabular text-ink">{format ? format(value) : value}</span>
+      </span>
+      <input type="range" min={min} max={max} step={step} value={value} onChange={(e) => onChange(Number(e.target.value))} onDoubleClick={() => onChange((min + max) / 2 === 0.5 ? 1 : 0)} className={cn(RANGE, "mt-1")} />
+    </label>
+  );
+}
+
+export function VideoEditorWidget() {
+  const [status, setStatus] = useState<string>("");
+  const [store] = useState(() => new ProjectStore(setStatus));
+  const [project, setProjectState] = useState<Project>(() => newProject());
+  const [folder, setFolder] = useState<string | null>(null);
+  const [recovered, setRecovered] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [selected, setSelected] = useState<string | null>(null);
+  const [selectedMusic, setSelectedMusic] = useState<string | null>(null);
+  const [tab, setTab] = useState<Tab>("trim");
+  const [playhead, setPlayhead] = useState(0);
+  const [playing, setPlaying] = useState(false);
+  const [zoom, setZoom] = useState(1);
+  const [job, setJob] = useState<Job | null>(null);
+  const [support, setSupport] = useState<{ hevc: boolean; avc: boolean } | null>(null);
+  const [logo, setLogo] = useState<ImageBitmap | null>(null);
+  const [dragOver, setDragOver] = useState(false);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const graderRef = useRef<Grader | null>(null);
+  const proxyUrls = useRef<Map<string, string>>(new Map());
+  const fileInput = useRef<HTMLInputElement>(null);
+  const musicInput = useRef<HTMLInputElement>(null);
+  const logoInput = useRef<HTMLInputElement>(null);
+  const timelineRef = useRef<HTMLDivElement>(null);
+  const [history, setHistory] = useState<Project[]>([]);
+  const [timelineWidth, setTimelineWidth] = useState(800);
+
+  const duration = timelineDuration(project);
+  const placed = useMemo(() => placeClips(project.clips), [project.clips]);
+  const spans = useMemo(() => planExport(project), [project]);
+  const estimate = useMemo(() => estimateExport(project, spans), [project, spans]);
+  const current = selected ? project.clips.find((c) => c.id === selected) : undefined;
+  const currentMusic = selectedMusic ? project.music.find((m) => m.id === selectedMusic) : undefined;
+  const fades = useMemo(() => crossfades(project.music), [project.music]);
+
+  // Every edit goes through here: history for undo, autosave to the folder.
+  const setProject = useCallback(
+    (update: Project | ((p: Project) => Project)) => {
+      setProjectState((prev) => {
+        const next = typeof update === "function" ? update(prev) : update;
+        setHistory((h) => [...h.slice(-49), prev]);
+        store.autosave(next);
+        return next;
+      });
+    },
+    [store],
+  );
+  const undo = useCallback(() => {
+    setHistory((h) => {
+      const prev = h[h.length - 1];
+      if (prev) setProjectState(prev);
+      return h.slice(0, -1);
+    });
+  }, []);
+
+  // Timeline scale needs the lane width; measured, never read from the ref during render.
+  useEffect(() => {
+    const el = timelineRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver((entries) => setTimelineWidth(Math.max(200, Math.round(entries[0].contentRect.width))));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  const loadProxies = useCallback(
+    async (p: Project) => {
+      for (const [id, px] of Object.entries(p.proxies)) {
+        if (!px.ready || !px.file || proxyUrls.current.has(id)) continue;
+        const f = await store.proxyFile(px.file);
+        if (f) proxyUrls.current.set(id, URL.createObjectURL(f));
+      }
+    },
+    [store],
+  );
+
+  useEffect(() => {
+    encoderSupport(7680, 4320).then(setSupport).catch(() => setSupport({ hevc: false, avc: false }));
+    const onUnload = () => void store.flush();
+    window.addEventListener("beforeunload", onUnload);
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === "z") {
+        e.preventDefault();
+        undo();
+      } else if ((e.metaKey || e.ctrlKey) && e.key === "s") {
+        e.preventDefault();
+        void store.save(project);
+      } else if (e.key === " " && !(e.target as HTMLElement).closest("input, textarea, select")) {
+        e.preventDefault();
+        setPlaying((p) => !p);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("beforeunload", onUnload);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [store, undo, project]);
+
+  // Try to reopen the last project folder silently.
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      if (!hasFileSystemAccess()) return;
+      if (!(await store.reopenLast())) return;
+      if (!active) return;
+      setFolder(store.folderName);
+      const loaded = await store.load();
+      if (loaded && active) {
+        setProjectState(loaded.project);
+        setRecovered(loaded.recovered);
+        for (const m of Object.values(loaded.project.media)) await store.resolveByName(m.id, m.name);
+        await loadProxies(loaded.project);
+      }
+    })().catch(() => undefined);
+    return () => {
+      active = false;
+    };
+  }, [store, loadProxies]);
+
+  const chooseFolder = async () => {
+    try {
+      await store.pickFolder();
+      setFolder(store.folderName);
+      const loaded = await store.load();
+      if (loaded) {
+        setProjectState(loaded.project);
+        setRecovered(loaded.recovered);
+        for (const m of Object.values(loaded.project.media)) await store.resolveByName(m.id, m.name);
+        await loadProxies(loaded.project);
+        setStatus(loaded.recovered ? "Recovered from autosave" : "Project opened");
+      } else {
+        await store.save(project);
+      }
+    } catch (e) {
+      if ((e as DOMException).name !== "AbortError") setError(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const addVideos = async (files: File[]) => {
+    const refs: MediaRef[] = [];
+    for (const f of files) {
+      const id = newId();
+      store.registerFile(id, f);
+      try {
+        const info = await probe(f);
+        if (!info.canDecode) {
+          setError(`${f.name}: this browser can't decode ${info.codec ?? "that codec"}.`);
+          continue;
+        }
+        refs.push({ id, name: f.name, size: f.size, duration: info.duration, width: info.width, height: info.height, fps: info.fps, codec: info.codec ?? undefined, hasAudio: info.hasAudio, sampleRate: info.sampleRate });
+      } catch (e) {
+        setError(`${f.name}: ${e instanceof Error ? e.message : "couldn't read the file."}`);
+      }
+    }
+    if (!refs.length) return;
+    // Consecutive recordings in name order, butted together.
+    const ordered = orderRecordings(refs);
+    setProject((p) => ({
+      ...p,
+      media: { ...p.media, ...Object.fromEntries(ordered.map((m) => [m.id, m])) },
+      clips: [...p.clips, ...ordered.map((m): Clip => ({ id: newId(), media: m.id, in: 0, out: m.duration, transform: { ...NEUTRAL_TRANSFORM, crop: { ...NEUTRAL_TRANSFORM.crop } }, grade: { ...NEUTRAL_GRADE }, gainDb: 0, muted: false }))],
+    }));
+    // Proxies in the background, one at a time.
+    if (store.hasFolder) for (const m of ordered) await makeProxy(m, files.find((f) => f.name === m.name)!);
+  };
+
+  const makeProxy = async (m: MediaRef, file: File) => {
+    const abort = new AbortController();
+    setJob({ kind: "proxy", label: `Proxy for ${m.name}`, fraction: 0, abort });
+    try {
+      const name = `${m.id}.proxy.mp4`;
+      const { writable } = await store.createWritable(name, "proxies");
+      await buildProxy(file, writable as unknown as WritableStream<import("mediabunny").StreamTargetChunk>, (f) => setJob((j) => (j ? { ...j, fraction: f } : j)), abort.signal);
+      const pf = await store.proxyFile(name);
+      if (pf) proxyUrls.current.set(m.id, URL.createObjectURL(pf));
+      setProject((p) => ({ ...p, proxies: { ...p.proxies, [m.id]: { ready: true, file: name } } }));
+    } catch (e) {
+      if ((e as DOMException).name !== "AbortError") setError(`Proxy failed for ${m.name}: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setJob(null);
+    }
+  };
+
+  const addMusic = async (files: File[]) => {
+    for (const f of files) {
+      const id = newId();
+      store.registerFile(id, f);
+      try {
+        const info = await probe(f);
+        const ref: MediaRef = { id, name: f.name, size: f.size, duration: info.duration, hasAudio: true, sampleRate: info.sampleRate };
+        setProject((p) => ({ ...p, media: { ...p.media, [id]: ref }, music: [...p.music, appendMusic(p.music, { id: newId(), media: id, lane: 0, in: 0, out: info.duration, gainDb: -12, muted: false, fadeIn: 2, fadeOut: 3, keyframes: [] })] }));
+      } catch (e) {
+        setError(`${f.name}: ${e instanceof Error ? e.message : "couldn't read the file."}`);
+      }
+    }
+  };
+
+  const addLogo = async (f: File) => {
+    const id = newId();
+    store.registerFile(id, f);
+    const bmp = await createImageBitmap(f);
+    setLogo(bmp);
+    setProject((p) => ({ ...p, media: { ...p.media, [id]: { id, name: f.name, size: f.size, duration: 0 } }, watermark: { ...p.watermark, media: id } }));
+  };
+
+  // Preview: proxy video element (or source file when no proxy) drawn through the grader.
+  const under = useMemo(() => clipAt(project.clips, Math.min(playhead, Math.max(0, duration - 0.001))), [project.clips, playhead, duration]);
+  const [previewSrc, setPreviewSrc] = useState<string | null>(null);
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      if (!under) return setPreviewSrc(null);
+      const id = under.clip.media;
+      let url = proxyUrls.current.get(id);
+      if (!url) {
+        const f = await store.getFile(id);
+        if (!f) return;
+        url = URL.createObjectURL(f);
+        proxyUrls.current.set(id, url);
+      }
+      if (active) setPreviewSrc(url);
+    })();
+    return () => {
+      active = false;
+    };
+  }, [under?.clip.media, store, under]);
+  useEffect(() => {
+    const v = videoRef.current;
+    if (!v || !under || !previewSrc) return;
+    if (v.src !== previewSrc) v.src = previewSrc;
+    if (Math.abs(v.currentTime - under.sourceTime) > 0.3) v.currentTime = under.sourceTime;
+    if (playing) void v.play().catch(() => undefined);
+    else v.pause();
+  }, [previewSrc, under, playing]);
+  useEffect(() => {
+    if (!playing) return;
+    let raf = 0;
+    const tick = () => {
+      const v = videoRef.current;
+      if (v && under) {
+        const t = under.clip.start + (v.currentTime - under.clip.in);
+        if (v.currentTime >= under.clip.out - 0.05) {
+          if (under.clip.end >= duration - 0.05) setPlaying(false);
+          setPlayhead(Math.min(duration, under.clip.end + 0.001));
+        } else setPlayhead(t);
+      }
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [playing, under, duration]);
+  // Draw the graded frame + overlays each animation frame.
+  useEffect(() => {
+    let raf = 0;
+    const draw = () => {
+      const v = videoRef.current, c = canvasRef.current;
+      if (v && c && under && v.readyState >= 2) {
+        const w = c.width, h = c.height;
+        try {
+          if (!graderRef.current || graderRef.current.canvas.width !== w) graderRef.current = new Grader(w, h);
+          graderRef.current.draw(v, under.clip.grade, under.clip.transform, v.videoWidth, v.videoHeight);
+          const ctx = c.getContext("2d")!;
+          ctx.drawImage(graderRef.current.canvas, 0, 0);
+          drawOverlays(ctx as unknown as OffscreenCanvasRenderingContext2D, w, h, playhead, project, logo);
+        } catch {
+          /* WebGL unavailable: fall back to the raw video element behind the canvas */
+        }
+      }
+      raf = requestAnimationFrame(draw);
+    };
+    raf = requestAnimationFrame(draw);
+    return () => cancelAnimationFrame(raf);
+  }, [under, playhead, project, logo]);
+
+  const update = (id: string, patch: Partial<Clip>) => setProject((p) => ({ ...p, clips: p.clips.map((c) => (c.id === id ? { ...c, ...patch } : c)) }));
+  const updateMusic = (id: string, patch: Partial<MusicTrack>) => setProject((p) => ({ ...p, music: p.music.map((m) => (m.id === id ? { ...m, ...patch } : m)) }));
+  const addTitle = (kind: Title["kind"]) => {
+    const t: Title = { id: newId(), kind, text: kind === "intro" ? project.name : "Title", subtitle: kind === "intro" ? new Date().toLocaleDateString() : "", start: kind === "intro" ? 0 : playhead, duration: kind === "intro" ? 4 : 5, fade: 1 };
+    setProject((p) => ({ ...p, titles: [...p.titles, t] }));
+  };
+
+  // Exposed for automated tests, which cannot drive the folder picker. Re-registered whenever the handlers change.
+  useEffect(() => {
+    (window as unknown as { __benchVideo?: unknown }).__benchVideo = {
+      useDirectory: (d: FileSystemDirectoryHandle) => {
+        store.useDirectory(d);
+        setFolder(d.name || "test");
+      },
+      addVideos,
+      addMusic,
+      getProject: () => project,
+    };
+  });
+
+  const runExport = async () => {
+    if (!store.hasFolder) return setError("Pick a project folder first — the export is written there.");
+    const abort = new AbortController();
+    setJob({ kind: "export", label: "Exporting", fraction: 0, abort });
+    try {
+      const name = `${project.name.replace(/[^\w-]+/g, "-")}-${project.export.resolution === "source" ? "8K" : project.export.resolution + "p"}.mp4`;
+      const { writable } = await store.createWritable(name);
+      await exportProject({
+        project,
+        getFile: (id) => store.getFile(id),
+        logo,
+        writable: writable as unknown as WritableStream<import("mediabunny").StreamTargetChunk>,
+        signal: abort.signal,
+        onProgress: ({ phase, fraction, span }) => setJob((j) => (j ? { ...j, fraction, message: phase === "video" ? `${span?.kind === "copy" ? "Copying" : "Rendering"} ${span ? fmtTime(span.start) : ""}` : phase === "audio" ? "Mixing audio" : "Finishing the file" } : j)),
+      });
+      setStatus(`Exported ${name}`);
+    } catch (e) {
+      if ((e as DOMException).name !== "AbortError") setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setJob(null);
+    }
+  };
+
+  const pxPerSec = (timelineWidth / Math.max(10, duration)) * zoom;
+  const seekFromEvent = (e: React.PointerEvent<HTMLDivElement>) => {
+    const r = e.currentTarget.getBoundingClientRect();
+    setPlayhead(Math.max(0, Math.min(duration, (e.clientX - r.left + e.currentTarget.scrollLeft) / pxPerSec)));
+  };
+  const first = project.media[project.clips[0]?.media ?? ""];
+  const previewAspect = first?.width && first.height ? first.width / first.height : 16 / 9;
+
+  return (
+    <div className="space-y-3">
+      {/* project bar */}
+      <div className="panel flex flex-wrap items-center gap-2 p-2">
+        <button type="button" onClick={chooseFolder} className={cn(GHOST, "h-9")} disabled={!hasFileSystemAccess()}>
+          <FolderOpen size={14} /> {folder ? folder : "Choose project folder"}
+        </button>
+        <input value={project.name} onChange={(e) => setProject((p) => ({ ...p, name: e.target.value }))} className={cn(INPUT, "w-48")} aria-label="Project name" />
+        <button type="button" onClick={() => void store.save(project)} disabled={!folder} className={GHOST}>
+          <Save size={13} /> Save
+        </button>
+        <button type="button" onClick={undo} disabled={!history.length} className={GHOST}>
+          Undo
+        </button>
+        <span className="text-[12px] text-faint">{status}</span>
+        {recovered && <span className="rounded-[var(--radius-sm)] bg-accent-soft px-2 py-0.5 text-[12px] text-accent">Recovered unsaved work from the autosave</span>}
+        {!hasFileSystemAccess() && <span className="text-[12px] text-warn">Needs Chrome or Edge for folder access, proxies and 8K export.</span>}
+        {support && !support.hevc && <span className="text-[12px] text-warn">No hardware HEVC 8K encoder found here — exports will use H.264 or need a lower resolution.</span>}
+        <div className="ml-auto flex items-center gap-2">
+          <input ref={fileInput} type="file" accept="video/*,.mp4,.mov" multiple hidden onChange={(e) => e.target.files && void addVideos(Array.from(e.target.files))} />
+          <button type="button" onClick={() => fileInput.current?.click()} className={cn(PRIMARY, "h-8 px-3 text-[13px]")}>
+            <Upload size={13} /> Add recordings
+          </button>
+        </div>
+      </div>
+      {error && (
+        <p className="flex items-center gap-1.5 text-[13px] text-danger">
+          <AlertTriangle size={14} /> {error}
+          <button type="button" onClick={() => setError(null)} className="ml-2 text-faint hover:text-ink">
+            dismiss
+          </button>
+        </p>
+      )}
+      {job && (
+        <div className="panel flex items-center gap-3 p-2 text-[13px]">
+          <Loader size={14} className="animate-spin text-accent" />
+          <span className="text-ink">{job.label}</span>
+          <span className="text-muted">{job.message}</span>
+          <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-raised">
+            <div className="h-full bg-accent transition-[width]" style={{ width: `${Math.round(job.fraction * 100)}%` }} />
+          </div>
+          <span className="font-mono text-[12px] text-muted tabular">{Math.round(job.fraction * 100)}%</span>
+          <button type="button" onClick={() => job.abort.abort()} className={GHOST}>
+            Cancel
+          </button>
+        </div>
+      )}
+
+      {/* preview + inspector */}
+      <div className="grid gap-3 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
+        <div className="panel p-2">
+          <div
+            className={cn("relative overflow-hidden rounded-[var(--radius-sm)] bg-black", dragOver && "ring-2 ring-accent")}
+            style={{ aspectRatio: String(previewAspect) }}
+            onDragOver={(e) => {
+              e.preventDefault();
+              setDragOver(true);
+            }}
+            onDragLeave={() => setDragOver(false)}
+            onDrop={(e) => {
+              e.preventDefault();
+              setDragOver(false);
+              const fs = Array.from(e.dataTransfer.files);
+              void addVideos(fs.filter((f) => f.type.startsWith("video/") || /\.(mp4|mov)$/i.test(f.name)));
+              void addMusic(fs.filter((f) => f.type.startsWith("audio/")));
+            }}
+          >
+            <video ref={videoRef} muted playsInline className="absolute inset-0 h-full w-full object-contain opacity-0" />
+            <canvas ref={canvasRef} width={1280} height={Math.round(1280 / previewAspect)} className="absolute inset-0 h-full w-full object-contain" />
+            {!project.clips.length && (
+              <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 p-6 text-center text-[13.5px] text-white/80">
+                <Clapperboard size={28} />
+                <span className="text-[15px] font-medium">Drop your drive recordings here</span>
+                <span className="max-w-sm text-[12.5px] text-white/60">8K at the original frame rate. Consecutive DJI files are joined in order. Choose a project folder first so proxies and autosaves have somewhere to live.</span>
+              </div>
+            )}
+          </div>
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <button type="button" onClick={() => setPlaying((p) => !p)} disabled={!project.clips.length} className={cn(PRIMARY, "h-8 px-3 text-[13px]")}>
+              {playing ? <Pause size={13} /> : <Play size={13} />}
+              {playing ? "Pause" : "Play"}
+            </button>
+            <span className="font-mono text-[13px] text-ink tabular">
+              {fmtTime(playhead, first?.fps)} <span className="text-faint">/ {fmtTime(duration)}</span>
+            </span>
+            {under && (
+              <span className="truncate text-[12px] text-faint">
+                {project.media[under.clip.media]?.name} · {project.proxies[under.clip.media]?.ready ? "proxy" : "full-res (no proxy yet)"}
+              </span>
+            )}
+            <label className="ml-auto flex items-center gap-1.5 text-[12px] text-muted">
+              Zoom
+              <input type="range" min={1} max={40} step={1} value={zoom} onChange={(e) => setZoom(Number(e.target.value))} className={cn(RANGE, "w-28")} />
+            </label>
+          </div>
+        </div>
+
+        <div className="panel flex min-w-0 flex-col">
+          <div className="flex flex-wrap gap-1 border-b border-edge px-2 py-1.5">
+            {TABS.map(([id, label, Icon]) => (
+              <button key={id} type="button" onClick={() => setTab(id)} className={cn("flex h-7 items-center gap-1 rounded-[var(--radius-sm)] px-2 text-[12.5px]", tab === id ? "bg-accent font-medium text-on-accent" : "text-muted hover:bg-raised hover:text-ink")}>
+                <Icon size={13} /> {label}
+              </button>
+            ))}
+          </div>
+          <div className="min-h-[260px] space-y-3 p-3 text-[13px]">
+            {tab === "trim" && (
+              <>
+                <p className="text-muted">{current ? `${project.media[current.media]?.name} · ${fmtTime(current.in)} → ${fmtTime(current.out)} (${fmtTime(current.out - current.in)})` : "Select a clip on the timeline, or move the playhead and use the buttons."}</p>
+                <div className="flex flex-wrap gap-1.5">
+                  <button type="button" disabled={!under} onClick={() => under && setProject((p) => ({ ...p, clips: splitClip(p.clips, under.clip.id, playhead) }))} className={GHOST}>
+                    <Scissors size={13} /> Split at playhead
+                  </button>
+                  <button type="button" disabled={!under} onClick={() => under && update(under.clip.id, { in: under.sourceTime })} className={GHOST}>
+                    Trim start to here
+                  </button>
+                  <button type="button" disabled={!under} onClick={() => under && update(under.clip.id, { out: under.sourceTime })} className={GHOST}>
+                    Trim end to here
+                  </button>
+                  <button type="button" disabled={!current} onClick={() => current && setProject((p) => ({ ...p, clips: p.clips.filter((c) => c.id !== current.id) }))} className={cn(GHOST, "hover:border-danger hover:text-danger")}>
+                    <Trash2 size={13} /> Delete clip
+                  </button>
+                </div>
+                <RangeCut duration={duration} onCut={(a, b) => setProject((p) => ({ ...p, clips: removeRange(p.clips, a, b) }))} />
+                {current && (
+                  <div className="grid grid-cols-2 gap-2">
+                    <label className="text-[12.5px] text-muted">
+                      In (s)
+                      <input type="number" step={0.01} value={current.in} onChange={(e) => update(current.id, { in: Math.max(0, Math.min(current.out - 0.1, Number(e.target.value))) })} className={cn(INPUT, "mt-1 font-mono")} />
+                    </label>
+                    <label className="text-[12.5px] text-muted">
+                      Out (s)
+                      <input type="number" step={0.01} value={current.out} onChange={(e) => update(current.id, { out: Math.min(project.media[current.media]?.duration ?? current.out, Math.max(current.in + 0.1, Number(e.target.value))) })} className={cn(INPUT, "mt-1 font-mono")} />
+                    </label>
+                  </div>
+                )}
+              </>
+            )}
+            {tab === "transform" && (current ? (
+              <>
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className="text-muted">Rotate</span>
+                  {([0, 1, 2, 3] as const).map((q) => (
+                    <button key={q} type="button" onClick={() => update(current.id, { transform: { ...current.transform, rotate: q } })} className={cn("h-7 rounded-[var(--radius-sm)] border px-2 text-[12.5px]", current.transform.rotate === q ? "border-accent bg-accent-soft text-accent" : "border-edge text-muted")}>
+                      {q * 90}°
+                    </button>
+                  ))}
+                </div>
+                <Slider label="Straighten" value={current.transform.straighten} min={-10} max={10} step={0.1} onChange={(v) => update(current.id, { transform: { ...current.transform, straighten: v } })} format={(v) => `${v.toFixed(1)}°`} />
+                <div className="grid grid-cols-2 gap-2">
+                  {(["x", "y", "w", "h"] as const).map((k) => (
+                    <Slider key={k} label={{ x: "Crop left", y: "Crop top", w: "Crop width", h: "Crop height" }[k]} value={current.transform.crop[k]} min={k === "w" || k === "h" ? 0.1 : 0} max={1} step={0.005} onChange={(v) => update(current.id, { transform: { ...current.transform, crop: { ...current.transform.crop, [k]: v } } })} format={(v) => `${Math.round(v * 100)}%`} />
+                  ))}
+                </div>
+                <div className="flex gap-1.5">
+                  <button type="button" onClick={() => update(current.id, { transform: { ...NEUTRAL_TRANSFORM, crop: { ...NEUTRAL_TRANSFORM.crop } } })} className={GHOST}>
+                    Reset
+                  </button>
+                  <button type="button" onClick={() => setProject((p) => ({ ...p, clips: p.clips.map((c) => ({ ...c, transform: { ...current.transform, crop: { ...current.transform.crop } } })) }))} className={GHOST}>
+                    Apply to all clips
+                  </button>
+                </div>
+              </>
+            ) : <p className="text-muted">Select a clip to rotate, straighten or crop it.</p>)}
+            {tab === "colour" && (current ? (
+              <>
+                <label className="flex items-center justify-between gap-2 text-muted">
+                  Conversion LUT
+                  <select value={current.grade.lut} onChange={(e) => update(current.id, { grade: { ...current.grade, lut: e.target.value as Clip["grade"]["lut"] } })} className={SEL}>
+                    <option value="none">None (Rec.709 footage)</option>
+                    <option value="dlog">DJI D-Log → Rec.709</option>
+                    <option value="dlogm">DJI D-Log M → Rec.709</option>
+                  </select>
+                </label>
+                <Slider label="Exposure" value={current.grade.exposure} min={-3} max={3} step={0.05} onChange={(v) => update(current.id, { grade: { ...current.grade, exposure: v } })} format={(v) => `${v > 0 ? "+" : ""}${v.toFixed(2)} EV`} />
+                <Slider label="Temperature" value={current.grade.temperature} min={-100} max={100} step={1} onChange={(v) => update(current.id, { grade: { ...current.grade, temperature: v } })} format={(v) => (v > 0 ? `warm +${v}` : v < 0 ? `cool ${v}` : "neutral")} />
+                <Slider label="Tint" value={current.grade.tint} min={-100} max={100} step={1} onChange={(v) => update(current.id, { grade: { ...current.grade, tint: v } })} format={(v) => (v > 0 ? `magenta +${v}` : v < 0 ? `green ${v}` : "neutral")} />
+                <Slider label="Contrast" value={current.grade.contrast} min={0.5} max={1.8} step={0.01} onChange={(v) => update(current.id, { grade: { ...current.grade, contrast: v } })} format={(v) => v.toFixed(2)} />
+                <Slider label="Saturation" value={current.grade.saturation} min={0} max={2} step={0.01} onChange={(v) => update(current.id, { grade: { ...current.grade, saturation: v } })} format={(v) => v.toFixed(2)} />
+                <div className="flex flex-wrap gap-1.5">
+                  <button type="button" onClick={() => update(current.id, { grade: { ...NEUTRAL_GRADE } })} className={GHOST}>
+                    Reset
+                  </button>
+                  <button type="button" onClick={() => setProject((p) => ({ ...p, clips: applyGradeTo(p.clips, current.id, "all") }))} className={cn(GHOST, "border-accent text-accent")}>
+                    Apply this look to all clips
+                  </button>
+                </div>
+                <p className="text-[12px] text-faint">Grading re-encodes that clip on export; with no grade, rotation or crop the clip is copied without re-encoding.</p>
+              </>
+            ) : <p className="text-muted">Select a clip to grade it. Apply the LUT once, then copy the look to every clip for a consistent drive.</p>)}
+            {tab === "audio" && (
+              <>
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <input ref={musicInput} type="file" accept="audio/*" multiple hidden onChange={(e) => e.target.files && void addMusic(Array.from(e.target.files))} />
+                  <button type="button" onClick={() => musicInput.current?.click()} className={GHOST}>
+                    <Music size={13} /> Add music
+                  </button>
+                  {current && (
+                    <>
+                      <span className="ml-2 text-muted">Original audio</span>
+                      <label className="flex items-center gap-1 text-muted">
+                        <input type="checkbox" checked={current.muted} onChange={(e) => update(current.id, { muted: e.target.checked })} className="accent-[var(--accent)]" /> mute
+                      </label>
+                    </>
+                  )}
+                </div>
+                {current && <Slider label={`Original audio gain · ${project.media[current.media]?.name}`} value={current.gainDb} min={-60} max={12} step={0.5} onChange={(v) => update(current.id, { gainDb: v })} format={(v) => (v <= -60 ? "off" : `${v > 0 ? "+" : ""}${v} dB`)} />}
+                {currentMusic ? (
+                  <div className="space-y-2 border-t border-edge pt-2">
+                    <div className="flex items-center justify-between">
+                      <span className="font-medium text-ink">{project.media[currentMusic.media]?.name}</span>
+                      <button type="button" onClick={() => setProject((p) => ({ ...p, music: p.music.filter((m) => m.id !== currentMusic.id) }))} className="text-faint hover:text-danger">
+                        <Trash2 size={13} />
+                      </button>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <label className="text-[12.5px] text-muted">
+                        Starts at (s)
+                        <input type="number" step={0.1} value={currentMusic.start} onChange={(e) => updateMusic(currentMusic.id, { start: Math.max(0, Number(e.target.value)) })} className={cn(INPUT, "mt-1 font-mono")} />
+                      </label>
+                      <label className="text-[12.5px] text-muted">
+                        Lane
+                        <select value={currentMusic.lane} onChange={(e) => updateMusic(currentMusic.id, { lane: Number(e.target.value) })} className={cn(SEL, "mt-1 w-full")}>
+                          {[0, 1, 2].map((l) => (
+                            <option key={l} value={l}>
+                              Music {l + 1}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    </div>
+                    <Slider label="Gain" value={currentMusic.gainDb} min={-60} max={12} step={0.5} onChange={(v) => updateMusic(currentMusic.id, { gainDb: v })} format={(v) => (v <= -60 ? "off" : `${v > 0 ? "+" : ""}${v} dB`)} />
+                    <div className="grid grid-cols-2 gap-2">
+                      <Slider label="Fade in" value={currentMusic.fadeIn} min={0} max={15} step={0.5} onChange={(v) => updateMusic(currentMusic.id, { fadeIn: v })} format={(v) => `${v} s`} />
+                      <Slider label="Fade out" value={currentMusic.fadeOut} min={0} max={15} step={0.5} onChange={(v) => updateMusic(currentMusic.id, { fadeOut: v })} format={(v) => `${v} s`} />
+                    </div>
+                    <label className="flex items-center gap-1 text-muted">
+                      <input type="checkbox" checked={currentMusic.muted} onChange={(e) => updateMusic(currentMusic.id, { muted: e.target.checked })} className="accent-[var(--accent)]" /> mute
+                    </label>
+                    <div>
+                      <div className="flex items-center justify-between text-[12.5px] text-muted">
+                        Volume keyframes
+                        <button type="button" onClick={() => updateMusic(currentMusic.id, { keyframes: [...currentMusic.keyframes, { t: Math.max(0, playhead - currentMusic.start), db: currentMusic.gainDb }].sort((a, b) => a.t - b.t) })} className={GHOST}>
+                          + at playhead
+                        </button>
+                      </div>
+                      {currentMusic.keyframes.map((k, i) => (
+                        <div key={i} className="mt-1 flex items-center gap-2 text-[12.5px]">
+                          <span className="font-mono text-faint">{fmtTime(currentMusic.start + k.t)}</span>
+                          <input type="range" min={-60} max={12} step={0.5} value={k.db} onChange={(e) => updateMusic(currentMusic.id, { keyframes: currentMusic.keyframes.map((x, j) => (j === i ? { ...x, db: Number(e.target.value) } : x)) })} className={RANGE} />
+                          <span className="w-14 font-mono text-ink tabular">{k.db <= -60 ? "off" : `${k.db} dB`}</span>
+                          <button type="button" onClick={() => updateMusic(currentMusic.id, { keyframes: currentMusic.keyframes.filter((_, j) => j !== i) })} className="text-faint hover:text-danger">
+                            ×
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                    {fades.filter((f) => f.a === currentMusic.id || f.b === currentMusic.id).map((f) => (
+                      <p key={f.a + f.b} className="text-[12px] text-faint">
+                        Crossfades with the neighbouring track from {fmtTime(f.from)} to {fmtTime(f.to)} ({(f.to - f.from).toFixed(1)} s, equal-power).
+                      </p>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-faint">Music lands after the previous track on its lane, overlapping by 2 s for a crossfade. Select a track on the timeline to adjust it; tracks on different lanes play together.</p>
+                )}
+              </>
+            )}
+            {tab === "titles" && (
+              <>
+                <div className="flex flex-wrap gap-1.5">
+                  <button type="button" onClick={() => addTitle("intro")} className={GHOST}>
+                    + Intro card
+                  </button>
+                  <button type="button" onClick={() => addTitle("title")} className={GHOST}>
+                    + Title at playhead
+                  </button>
+                  <button type="button" onClick={() => addTitle("lowerThird")} className={GHOST}>
+                    + Lower third
+                  </button>
+                  <input ref={logoInput} type="file" accept="image/png,image/svg+xml,image/webp" hidden onChange={(e) => e.target.files?.[0] && void addLogo(e.target.files[0])} />
+                  <button type="button" onClick={() => logoInput.current?.click()} className={GHOST}>
+                    {logo ? "Replace logo" : "+ Logo watermark"}
+                  </button>
+                </div>
+                {project.titles.map((t) => (
+                  <div key={t.id} className="space-y-1.5 rounded-[var(--radius-sm)] border border-edge p-2">
+                    <div className="flex items-center gap-2">
+                      <span className="text-[12px] capitalize text-faint">{t.kind === "lowerThird" ? "lower third" : t.kind}</span>
+                      <input value={t.text} onChange={(e) => setProject((p) => ({ ...p, titles: p.titles.map((x) => (x.id === t.id ? { ...x, text: e.target.value } : x)) }))} className={INPUT} aria-label="Title text" />
+                      <button type="button" onClick={() => setProject((p) => ({ ...p, titles: p.titles.filter((x) => x.id !== t.id) }))} className="text-faint hover:text-danger">
+                        <Trash2 size={13} />
+                      </button>
+                    </div>
+                    <input value={t.subtitle ?? ""} onChange={(e) => setProject((p) => ({ ...p, titles: p.titles.map((x) => (x.id === t.id ? { ...x, subtitle: e.target.value } : x)) }))} placeholder="Subtitle (optional)" className={INPUT} aria-label="Subtitle" />
+                    <div className="grid grid-cols-3 gap-2 text-[12px] text-muted">
+                      <label>
+                        Start (s)
+                        <input type="number" step={0.1} value={t.start} onChange={(e) => setProject((p) => ({ ...p, titles: p.titles.map((x) => (x.id === t.id ? { ...x, start: Math.max(0, Number(e.target.value)) } : x)) }))} className={cn(INPUT, "mt-0.5 font-mono")} />
+                      </label>
+                      <label>
+                        Length (s)
+                        <input type="number" step={0.5} value={t.duration} onChange={(e) => setProject((p) => ({ ...p, titles: p.titles.map((x) => (x.id === t.id ? { ...x, duration: Math.max(0.5, Number(e.target.value)) } : x)) }))} className={cn(INPUT, "mt-0.5 font-mono")} />
+                      </label>
+                      <label>
+                        Fade (s)
+                        <input type="number" step={0.25} value={t.fade} onChange={(e) => setProject((p) => ({ ...p, titles: p.titles.map((x) => (x.id === t.id ? { ...x, fade: Math.max(0, Number(e.target.value)) } : x)) }))} className={cn(INPUT, "mt-0.5 font-mono")} />
+                      </label>
+                    </div>
+                  </div>
+                ))}
+                {project.watermark.media && (
+                  <div className="space-y-2 border-t border-edge pt-2">
+                    <div className="flex flex-wrap items-center gap-1.5 text-muted">
+                      Logo corner
+                      {(["tl", "tr", "bl", "br"] as const).map((c) => (
+                        <button key={c} type="button" onClick={() => setProject((p) => ({ ...p, watermark: { ...p.watermark, corner: c } }))} className={cn("h-7 rounded-[var(--radius-sm)] border px-2 text-[12px] uppercase", project.watermark.corner === c ? "border-accent bg-accent-soft text-accent" : "border-edge")}>
+                          {c}
+                        </button>
+                      ))}
+                      <button type="button" onClick={() => { setLogo(null); setProject((p) => ({ ...p, watermark: { ...p.watermark, media: null } })); }} className="ml-auto text-faint hover:text-danger">
+                        remove
+                      </button>
+                    </div>
+                    <Slider label="Logo size" value={project.watermark.size} min={0.03} max={0.3} step={0.005} onChange={(v) => setProject((p) => ({ ...p, watermark: { ...p.watermark, size: v } }))} format={(v) => `${Math.round(v * 100)}% of width`} />
+                    <Slider label="Opacity" value={project.watermark.opacity} min={0.1} max={1} step={0.05} onChange={(v) => setProject((p) => ({ ...p, watermark: { ...p.watermark, opacity: v } }))} format={(v) => `${Math.round(v * 100)}%`} />
+                  </div>
+                )}
+              </>
+            )}
+            {tab === "export" && (
+              <>
+                <div className="grid grid-cols-2 gap-2">
+                  <label className="text-[12.5px] text-muted">
+                    Codec
+                    <select value={project.export.codec} onChange={(e) => setProject((p) => ({ ...p, export: { ...p.export, codec: e.target.value as "hevc" | "avc" } }))} className={cn(SEL, "mt-1 w-full")}>
+                      <option value="hevc">HEVC / H.265 (recommended for 8K)</option>
+                      <option value="avc">H.264 (compatibility)</option>
+                    </select>
+                  </label>
+                  <label className="text-[12.5px] text-muted">
+                    Resolution
+                    <select value={String(project.export.resolution)} onChange={(e) => setProject((p) => ({ ...p, export: { ...p.export, resolution: e.target.value === "source" ? "source" : (Number(e.target.value) as 2160 | 1440 | 1080) } }))} className={cn(SEL, "mt-1 w-full")}>
+                      <option value="source">Source ({first?.width ?? "—"} × {first?.height ?? "—"})</option>
+                      <option value="2160">4K (2160p)</option>
+                      <option value="1440">1440p</option>
+                      <option value="1080">1080p</option>
+                    </select>
+                  </label>
+                  <label className="text-[12.5px] text-muted">
+                    Encoder preset
+                    <select value={project.export.preset} onChange={(e) => setProject((p) => ({ ...p, export: { ...p.export, preset: e.target.value as "quality" | "balanced" | "fast" } }))} className={cn(SEL, "mt-1 w-full")}>
+                      <option value="quality">Quality</option>
+                      <option value="balanced">Balanced</option>
+                      <option value="fast">Fast</option>
+                    </select>
+                  </label>
+                  <label className="text-[12.5px] text-muted">
+                    Audio bitrate
+                    <select value={project.export.audioBitrateKbps} onChange={(e) => setProject((p) => ({ ...p, export: { ...p.export, audioBitrateKbps: Number(e.target.value) } }))} className={cn(SEL, "mt-1 w-full")}>
+                      {[128, 192, 256, 320].map((b) => (
+                        <option key={b} value={b}>
+                          {b} kbps AAC
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+                <Slider label="Video bitrate" value={project.export.bitrateMbps} min={10} max={300} step={5} onChange={(v) => setProject((p) => ({ ...p, export: { ...p.export, bitrateMbps: v } }))} format={(v) => `${v} Mbps${v >= 80 && v <= 160 ? " · YouTube 8K range" : ""}`} />
+                <label className="flex items-center gap-1.5 text-muted">
+                  <input type="checkbox" checked={project.export.smartCopy} onChange={(e) => setProject((p) => ({ ...p, export: { ...p.export, smartCopy: e.target.checked } }))} className="accent-[var(--accent)]" />
+                  Smart copy — pass untouched footage through without re-encoding
+                </label>
+                <div className="rounded-[var(--radius-sm)] bg-base p-2 text-[12.5px]">
+                  <div className="flex flex-wrap gap-x-4 gap-y-1">
+                    <span>
+                      Copied <span className="font-mono text-ink">{fmtTime(estimate.copySeconds)}</span>
+                    </span>
+                    <span>
+                      Re-encoded <span className="font-mono text-ink">{fmtTime(estimate.encodeSeconds)}</span>
+                    </span>
+                    <span>
+                      About <span className="font-mono text-ink">{(estimate.bytes / 1e9).toFixed(1)} GB</span>
+                    </span>
+                    <span>
+                      Roughly <span className="font-mono text-ink">{fmtTime(estimate.wallSeconds)}</span> to export
+                    </span>
+                  </div>
+                  {spans.some((s) => s.kind === "encode") && <p className="mt-1 text-faint">Re-encoding because: {[...new Set(spans.flatMap((s) => s.reasons))].join(", ") || "titles"}.</p>}
+                </div>
+                <button type="button" onClick={() => void runExport()} disabled={!project.clips.length || !!job} className={PRIMARY}>
+                  <Download size={14} /> Export to project folder
+                </button>
+                <p className="text-[12px] text-faint">Upload the file to YouTube as-is: HEVC in MP4 at 80–160 Mbps is what YouTube recommends for 8K. Keep the browser tab in front while exporting.</p>
+              </>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* timeline */}
+      <div className="panel p-2">
+        <div ref={timelineRef} className="relative overflow-x-auto" onPointerDown={seekFromEvent}>
+          <div className="relative" style={{ width: Math.max(100, duration * pxPerSec + 40), minHeight: 150 }}>
+            {/* ruler */}
+            <div className="h-5 border-b border-edge text-[10px] text-faint">
+              {Array.from({ length: Math.ceil(duration / rulerStep(duration, zoom)) + 1 }, (_, i) => i * rulerStep(duration, zoom)).map((t) => (
+                <span key={t} className="absolute top-0" style={{ left: t * pxPerSec }}>
+                  {fmtTime(t)}
+                </span>
+              ))}
+            </div>
+            {/* video lane */}
+            <div className="relative mt-1 h-12">
+              {placed.map((c) => (
+                <button
+                  key={c.id}
+                  type="button"
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onClick={() => {
+                    setSelected(c.id);
+                    setSelectedMusic(null);
+                    setPlayhead(c.start);
+                  }}
+                  className={cn("absolute top-0 h-full overflow-hidden rounded-[var(--radius-sm)] border px-2 text-left text-[11.5px]", selected === c.id ? "border-accent bg-accent-soft text-ink" : "border-edge bg-raised text-muted")}
+                  style={{ left: c.start * pxPerSec, width: Math.max(4, (c.end - c.start) * pxPerSec - 1) }}
+                  title={`${project.media[c.media]?.name} ${fmtTime(c.in)}–${fmtTime(c.out)}`}
+                >
+                  <span className="block truncate font-medium">{project.media[c.media]?.name}</span>
+                  <span className="block truncate text-faint">
+                    {c.grade.lut !== "none" || c.grade.exposure || c.grade.saturation !== 1 ? "graded · " : ""}
+                    {c.transform.rotate || c.transform.straighten || c.transform.crop.w !== 1 || c.transform.crop.h !== 1 ? "cropped · " : ""}
+                    {fmtTime(c.end - c.start)}
+                  </span>
+                </button>
+              ))}
+            </div>
+            {/* title lane */}
+            <div className="relative mt-1 h-5">
+              {project.titles.map((t) => (
+                <div key={t.id} className="absolute top-0 h-full truncate rounded-[3px] bg-[#e5484d]/70 px-1 text-[10.5px] text-white" style={{ left: t.start * pxPerSec, width: Math.max(4, t.duration * pxPerSec) }} title={t.text}>
+                  {t.text}
+                </div>
+              ))}
+            </div>
+            {/* music lanes */}
+            {[0, 1, 2].map((lane) => (
+              <div key={lane} className="relative mt-1 h-7">
+                {project.music.filter((m) => m.lane === lane).map((m) => (
+                  <button
+                    key={m.id}
+                    type="button"
+                    onPointerDown={(e) => e.stopPropagation()}
+                    onClick={() => {
+                      setSelectedMusic(m.id);
+                      setSelected(null);
+                      setTab("audio");
+                    }}
+                    className={cn("absolute top-0 h-full truncate rounded-[3px] border px-1.5 text-left text-[11px]", selectedMusic === m.id ? "border-ink" : "border-transparent", m.muted && "opacity-40")}
+                    style={{ left: m.start * pxPerSec, width: Math.max(4, musicLength(m) * pxPerSec), backgroundColor: LANE_COLORS[lane] + "66" }}
+                    title={project.media[m.media]?.name}
+                  >
+                    {project.media[m.media]?.name} {m.gainDb <= -60 ? "(off)" : `${m.gainDb} dB`}
+                  </button>
+                ))}
+              </div>
+            ))}
+            {/* playhead */}
+            <div className="pointer-events-none absolute bottom-0 top-0 w-px bg-[#e5484d]" style={{ left: playhead * pxPerSec }} />
+          </div>
+        </div>
+        <p className="mt-1 text-[11.5px] text-faint">Click the ruler to seek · space plays · ⌘Z undoes · ⌘S saves. Clips are shown in playback order; music lanes stack, and overlaps on one lane crossfade.</p>
+      </div>
+    </div>
+  );
+}
+
+function rulerStep(duration: number, zoom: number): number {
+  const target = Math.max(10, duration) / (8 * zoom);
+  for (const s of [1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600]) if (s >= target) return s;
+  return 3600;
+}
+
+function RangeCut({ duration, onCut }: { duration: number; onCut: (a: number, b: number) => void }) {
+  const [a, setA] = useState("");
+  const [b, setB] = useState("");
+  const parse = (s: string) => s.split(":").reduce((acc, n) => acc * 60 + Number(n), 0);
+  const from = parse(a), to = parse(b);
+  const valid = a && b && Number.isFinite(from) && Number.isFinite(to) && to > from && from >= 0 && to <= duration;
+  return (
+    <div className="flex flex-wrap items-center gap-2 text-[12.5px] text-muted">
+      Remove from
+      <input value={a} onChange={(e) => setA(e.target.value)} placeholder="1:02:30" className={cn(INPUT, "w-24 font-mono")} aria-label="Remove from" />
+      to
+      <input value={b} onChange={(e) => setB(e.target.value)} placeholder="1:10:00" className={cn(INPUT, "w-24 font-mono")} aria-label="Remove to" />
+      <button type="button" disabled={!valid} onClick={() => { onCut(from, to); setA(""); setB(""); }} className={GHOST}>
+        Cut it out
+      </button>
+      <span className="text-faint">— e.g. a petrol stop; the footage stays continuous.</span>
+    </div>
+  );
+}
+
+export { DEFAULT_EXPORT };

@@ -4,7 +4,7 @@
 
 <p>
   <a href="https://bench.bozmoz.com"><img alt="bench.bozmoz.com" src="https://img.shields.io/badge/live-bench.bozmoz.com-68a52a?style=flat-square&labelColor=1c2414"></a>
-  <a href="#tools"><img alt="56 tools" src="https://img.shields.io/badge/tools-56-68a52a?style=flat-square&labelColor=1c2414"></a>
+  <a href="#tools"><img alt="57 tools" src="https://img.shields.io/badge/tools-57-68a52a?style=flat-square&labelColor=1c2414"></a>
   <a href="https://nextjs.org"><img alt="Next.js 16" src="https://img.shields.io/badge/Next.js-16-1e2419?style=flat-square&logo=nextdotjs&logoColor=white&labelColor=1c2414"></a>
   <a href="https://react.dev"><img alt="React 19" src="https://img.shields.io/badge/React-19-149eca?style=flat-square&logo=react&logoColor=white&labelColor=1c2414"></a>
   <a href="https://www.typescriptlang.org"><img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-5-3178c6?style=flat-square&logo=typescript&logoColor=white&labelColor=1c2414"></a>
@@ -34,13 +34,13 @@ Bench is the kind of small tools you reach for a dozen times a day — encode so
 
 ## Tools
 
-> 56 tools across 11 categories — and counting.
+> 57 tools across 11 categories — and counting.
 
 | Category | Tools |
 | --- | --- |
 | **Text & Encoding** | Text Transformer (45+ transforms) · Base64 · URL · HTML Entities · Case Converter · EIP-55 Checksum · Full-width ↔ Half-width · Katakana ↔ Hiragana · ASCII Table & Codes · Finglish → Farsi · Romaji ↔ Hiragana / Katakana · Markdown Editor |
 | **JSON & Data** | JSON Viewer & Formatter (tree, search, validate, convert) · JSON Schema Validator & Designer |
-| **Image & Media** | GIF Maker · Image Converter (PNG/JPG/WebP + resize) · Base64 Image · Content Credentials (C2PA) & SynthID Inspector · Slow-mo → Normal Speed Video |
+| **Image & Media** | GIF Maker · Image Converter (PNG/JPG/WebP + resize) · Base64 Image · 8K Drive Video Editor (join, trim, D-Log grade, music, HEVC export) · Content Credentials (C2PA) & SynthID Inspector · Slow-mo → Normal Speed Video |
 | **Crypto & Hashing** | Hash Generator (MD5 · SHA-1/256/384/512 · SHA-3 · Keccak) · ECDSA Sign & Verify · Wallet Generator (BIP39 / BIP44) |
 | **Generators** | UUID & NanoID · QR Code (styled) · Password Generator · Random Generator · Lucky Draw |
 | **Time & Date** | Unix Timestamp · Date Converter (12 calendars + timezones) · Day Calculator · Cron Parser & Builder · Earth, Sun & Moon Simulator (day/night globe, seasons, moon phases) · Sun, Earth & Moon to Scale (true sizes, distances, rotations) |

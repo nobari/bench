@@ -67,6 +67,7 @@ export type WidgetKey =
   | "transposer"
   | "audio-units"
   | "slow-mo"
+  | "video-editor"
   | "diff-checker"
   | "regex-tester"
   | "jwt"

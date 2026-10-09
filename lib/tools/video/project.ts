@@ -1,0 +1,377 @@
+/**
+ * The video editor's project model and the pure arithmetic on it: timeline
+ * layout from clips, music placement with overlaps and crossfades, gain
+ * keyframes, the smart-copy export plan, and serialisation for autosave.
+ * Nothing here touches the DOM, files or codecs — see engine.ts for that.
+ */
+
+export interface Grade {
+  /** Which log curve the footage was shot in; "none" skips the LUT. */
+  lut: "none" | "dlog" | "dlogm";
+  /** Stops of exposure, −3…+3. */
+  exposure: number;
+  /** White balance: temperature shift (blue ↔ amber) and tint (green ↔ magenta), −100…100. */
+  temperature: number;
+  tint: number;
+  /** 0 = flat, 1 = neutral, 2 = strong. */
+  contrast: number;
+  saturation: number;
+}
+
+export const NEUTRAL_GRADE: Grade = { lut: "none", exposure: 0, temperature: 0, tint: 0, contrast: 1, saturation: 1 };
+
+export interface Transform {
+  /** Quarter turns, 0–3. */
+  rotate: 0 | 1 | 2 | 3;
+  /** Fine straightening in degrees, −10…10. */
+  straighten: number;
+  /** Crop as fractions of the (rotated) frame, 0–1. */
+  crop: { x: number; y: number; w: number; h: number };
+}
+
+export const NEUTRAL_TRANSFORM: Transform = { rotate: 0, straighten: 0, crop: { x: 0, y: 0, w: 1, h: 1 } };
+
+export interface MediaRef {
+  /** Key into the project store's file handles. */
+  id: string;
+  name: string;
+  size: number;
+  /** Media duration in seconds. */
+  duration: number;
+  width?: number;
+  height?: number;
+  fps?: number;
+  codec?: string;
+  hasAudio?: boolean;
+  sampleRate?: number;
+}
+
+export interface Clip {
+  id: string;
+  media: string;
+  /** Trim in/out within the source, seconds. */
+  in: number;
+  out: number;
+  transform: Transform;
+  grade: Grade;
+  /** Original audio gain in dB (−60 mutes) and mute flag. */
+  gainDb: number;
+  muted: boolean;
+}
+
+export interface Keyframe {
+  /** Seconds from the start of the music track's own timeline position. */
+  t: number;
+  /** Gain in dB. */
+  db: number;
+}
+
+export interface MusicTrack {
+  id: string;
+  media: string;
+  /** Lane 0, 1 or 2 — tracks on different lanes may overlap. */
+  lane: number;
+  /** Timeline position of the track start, seconds. */
+  start: number;
+  /** Trim within the music file, seconds. */
+  in: number;
+  out: number;
+  gainDb: number;
+  muted: boolean;
+  fadeIn: number;
+  fadeOut: number;
+  keyframes: Keyframe[];
+}
+
+export interface Title {
+  id: string;
+  kind: "intro" | "title" | "lowerThird";
+  text: string;
+  subtitle?: string;
+  /** Timeline start and duration, seconds. */
+  start: number;
+  duration: number;
+  /** For the intro: fade in from black over this many seconds. */
+  fade: number;
+}
+
+export interface Watermark {
+  media: string | null;
+  corner: "tl" | "tr" | "bl" | "br";
+  /** Width as a fraction of the frame. */
+  size: number;
+  opacity: number;
+  margin: number;
+}
+
+export interface ExportSettings {
+  codec: "hevc" | "avc";
+  /** Target video bitrate, Mbps. */
+  bitrateMbps: number;
+  /** Encoder quality/speed hint. */
+  preset: "quality" | "balanced" | "fast";
+  audioBitrateKbps: number;
+  /** "source" keeps the first clip's resolution; otherwise a height to scale to. */
+  resolution: "source" | 2160 | 1440 | 1080;
+  /** Whether untouched spans may be stream-copied. */
+  smartCopy: boolean;
+}
+
+export interface Project {
+  version: 1;
+  id: string;
+  name: string;
+  createdAt: number;
+  updatedAt: number;
+  media: Record<string, MediaRef>;
+  clips: Clip[];
+  music: MusicTrack[];
+  titles: Title[];
+  watermark: Watermark;
+  export: ExportSettings;
+  /** Proxy state per media id: whether a 1080p proxy exists. */
+  proxies: Record<string, { ready: boolean; file?: string }>;
+}
+
+export const DEFAULT_EXPORT: ExportSettings = { codec: "hevc", bitrateMbps: 100, preset: "balanced", audioBitrateKbps: 256, resolution: "source", smartCopy: true };
+
+export const newId = () => Math.random().toString(36).slice(2, 10);
+
+export function newProject(name = "Untitled drive"): Project {
+  const now = Date.now();
+  return { version: 1, id: newId(), name, createdAt: now, updatedAt: now, media: {}, clips: [], music: [], titles: [], watermark: { media: null, corner: "br", size: 0.08, opacity: 0.85, margin: 0.03 }, export: { ...DEFAULT_EXPORT }, proxies: {} };
+}
+
+/* ---------------------------------------------------------- timeline */
+
+export interface PlacedClip extends Clip {
+  /** Timeline position, seconds. */
+  start: number;
+  end: number;
+  index: number;
+}
+
+export const clipLength = (c: Clip) => Math.max(0, c.out - c.in);
+
+/** Clips laid end to end, in order — continuous footage with no gaps. */
+export function placeClips(clips: Clip[]): PlacedClip[] {
+  let t = 0;
+  return clips.map((c, index) => {
+    const start = t;
+    t += clipLength(c);
+    return { ...c, start, end: t, index };
+  });
+}
+
+export const timelineDuration = (p: Project) => placeClips(p.clips).reduce((m, c) => Math.max(m, c.end), 0);
+
+/** Which clip is under a timeline instant, and the matching source time. */
+export function clipAt(clips: Clip[], t: number): { clip: PlacedClip; sourceTime: number } | null {
+  for (const c of placeClips(clips)) if (t >= c.start && (t < c.end || (t === c.end && c.end === timelineDuration({ clips } as Project)))) return { clip: c, sourceTime: c.in + Math.min(t - c.start, clipLength(c)) };
+  return null;
+}
+
+/** Split a clip at a timeline instant into two clips sharing its settings. */
+export function splitClip(clips: Clip[], clipId: string, t: number): Clip[] {
+  const placed = placeClips(clips);
+  const p = placed.find((c) => c.id === clipId);
+  if (!p || t <= p.start + 0.01 || t >= p.end - 0.01) return clips;
+  const cut = p.in + (t - p.start);
+  const a: Clip = { ...p, out: cut, id: p.id };
+  const b: Clip = { ...p, in: cut, id: newId() };
+  const strip = (c: PlacedClip): Clip => { const { start, end, index, ...rest } = c; void start; void end; void index; return rest; };
+  return clips.flatMap((c) => (c.id === clipId ? [strip({ ...a, start: 0, end: 0, index: 0 }), strip({ ...b, start: 0, end: 0, index: 0 })] : [c]));
+}
+
+/** Remove a timeline range, trimming or deleting whatever it covers — "cut out the petrol stop". */
+export function removeRange(clips: Clip[], from: number, to: number): Clip[] {
+  if (to <= from) return clips;
+  const out: Clip[] = [];
+  for (const c of placeClips(clips)) {
+    const strip = (c: PlacedClip): Clip => { const { start, end, index, ...rest } = c; void start; void end; void index; return rest; };
+    if (c.end <= from || c.start >= to) out.push(strip(c));
+    else {
+      if (c.start < from) out.push({ ...strip(c), out: c.in + (from - c.start) });
+      if (c.end > to) out.push({ ...strip(c), id: c.start < from ? newId() : c.id, in: c.in + (to - c.start) });
+    }
+  }
+  return out;
+}
+
+/** Consecutive recordings from the same camera: order by name (DJI numbers them) and butt them together. */
+export function orderRecordings(media: MediaRef[]): MediaRef[] {
+  return [...media].sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" }));
+}
+
+/* --------------------------------------------------------------- audio */
+
+export const dbToGain = (db: number) => (db <= -60 ? 0 : 10 ** (db / 20));
+
+/** Linear-in-dB interpolation between keyframes; before the first / after the last holds that value. */
+export function keyframeDb(keyframes: Keyframe[], t: number, fallbackDb: number): number {
+  if (!keyframes.length) return fallbackDb;
+  const ks = [...keyframes].sort((a, b) => a.t - b.t);
+  if (t <= ks[0].t) return ks[0].db;
+  if (t >= ks[ks.length - 1].t) return ks[ks.length - 1].db;
+  for (let i = 0; i + 1 < ks.length; i++) {
+    if (t >= ks[i].t && t <= ks[i + 1].t) {
+      const f = (t - ks[i].t) / Math.max(1e-9, ks[i + 1].t - ks[i].t);
+      return ks[i].db + (ks[i + 1].db - ks[i].db) * f;
+    }
+  }
+  return fallbackDb;
+}
+
+export const musicLength = (m: MusicTrack) => Math.max(0, m.out - m.in);
+
+/**
+ * Gain (linear) for a music track at a timeline instant: base gain, keyframes,
+ * fade in/out, and an equal-power crossfade where two tracks on the same lane overlap.
+ */
+export function musicGainAt(track: MusicTrack, all: MusicTrack[], timelineT: number): number {
+  if (track.muted) return 0;
+  const local = timelineT - track.start;
+  const len = musicLength(track);
+  if (local < 0 || local > len) return 0;
+  let g = dbToGain(keyframeDb(track.keyframes, local, track.gainDb));
+  if (track.fadeIn > 0 && local < track.fadeIn) g *= Math.sin(((local / track.fadeIn) * Math.PI) / 2);
+  if (track.fadeOut > 0 && local > len - track.fadeOut) g *= Math.sin((((len - local) / track.fadeOut) * Math.PI) / 2);
+  // Equal-power crossfade with the next/previous track on the same lane.
+  for (const o of all) {
+    if (o.id === track.id || o.lane !== track.lane || o.muted) continue;
+    const oStart = o.start, oEnd = o.start + musicLength(o);
+    const tStart = track.start, tEnd = track.start + len;
+    const lo = Math.max(tStart, oStart), hi = Math.min(tEnd, oEnd);
+    if (hi <= lo || timelineT < lo || timelineT > hi) continue;
+    const f = (timelineT - lo) / (hi - lo);
+    // The earlier-starting track fades out across the overlap, the later one fades in.
+    g *= tStart <= oStart ? Math.cos((f * Math.PI) / 2) : Math.sin((f * Math.PI) / 2);
+  }
+  return g;
+}
+
+/** Overlaps on the same lane become crossfades; report them so the UI can show the duration. */
+export function crossfades(music: MusicTrack[]): { a: string; b: string; from: number; to: number }[] {
+  const out: { a: string; b: string; from: number; to: number }[] = [];
+  const sorted = [...music].sort((x, y) => x.start - y.start);
+  for (let i = 0; i < sorted.length; i++)
+    for (let j = i + 1; j < sorted.length; j++) {
+      const a = sorted[i], b = sorted[j];
+      if (a.lane !== b.lane) continue;
+      const from = Math.max(a.start, b.start), to = Math.min(a.start + musicLength(a), b.start + musicLength(b));
+      if (to > from) out.push({ a: a.id, b: b.id, from, to });
+    }
+  return out;
+}
+
+/** Drop a track so that it overlaps the previous one on the lane by `overlap` seconds. */
+export function appendMusic(music: MusicTrack[], track: Omit<MusicTrack, "start">, overlap = 2): MusicTrack {
+  const lane = music.filter((m) => m.lane === track.lane);
+  const end = lane.reduce((m, t) => Math.max(m, t.start + musicLength(t)), 0);
+  return { ...track, start: Math.max(0, end - (lane.length ? overlap : 0)) };
+}
+
+/* ---------------------------------------------------------- export plan */
+
+export type SpanKind = "copy" | "encode";
+
+export interface ExportSpan {
+  kind: SpanKind;
+  clipId: string;
+  /** Source and timeline ranges, seconds. */
+  sourceIn: number;
+  sourceOut: number;
+  start: number;
+  end: number;
+  /** Why this span re-encodes (for the UI). */
+  reasons: string[];
+}
+
+const isNeutralGrade = (g: Grade) => g.lut === "none" && g.exposure === 0 && g.temperature === 0 && g.tint === 0 && g.contrast === 1 && g.saturation === 1;
+const isNeutralTransform = (t: Transform) => t.rotate === 0 && t.straighten === 0 && t.crop.x === 0 && t.crop.y === 0 && t.crop.w === 1 && t.crop.h === 1;
+
+/**
+ * Which parts of the timeline can be stream-copied from the source and which
+ * must be re-encoded. Copy needs: no grade, no transform, no title or
+ * watermark drawn over it, the same codec as the export, and smart copy on.
+ * (Copying also has to start on a keyframe; the engine snaps to the previous
+ * keyframe and encodes the few frames in between.)
+ */
+export function planExport(p: Project): ExportSpan[] {
+  const spans: ExportSpan[] = [];
+  const placed = placeClips(p.clips);
+  const sameCodec = (m: MediaRef | undefined) => !!m?.codec && m.codec.startsWith(p.export.codec);
+  for (const c of placed) {
+    const reasons: string[] = [];
+    if (!p.export.smartCopy) reasons.push("smart copy off");
+    if (!isNeutralGrade(c.grade)) reasons.push("colour grade");
+    if (!isNeutralTransform(c.transform)) reasons.push("rotate / crop");
+    if (!sameCodec(p.media[c.media])) reasons.push(`source is ${p.media[c.media]?.codec ?? "unknown"}, export is ${p.export.codec}`);
+    if (p.export.resolution !== "source") reasons.push("scaled output");
+    if (p.watermark.media) reasons.push("watermark");
+    const overlays = p.titles.filter((t) => t.start < c.end && t.start + t.duration > c.start);
+    if (reasons.length) {
+      spans.push({ kind: "encode", clipId: c.id, sourceIn: c.in, sourceOut: c.out, start: c.start, end: c.end, reasons });
+      continue;
+    }
+    // Titles only force re-encoding of the frames they cover.
+    let cursor = c.start;
+    const cuts = overlays.map((t) => [Math.max(c.start, t.start), Math.min(c.end, t.start + t.duration)] as const).sort((a, b) => a[0] - b[0]);
+    for (const [ts, te] of cuts) {
+      if (ts > cursor) spans.push({ kind: "copy", clipId: c.id, sourceIn: c.in + (cursor - c.start), sourceOut: c.in + (ts - c.start), start: cursor, end: ts, reasons: [] });
+      spans.push({ kind: "encode", clipId: c.id, sourceIn: c.in + (Math.max(cursor, ts) - c.start), sourceOut: c.in + (te - c.start), start: Math.max(cursor, ts), end: te, reasons: ["title"] });
+      cursor = Math.max(cursor, te);
+    }
+    if (cursor < c.end) spans.push({ kind: "copy", clipId: c.id, sourceIn: c.in + (cursor - c.start), sourceOut: c.out, start: cursor, end: c.end, reasons: [] });
+  }
+  return spans;
+}
+
+export interface ExportEstimate {
+  copySeconds: number;
+  encodeSeconds: number;
+  /** Rough wall-clock estimate in seconds, given an encode speed in frames/s. */
+  wallSeconds: number;
+  /** Output size estimate in bytes. */
+  bytes: number;
+}
+
+/** Export time and size: copying is I/O-bound (fast); re-encoding 8K runs near real time on Apple silicon. */
+export function estimateExport(p: Project, spans: ExportSpan[], encodeFps = 30, copyGBps = 0.4): ExportEstimate {
+  const copySeconds = spans.filter((s) => s.kind === "copy").reduce((a, s) => a + (s.end - s.start), 0);
+  const encodeSeconds = spans.filter((s) => s.kind === "encode").reduce((a, s) => a + (s.end - s.start), 0);
+  const fps = Object.values(p.media).find((m) => m.fps)?.fps ?? 30;
+  const videoBytes = ((p.export.bitrateMbps * 1e6) / 8) * (copySeconds + encodeSeconds);
+  const audioBytes = ((p.export.audioBitrateKbps * 1e3) / 8) * (copySeconds + encodeSeconds);
+  const copyBytes = spans.filter((s) => s.kind === "copy").reduce((a, s) => { const m = p.media[p.clips.find((c) => c.id === s.clipId)?.media ?? ""]; return a + (m ? (m.size / Math.max(1, m.duration)) * (s.end - s.start) : 0); }, 0);
+  return { copySeconds, encodeSeconds, wallSeconds: (encodeSeconds * fps) / encodeFps + copyBytes / (copyGBps * 1e9), bytes: videoBytes + audioBytes };
+}
+
+/* --------------------------------------------------------- serialisation */
+
+export function serialize(p: Project): string {
+  return JSON.stringify({ ...p, updatedAt: Date.now() });
+}
+
+export function deserialize(json: string): Project | null {
+  try {
+    const p = JSON.parse(json) as Project;
+    if (p?.version !== 1 || !Array.isArray(p.clips) || !p.media) return null;
+    return { ...newProject(), ...p, export: { ...DEFAULT_EXPORT, ...p.export } };
+  } catch {
+    return null;
+  }
+}
+
+/** Copy one clip's grade onto others — "match the whole drive". */
+export function applyGradeTo(clips: Clip[], fromId: string, toIds: string[] | "all"): Clip[] {
+  const src = clips.find((c) => c.id === fromId);
+  if (!src) return clips;
+  return clips.map((c) => (c.id !== fromId && (toIds === "all" || toIds.includes(c.id)) ? { ...c, grade: { ...src.grade } } : c));
+}
+
+export const fmtTime = (s: number, frames?: number) => {
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = Math.floor(s % 60);
+  const base = `${h ? h + ":" : ""}${String(m).padStart(h ? 2 : 1, "0")}:${String(sec).padStart(2, "0")}`;
+  return frames ? `${base}.${String(Math.floor((s % 1) * frames)).padStart(2, "0")}` : base;
+};

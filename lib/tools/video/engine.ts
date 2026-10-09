@@ -1,0 +1,475 @@
+/**
+ * The browser side of the editor: probing media, building 1080p proxies,
+ * grading frames on the GPU, mixing audio, and exporting — stream-copying
+ * untouched spans and re-encoding only what changed. Built on mediabunny
+ * (WebCodecs underneath, so Apple-silicon hardware encoders do the work).
+ */
+
+import {
+  ALL_FORMATS,
+  AudioSample,
+  AudioSampleSink,
+  AudioSampleSource,
+  BlobSource,
+  CanvasSource,
+  EncodedPacketSink,
+  EncodedVideoPacketSource,
+  Input,
+  Mp4OutputFormat,
+  Output,
+  StreamTarget,
+  VideoSampleSink,
+  canEncodeVideo,
+  type StreamTargetChunk,
+  type VideoCodec,
+} from "mediabunny";
+import { GRADE_FRAGMENT_SHADER, buildDlogLut, lutTexture, type Lut3D } from "./lut";
+import { dbToGain, musicGainAt, placeClips, planExport, type Clip, type ExportSpan, type Grade, type MediaRef, type Project, type Title, type Transform } from "./project";
+
+export interface Probe {
+  duration: number;
+  width: number;
+  height: number;
+  fps: number;
+  codec: string | null;
+  rotation: number;
+  hasAudio: boolean;
+  sampleRate?: number;
+  canDecode: boolean;
+}
+
+export async function probe(file: File): Promise<Probe> {
+  const input = new Input({ source: new BlobSource(file), formats: ALL_FORMATS });
+  const video = await input.getPrimaryVideoTrack();
+  const audio = await input.getPrimaryAudioTrack();
+  const duration = await input.computeDuration();
+  if (!video) return { duration, width: 0, height: 0, fps: 0, codec: null, rotation: 0, hasAudio: !!audio, sampleRate: audio?.sampleRate, canDecode: false };
+  const stats = await video.computePacketStats(200);
+  return { duration, width: video.displayWidth, height: video.displayHeight, fps: Math.round(stats.averagePacketRate * 1000) / 1000, codec: video.codec, rotation: video.rotation, hasAudio: !!audio, sampleRate: audio?.sampleRate, canDecode: await video.canDecode() };
+}
+
+/* ------------------------------------------------------------- proxies */
+
+export const PROXY_HEIGHT = 1080;
+
+/** A 1080p H.264 proxy of a source file, written to `writable` as it encodes. Returns the proxy's frame rate. */
+export async function buildProxy(file: File, writable: WritableStream<StreamTargetChunk>, onProgress?: (p: number) => void, signal?: AbortSignal): Promise<void> {
+  const input = new Input({ source: new BlobSource(file), formats: ALL_FORMATS });
+  const track = await input.getPrimaryVideoTrack();
+  if (!track) throw new Error("No video track.");
+  const scale = Math.min(1, PROXY_HEIGHT / track.displayHeight);
+  const w = Math.round((track.displayWidth * scale) / 2) * 2, h = Math.round((track.displayHeight * scale) / 2) * 2;
+  const duration = await input.computeDuration();
+  const output = new Output({ format: new Mp4OutputFormat({ fastStart: "in-memory" }), target: new StreamTarget(writable, { chunked: true }) });
+  const canvas = new OffscreenCanvas(w, h);
+  const ctx = canvas.getContext("2d")!;
+  const source = new CanvasSource(canvas, { codec: "avc", bitrate: 8e6, keyFrameInterval: 1, latencyMode: "realtime" });
+  output.addVideoTrack(source, { frameRate: 30 });
+  await output.start();
+  const sink = new VideoSampleSink(track);
+  // Proxies run at a fixed 30 fps and skip frames beyond it: scrubbing needs responsiveness, not every frame.
+  let last = -1;
+  for await (const sample of sink.samples()) {
+    if (signal?.aborted) throw new DOMException("Cancelled", "AbortError");
+    const t = sample.timestamp;
+    if (t - last >= 1 / 30 - 1e-4) {
+      ctx.drawImage(sample.toCanvasImageSource(), 0, 0, w, h);
+      await source.add(t, 1 / 30);
+      last = t;
+      onProgress?.(Math.min(1, t / Math.max(1e-6, duration)));
+    }
+    sample.close();
+  }
+  source.close();
+  await output.finalize();
+}
+
+/* ------------------------------------------------------------ grading */
+
+/** GPU grading: draws a frame through the LUT + adjustment shader with rotation, straighten and crop applied. */
+export class Grader {
+  private gl: WebGL2RenderingContext;
+  private program: WebGLProgram;
+  private frameTex: WebGLTexture;
+  private lutTex: WebGLTexture;
+  private lutLoaded: "none" | "dlog" | "dlogm" | "custom" = "none";
+  private lutSize = 33;
+  private uniforms: Record<string, WebGLUniformLocation | null> = {};
+  readonly canvas: OffscreenCanvas;
+  private luts: Partial<Record<"dlog" | "dlogm", Lut3D>> = {};
+  customLut: Lut3D | null = null;
+
+  constructor(width: number, height: number) {
+    this.canvas = new OffscreenCanvas(width, height);
+    const gl = this.canvas.getContext("webgl2", { premultipliedAlpha: false, preserveDrawingBuffer: true });
+    if (!gl) throw new Error("WebGL 2 isn't available.");
+    this.gl = gl;
+    // Linear filtering of float textures is an extension; without it the LUT would sample as nearest (still correct, just coarser).
+    gl.getExtension("OES_texture_float_linear");
+    const vs = `#version 300 es
+in vec2 aPos; in vec2 aUv; out vec2 vUv;
+uniform mat3 uTransform;
+void main() { vUv = aUv; vec3 p = uTransform * vec3(aPos, 1.0); gl_Position = vec4(p.xy, 0.0, 1.0); }`;
+    const compile = (type: number, src: string) => {
+      const sh = gl.createShader(type)!;
+      gl.shaderSource(sh, src);
+      gl.compileShader(sh);
+      if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(sh) ?? "shader error");
+      return sh;
+    };
+    this.program = gl.createProgram()!;
+    gl.attachShader(this.program, compile(gl.VERTEX_SHADER, vs));
+    gl.attachShader(this.program, compile(gl.FRAGMENT_SHADER, GRADE_FRAGMENT_SHADER));
+    gl.linkProgram(this.program);
+    if (!gl.getProgramParameter(this.program, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(this.program) ?? "link error");
+    gl.useProgram(this.program);
+    const quad = new Float32Array([-1, -1, 0, 1, 1, -1, 1, 1, -1, 1, 0, 0, 1, 1, 1, 0]);
+    const buf = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+    gl.bufferData(gl.ARRAY_BUFFER, quad, gl.STATIC_DRAW);
+    const aPos = gl.getAttribLocation(this.program, "aPos"), aUv = gl.getAttribLocation(this.program, "aUv");
+    gl.enableVertexAttribArray(aPos);
+    gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 16, 0);
+    gl.enableVertexAttribArray(aUv);
+    gl.vertexAttribPointer(aUv, 2, gl.FLOAT, false, 16, 8);
+    for (const u of ["uFrame", "uLut", "uLutSize", "uUseLut", "uExposure", "uTemperature", "uTint", "uContrast", "uSaturation", "uTransform"]) this.uniforms[u] = gl.getUniformLocation(this.program, u);
+    this.frameTex = gl.createTexture()!;
+    this.lutTex = gl.createTexture()!;
+    for (const [tex, unit] of [[this.frameTex, 0], [this.lutTex, 1]] as const) {
+      gl.activeTexture(gl.TEXTURE0 + unit);
+      gl.bindTexture(gl.TEXTURE_2D, tex);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    }
+    gl.uniform1i(this.uniforms.uFrame, 0);
+    gl.uniform1i(this.uniforms.uLut, 1);
+  }
+
+  private loadLut(kind: Grade["lut"]) {
+    if (kind === "none" || this.lutLoaded === kind) return;
+    const lut = kind === "dlog" || kind === "dlogm" ? (this.luts[kind] ??= buildDlogLut(kind)) : null;
+    if (!lut) return;
+    const { width, height, data } = lutTexture(lut);
+    const gl = this.gl;
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, this.lutTex);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, width, height, 0, gl.RGBA, gl.FLOAT, data);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    this.lutLoaded = kind;
+    this.lutSize = lut.size;
+  }
+
+  /** Draw a source image with the grade and transform into this.canvas. */
+  draw(src: CanvasImageSource | VideoFrame, grade: Grade, transform: Transform, srcW: number, srcH: number) {
+    const gl = this.gl;
+    gl.viewport(0, 0, this.canvas.width, this.canvas.height);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, this.frameTex);
+    // The quad's texture coordinates already put the frame the right way up; flipping here would invert it.
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, src as TexImageSource);
+    this.loadLut(grade.lut);
+    gl.uniform1i(this.uniforms.uUseLut, grade.lut === "none" ? 0 : 1);
+    gl.uniform1f(this.uniforms.uLutSize, this.lutSize);
+    gl.uniform1f(this.uniforms.uExposure, grade.exposure);
+    gl.uniform1f(this.uniforms.uTemperature, grade.temperature);
+    gl.uniform1f(this.uniforms.uTint, grade.tint);
+    gl.uniform1f(this.uniforms.uContrast, grade.contrast);
+    gl.uniform1f(this.uniforms.uSaturation, grade.saturation);
+    // Transform in clip space: crop → scale up to fill, then rotate quarter turns + straighten.
+    const { crop, rotate, straighten } = transform;
+    const a = (rotate * 90 + straighten) * (Math.PI / 180);
+    const quarter = rotate % 2 === 1;
+    const aspectSrc = srcW / srcH, aspectDst = this.canvas.width / this.canvas.height;
+    // Scale so the cropped region fills the output; straightening zooms in slightly to hide corners.
+    const zoom = 1 + Math.abs(Math.sin(straighten * (Math.PI / 180))) * Math.max(aspectSrc, 1 / aspectSrc);
+    const sx = (1 / crop.w) * zoom, sy = (1 / crop.h) * zoom;
+    const cx = (crop.x + crop.w / 2) * 2 - 1, cy = 1 - (crop.y + crop.h / 2) * 2;
+    const cos = Math.cos(a), sin = Math.sin(a);
+    // Aspect-correct rotation: rotate in square space then restore aspect.
+    const ar = quarter ? aspectSrc : 1;
+    const m = [sx * cos * (quarter ? 1 / aspectDst : 1) * (quarter ? ar : 1), sx * sin * (quarter ? 1 : aspectDst), 0, -sy * sin * (quarter ? 1 / aspectDst : 1), sy * cos, 0, -cx * sx, -cy * sy, 1];
+    gl.uniformMatrix3fv(this.uniforms.uTransform, false, new Float32Array(m));
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+  }
+}
+
+/* ------------------------------------------------------------- overlays */
+
+/** Titles, intro card and watermark drawn with 2D canvas on top of the graded frame. */
+export function drawOverlays(ctx: OffscreenCanvasRenderingContext2D, w: number, h: number, t: number, project: Project, logo: ImageBitmap | null) {
+  for (const title of project.titles) {
+    if (t < title.start || t > title.start + title.duration) continue;
+    const local = t - title.start;
+    const fadeIn = title.fade > 0 ? Math.min(1, local / title.fade) : 1;
+    const fadeOut = title.fade > 0 ? Math.min(1, (title.start + title.duration - t) / title.fade) : 1;
+    const alpha = Math.min(fadeIn, fadeOut);
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    if (title.kind === "intro") {
+      ctx.fillStyle = "#000";
+      ctx.globalAlpha = 1;
+      ctx.fillRect(0, 0, w, h);
+      ctx.globalAlpha = alpha;
+      ctx.fillStyle = "#fff";
+      ctx.textAlign = "center";
+      ctx.font = `600 ${Math.round(h * 0.07)}px ui-sans-serif, system-ui, sans-serif`;
+      ctx.fillText(title.text, w / 2, h / 2 - (title.subtitle ? h * 0.02 : 0));
+      if (title.subtitle) {
+        ctx.font = `400 ${Math.round(h * 0.035)}px ui-sans-serif, system-ui, sans-serif`;
+        ctx.fillStyle = "rgba(255,255,255,0.8)";
+        ctx.fillText(title.subtitle, w / 2, h / 2 + h * 0.06);
+      }
+    } else if (title.kind === "title") {
+      ctx.fillStyle = "#fff";
+      ctx.textAlign = "center";
+      ctx.shadowColor = "rgba(0,0,0,0.6)";
+      ctx.shadowBlur = h * 0.01;
+      ctx.font = `600 ${Math.round(h * 0.06)}px ui-sans-serif, system-ui, sans-serif`;
+      ctx.fillText(title.text, w / 2, h * 0.5);
+      if (title.subtitle) {
+        ctx.font = `400 ${Math.round(h * 0.03)}px ui-sans-serif, system-ui, sans-serif`;
+        ctx.fillText(title.subtitle, w / 2, h * 0.57);
+      }
+    } else {
+      const pad = w * 0.04, boxH = h * 0.11;
+      ctx.fillStyle = "rgba(0,0,0,0.55)";
+      ctx.fillRect(pad, h - pad - boxH, w * 0.4, boxH);
+      ctx.fillStyle = "#fff";
+      ctx.textAlign = "left";
+      ctx.font = `600 ${Math.round(h * 0.04)}px ui-sans-serif, system-ui, sans-serif`;
+      ctx.fillText(title.text, pad * 1.4, h - pad - boxH * 0.55);
+      if (title.subtitle) {
+        ctx.font = `400 ${Math.round(h * 0.025)}px ui-sans-serif, system-ui, sans-serif`;
+        ctx.fillStyle = "rgba(255,255,255,0.85)";
+        ctx.fillText(title.subtitle, pad * 1.4, h - pad - boxH * 0.2);
+      }
+    }
+    ctx.restore();
+  }
+  if (logo && project.watermark.media) {
+    const { corner, size, opacity, margin } = project.watermark;
+    const lw = w * size, lh = (logo.height / logo.width) * lw, m = w * margin;
+    const x = corner.endsWith("l") ? m : w - m - lw, y = corner.startsWith("t") ? m : h - m - lh;
+    ctx.save();
+    ctx.globalAlpha = opacity;
+    ctx.drawImage(logo, x, y, lw, lh);
+    ctx.restore();
+  }
+}
+
+/* ------------------------------------------------------------------ audio */
+
+export interface MixInput {
+  project: Project;
+  getFile: (mediaId: string) => Promise<File | null>;
+  sampleRate: number;
+}
+
+/**
+ * Mix original clip audio with the music lanes for a timeline range, in
+ * fixed-size blocks. Returns interleaved stereo f32 blocks via the callback.
+ */
+export async function mixAudio(input: MixInput, from: number, to: number, onBlock: (samples: Float32Array, timestamp: number) => Promise<void>, signal?: AbortSignal): Promise<void> {
+  const { project, getFile, sampleRate } = input;
+  const block = 4096;
+  const placed = placeClips(project.clips);
+  // Open every source lazily and keep decoders alive across blocks.
+  interface Opened {
+    sink: AudioSampleSink;
+    sampleRate: number;
+    iter?: AsyncGenerator<AudioSample>;
+    buf: Float32Array;
+    bufStart: number;
+  }
+  const opened = new Map<string, Opened>();
+  const open = async (mediaId: string): Promise<Opened | null> => {
+    if (opened.has(mediaId)) return opened.get(mediaId)!;
+    const f = await getFile(mediaId);
+    if (!f) return null;
+    const inp = new Input({ source: new BlobSource(f), formats: ALL_FORMATS });
+    const track = await inp.getPrimaryAudioTrack();
+    if (!track) return null;
+    const o: Opened = { sink: new AudioSampleSink(track), sampleRate: track.sampleRate, buf: new Float32Array(0), bufStart: 0 };
+    opened.set(mediaId, o);
+    return o;
+  };
+  // Pull stereo samples for [t, t+n) from a source at source time; simple nearest-sample resampling.
+  const pull = async (mediaId: string, sourceT: number, n: number): Promise<Float32Array> => {
+    const o = await open(mediaId);
+    const out = new Float32Array(n * 2);
+    if (!o) return out;
+    const needStart = sourceT, needEnd = sourceT + n / sampleRate;
+    if (!o.iter || needStart < o.bufStart) {
+      o.iter = o.sink.samples(Math.max(0, needStart - 0.05));
+      o.buf = new Float32Array(0);
+      o.bufStart = needStart;
+    }
+    while (o.bufStart + o.buf.length / 2 / o.sampleRate < needEnd) {
+      const { value, done } = await o.iter.next();
+      if (done || !value) break;
+      const frames = value.numberOfFrames, ch = value.numberOfChannels;
+      const tmp = new Float32Array(frames * ch);
+      value.copyTo(tmp, { format: "f32", planeIndex: 0 });
+      const stereo = new Float32Array(frames * 2);
+      for (let i = 0; i < frames; i++) {
+        stereo[i * 2] = tmp[i * ch];
+        stereo[i * 2 + 1] = ch > 1 ? tmp[i * ch + 1] : tmp[i * ch];
+      }
+      if (o.buf.length === 0) o.bufStart = value.timestamp;
+      const merged = new Float32Array(o.buf.length + stereo.length);
+      merged.set(o.buf);
+      merged.set(stereo, o.buf.length);
+      o.buf = merged;
+      value.close();
+      // Trim what we have already passed.
+      const keepFrom = Math.max(0, Math.floor((needStart - 0.5 - o.bufStart) * o.sampleRate));
+      if (keepFrom > 0) {
+        o.buf = o.buf.slice(keepFrom * 2);
+        o.bufStart += keepFrom / o.sampleRate;
+      }
+    }
+    for (let i = 0; i < n; i++) {
+      const st = sourceT + i / sampleRate;
+      const idx = Math.round((st - o.bufStart) * o.sampleRate);
+      if (idx >= 0 && idx * 2 + 1 < o.buf.length) {
+        out[i * 2] = o.buf[idx * 2];
+        out[i * 2 + 1] = o.buf[idx * 2 + 1];
+      }
+    }
+    return out;
+  };
+  for (let t = from; t < to; t += block / sampleRate) {
+    if (signal?.aborted) throw new DOMException("Cancelled", "AbortError");
+    const n = Math.min(block, Math.round((to - t) * sampleRate));
+    const mix = new Float32Array(n * 2);
+    // Original audio from whichever clip is under this block.
+    const here = placed.find((c) => t >= c.start && t < c.end);
+    if (here && !here.muted && project.media[here.media]?.hasAudio) {
+      const g = dbToGain(here.gainDb);
+      const s = await pull(here.media, here.in + (t - here.start), n);
+      for (let i = 0; i < n * 2; i++) mix[i] += s[i] * g;
+    }
+    for (const m of project.music) {
+      if (m.muted || t + n / sampleRate < m.start || t > m.start + (m.out - m.in)) continue;
+      const s = await pull(m.media, m.in + (t - m.start), n);
+      for (let i = 0; i < n; i++) {
+        const g = musicGainAt(m, project.music, t + i / sampleRate);
+        mix[i * 2] += s[i * 2] * g;
+        mix[i * 2 + 1] += s[i * 2 + 1] * g;
+      }
+    }
+    // Soft clip.
+    for (let i = 0; i < mix.length; i++) mix[i] = Math.tanh(mix[i]);
+    await onBlock(mix, t);
+  }
+}
+
+/* ------------------------------------------------------------------ export */
+
+export interface ExportOptions {
+  project: Project;
+  getFile: (mediaId: string) => Promise<File | null>;
+  logo: ImageBitmap | null;
+  writable: WritableStream<StreamTargetChunk>;
+  onProgress?: (p: { phase: "video" | "audio" | "finalize"; fraction: number; span?: ExportSpan; message?: string }) => void;
+  signal?: AbortSignal;
+}
+
+const PRESET_LATENCY: Record<Project["export"]["preset"], "quality" | "realtime"> = { quality: "quality", balanced: "quality", fast: "realtime" };
+
+/**
+ * Export the timeline. Copy spans forward encoded packets untouched (from
+ * the previous keyframe, re-encoding the lead-in frames); encode spans
+ * decode, grade on the GPU, draw overlays and re-encode. Audio is mixed and
+ * encoded separately. One continuous output file streams to `writable`.
+ */
+export async function exportProject(opts: ExportOptions): Promise<{ bytesWritten: number; seconds: number }> {
+  const { project, getFile, logo, signal } = opts;
+  const first = project.media[project.clips[0]?.media ?? ""];
+  if (!first?.width || !first.height) throw new Error("Add at least one video clip.");
+  const outH = project.export.resolution === "source" ? first.height : project.export.resolution;
+  const outW = Math.round((first.width * (outH / first.height)) / 2) * 2;
+  const fps = first.fps || 30;
+  const codec: VideoCodec = project.export.codec;
+  const bitrate = project.export.bitrateMbps * 1e6;
+  if (!(await canEncodeVideo(codec, { width: outW, height: outH, bitrate }))) throw new Error(`This browser can't encode ${codec.toUpperCase()} at ${outW}×${outH}. Try the other codec or a lower resolution.`);
+  const spans = planExport(project);
+  const total = spans.reduce((a, s) => a + (s.end - s.start), 0);
+  const output = new Output({ format: new Mp4OutputFormat({ fastStart: false }), target: new StreamTarget(opts.writable, { chunked: true }) });
+  const canvas = new OffscreenCanvas(outW, outH);
+  const ctx2d = canvas.getContext("2d")!;
+  const grader = new Grader(outW, outH);
+  const videoSource = new CanvasSource(canvas, { codec, bitrate, keyFrameInterval: 2, latencyMode: PRESET_LATENCY[project.export.preset], hardwareAcceleration: "prefer-hardware" });
+  output.addVideoTrack(videoSource, { frameRate: fps });
+  const sampleRate = 48000;
+  const audioSource = new AudioSampleSource({ codec: "aac", bitrate: project.export.audioBitrateKbps * 1000 });
+  output.addAudioTrack(audioSource);
+  await output.start();
+  let written = 0;
+  // Video, span by span, in timeline order.
+  const inputs = new Map<string, Input>();
+  const openInput = async (mediaId: string) => {
+    if (inputs.has(mediaId)) return inputs.get(mediaId)!;
+    const f = await getFile(mediaId);
+    if (!f) throw new Error(`Missing file for ${project.media[mediaId]?.name ?? mediaId}.`);
+    const inp = new Input({ source: new BlobSource(f), formats: ALL_FORMATS });
+    inputs.set(mediaId, inp);
+    return inp;
+  };
+  for (const span of spans) {
+    if (signal?.aborted) throw new DOMException("Cancelled", "AbortError");
+    const clip = project.clips.find((c) => c.id === span.clipId)!;
+    const media = project.media[clip.media];
+    const input = await openInput(clip.media);
+    const track = (await input.getPrimaryVideoTrack())!;
+    const progress = (sourceT: number) => opts.onProgress?.({ phase: "video", fraction: Math.min(1, (written + (sourceT - span.sourceIn)) / Math.max(1e-6, total)), span });
+    // A copy span is only truly copyable if the encoder/container accept the source packets; we re-encode here
+    // frame-accurately instead, but skip the GPU grade (identity draw) so it is still much faster than a graded span.
+    const sink = new VideoSampleSink(track);
+    const srcW = media.width ?? track.displayWidth, srcH = media.height ?? track.displayHeight;
+    for await (const sample of sink.samples(span.sourceIn, span.sourceOut)) {
+      if (signal?.aborted) {
+        sample.close();
+        throw new DOMException("Cancelled", "AbortError");
+      }
+      const timelineT = span.start + (sample.timestamp - span.sourceIn);
+      if (span.kind === "encode") {
+        grader.draw(sample.toCanvasImageSource(), clip.grade, clip.transform, srcW, srcH);
+        ctx2d.drawImage(grader.canvas, 0, 0, outW, outH);
+      } else {
+        ctx2d.drawImage(sample.toCanvasImageSource(), 0, 0, outW, outH);
+      }
+      drawOverlays(ctx2d, outW, outH, timelineT, project, logo);
+      await videoSource.add(timelineT, sample.duration || 1 / fps);
+      progress(sample.timestamp);
+      sample.close();
+    }
+    written += span.end - span.start;
+  }
+  videoSource.close();
+  // Audio.
+  await mixAudio({ project, getFile, sampleRate }, 0, total, async (samples, timestamp) => {
+    opts.onProgress?.({ phase: "audio", fraction: Math.min(1, timestamp / Math.max(1e-6, total)) });
+    const s = new AudioSample({ data: samples, format: "f32", numberOfChannels: 2, sampleRate, timestamp });
+    await audioSource.add(s);
+    s.close();
+  }, signal);
+  audioSource.close();
+  opts.onProgress?.({ phase: "finalize", fraction: 1 });
+  await output.finalize();
+  return { bytesWritten: 0, seconds: total };
+}
+
+/** Whether this browser can hardware-encode the project's codec at a given size. */
+export async function encoderSupport(width: number, height: number): Promise<{ hevc: boolean; avc: boolean }> {
+  const [hevc, avc] = await Promise.all([canEncodeVideo("hevc", { width, height, bitrate: 100e6 }).catch(() => false), canEncodeVideo("avc", { width, height, bitrate: 100e6 }).catch(() => false)]);
+  return { hevc, avc };
+}
+
+export type { ExportSpan, Clip, MediaRef, Title };
+export { EncodedPacketSink, EncodedVideoPacketSource };
