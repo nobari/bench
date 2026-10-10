@@ -13,6 +13,10 @@
 # testing
 /coverage
 
+# raw footage and grading previews: never committed (the demo clip is 274 MB of 8K HEVC)
+/demo/
+DJI_*.MP4
+
 # next.js
 /.next/
 /out/
