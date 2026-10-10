@@ -6,8 +6,12 @@
  */
 
 /** Built-in conversions, plus the project's own .cube (DJI's official file, say). */
-export type LutKind = "none" | "dlogm" | "dlogm-study" | "dlogm-natural" | "dlogm-vivid" | "dlog" | "custom";
-export const LUT_KINDS: LutKind[] = ["none", "dlogm", "dlogm-study", "dlogm-natural", "dlogm-vivid", "dlog", "custom"];
+export type LutKind = "none" | "dji-official" | "dlogm" | "dji-official-study" | "dlogm-study" | "dlogm-natural" | "dlogm-vivid" | "dlog" | "custom";
+export const LUT_KINDS: LutKind[] = ["none", "dji-official", "dlogm", "dji-official-study", "dlogm-study", "dlogm-natural", "dlogm-vivid", "dlog", "custom"];
+/** Conversions computed from DJI's own LUT file (fetched at runtime) rather than the modelled curves. */
+export type FileLutKind = "dji-official" | "dji-official-study";
+export type MathLutKind = Exclude<LutKind, "none" | "custom" | FileLutKind>;
+export const isFileLutKind = (k: LutKind): k is FileLutKind => k === "dji-official" || k === "dji-official-study";
 
 export interface Grade {
   /** Which conversion to apply first; "none" skips the LUT. */

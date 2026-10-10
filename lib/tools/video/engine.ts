@@ -24,8 +24,8 @@ import {
   type StreamTargetChunk,
   type VideoCodec,
 } from "mediabunny";
-import { GRADE_FRAGMENT_SHADER, buildDlogLut, lutTexture, parseCube, type Lut3D } from "./lut";
-import { TITLE_FONTS, dbToGain, exportRange, musicGainAt, placeClips, planExport, transitionAt, transitionWindows, type Clip, type ExportSpan, type Grade, type LutKind, type MediaRef, type PlacedClip, type Project, type Title, type Transform, type TransitionWindow } from "./project";
+import { GRADE_FRAGMENT_SHADER, buildDlogLut, deriveLut, fetchOfficialLut, lutTexture, parseCube, type Lut3D } from "./lut";
+import { TITLE_FONTS, dbToGain, exportRange, isFileLutKind, musicGainAt, placeClips, planExport, transitionAt, transitionWindows, type Clip, type ExportSpan, type Grade, type LutKind, type MediaRef, type PlacedClip, type Project, type Title, type Transform, type TransitionWindow } from "./project";
 import { drawTransition } from "./transitions";
 
 export interface Probe {
@@ -137,6 +137,13 @@ export class Grader {
     if (this.lutLoaded === "custom") this.lutLoaded = "none";
   }
 
+  /** Hand over a conversion that is built from DJI's file (fetched elsewhere); until then those clips draw unconverted. */
+  provideLut(kind: LutKind, lut: Lut3D) {
+    if (this.luts[kind] === lut) return;
+    this.luts[kind] = lut;
+    if (this.lutLoaded === kind) this.lutLoaded = "none";
+  }
+
   constructor(width: number, height: number) {
     this.canvas = new OffscreenCanvas(width, height);
     const gl = this.canvas.getContext("webgl2", { premultipliedAlpha: false, preserveDrawingBuffer: true });
@@ -188,7 +195,7 @@ void main() { vUv = aUv; vec3 p = uTransform * vec3(aPos, 1.0); gl_Position = ve
   /** Upload the LUT for a grade if needed; false when there is nothing to apply. */
   private loadLut(kind: LutKind): boolean {
     if (kind === "none") return false;
-    const lut = kind === "custom" ? this.custom : (this.luts[kind] ??= buildDlogLut(kind));
+    const lut = kind === "custom" ? this.custom : isFileLutKind(kind) ? (this.luts[kind] ?? null) : (this.luts[kind] ??= buildDlogLut(kind));
     if (!lut) return false;
     if (this.lutLoaded === kind) return true;
     const { width, height, data } = lutTexture(lut);
@@ -510,6 +517,11 @@ export async function exportProject(opts: ExportOptions): Promise<{ bytesWritten
     } catch {
       /* unreadable .cube: those clips export unconverted, as the preview showed */
     }
+  }
+  if (project.clips.some((c) => isFileLutKind(c.grade.lut))) {
+    const base = await fetchOfficialLut();
+    grader.provideLut("dji-official", deriveLut(base, "dji-official"));
+    grader.provideLut("dji-official-study", deriveLut(base, "dji-official-study"));
   }
   const videoSource = new CanvasSource(canvas, { codec, bitrate, keyFrameInterval: 2, latencyMode: PRESET_LATENCY[project.export.preset], hardwareAcceleration: "prefer-hardware" });
   output.addVideoTrack(videoSource, { frameRate: fps });

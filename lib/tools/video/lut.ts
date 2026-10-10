@@ -5,7 +5,7 @@
  * GLSL fragment shader (used for every frame on export and proxy playback).
  */
 
-import type { Grade, LutKind } from "./project";
+import type { FileLutKind, Grade, MathLutKind } from "./project";
 
 export interface Lut3D {
   size: number;
@@ -124,8 +124,10 @@ const DJI_LOG_MATRIX = [1.25866, -0.16277, -0.09589, -0.10848, 1.16525, -0.05678
 const GREY_DISPLAY = pchip(DJI_TONE, 0.4);
 
 /** Options offered for log footage, in menu order. */
-export const LUT_OPTIONS: { kind: Exclude<LutKind, "none" | "custom">; name: string; hint: string }[] = [
-  { kind: "dlogm", name: "D-Log M → Rec.709 (DJI)", hint: "Matches DJI's official Osmo Action LUT: tone, hue and saturation were measured from the Action 6 file. The true-to-life starting point." },
+export const LUT_OPTIONS: { kind: MathLutKind | FileLutKind; name: string; hint: string }[] = [
+  { kind: "dji-official", name: "D-Log M → Rec.709 (DJI's own file)", hint: "DJI's official Osmo Action 6 D-Log M to Rec.709 LUT (v1.0, November 2025), applied exactly as DJI ships it. Punchy, saturated and faithful; the reference everything else is measured against." },
+  { kind: "dlogm", name: "D-Log M → Rec.709 (DJI, modelled)", hint: "A compact model of DJI's file: tone, hue and saturation measured from it. Within about two 8-bit levels of the file on real footage." },
+  { kind: "dji-official-study", name: "D-Log M → Study drive (on DJI's file)", hint: "The recommended look for long-play study, focus and work videos: DJI's own colour science with the Study treatment on top — crisp mids, a soft shoulder, sky held off cyan and neutral near white, shadows opened a touch, a hint of warmth, saturation 0.9." },
   { kind: "dlogm-study", name: "D-Log M → Study drive", hint: "Tuned on Osmo Action 6 footage for long-play study, focus and work videos: DJI's tone with mids kept crisp, a soft shoulder that keeps sky gradients smooth, bright sky held off cyan, shadows opened a touch, a hint of warmth and calmer saturation." },
   { kind: "dlogm-natural", name: "D-Log M → Natural", hint: "DJI's rendering with 12 % less saturation and slightly less contrast — flattering for tarmac, dashboards and overcast days." },
   { kind: "dlogm-vivid", name: "D-Log M → Vivid", hint: "DJI's rendering with 10 % more saturation and a little more contrast, in the spirit of DJI's own vivid LUTs." },
@@ -149,10 +151,13 @@ interface Look {
   lift: number;
 }
 const PLAIN: Look = { exposure: 0, warm: 0, blueHue: 0, sat: 1, hiDesat: 0, con: 1, shoulder: 1, lift: 0 };
-const LOOKS: Record<Exclude<LutKind, "none" | "custom">, Look> = {
+// Measured on a sunny Tokyo drive: median 0.4 stop over grey, sky at code 0.35/0.5/0.65, p99 three stops over grey.
+export const STUDY_LOOK: Look = { exposure: -0.05, warm: 0.05, blueHue: 0.08, sat: 0.9, hiDesat: 0.35, con: 1, shoulder: 0.88, lift: 0.008 };
+const LOOKS: Record<MathLutKind | FileLutKind, Look> = {
+  "dji-official": PLAIN,
+  "dji-official-study": STUDY_LOOK,
   dlogm: PLAIN,
-  // Measured on a sunny Tokyo drive: median 0.4 stop over grey, sky at code 0.35/0.5/0.65, p99 three stops over grey.
-  "dlogm-study": { exposure: -0.05, warm: 0.05, blueHue: 0.08, sat: 0.9, hiDesat: 0.35, con: 1, shoulder: 0.88, lift: 0.008 },
+  "dlogm-study": STUDY_LOOK,
   "dlogm-natural": { ...PLAIN, sat: 0.88, con: 0.94 },
   "dlogm-vivid": { ...PLAIN, sat: 1.1, con: 1.04 },
   dlog: PLAIN,
@@ -196,7 +201,7 @@ const clamp01 = (v: number) => Math.min(1, Math.max(0, v));
 const mul3 = (m: readonly number[], v: [number, number, number]): [number, number, number] => [m[0] * v[0] + m[1] * v[1] + m[2] * v[2], m[3] * v[0] + m[4] * v[1] + m[5] * v[2], m[6] * v[0] + m[7] * v[1] + m[8] * v[2]];
 
 /** One log triplet → display Rec.709, for the built-in conversions. */
-export function convertLog(kind: Exclude<LutKind, "none" | "custom">, rgb: [number, number, number]): [number, number, number] {
+export function convertLog(kind: MathLutKind, rgb: [number, number, number]): [number, number, number] {
   let out: [number, number, number];
   if (kind === "dlog") {
     // Published curve and gamut, then DJI's rendering via the D-Log M code it corresponds to.
@@ -211,7 +216,7 @@ export function convertLog(kind: Exclude<LutKind, "none" | "custom">, rgb: [numb
 }
 
 /** Build a built-in conversion as a 3D LUT (33³, the industry size). */
-export function buildDlogLut(kind: Exclude<LutKind, "none" | "custom">, size = 33): Lut3D {
+export function buildDlogLut(kind: MathLutKind, size = 33): Lut3D {
   const data = new Float32Array(size ** 3 * 3);
   let i = 0;
   for (let b = 0; b < size; b++)
@@ -223,6 +228,40 @@ export function buildDlogLut(kind: Exclude<LutKind, "none" | "custom">, size = 3
         data[i++] = o[2];
       }
   return { size, data, title: LUT_OPTIONS.find((o) => o.kind === kind)?.name ?? kind };
+}
+
+/* ------------------------------------------- DJI's own LUT file */
+
+/** DJI's Osmo Action 6 D-Log M → Rec.709 LUT v1.0 (2025-11-13), served as downloaded from dji.com/lut. © DJI. */
+export const DJI_OFFICIAL_LUT_URL = "/luts/dji-osmo-action-6-dlogm-to-rec709-v1.cube";
+let officialLut: Promise<Lut3D> | null = null;
+/** Fetch and parse DJI's file once per page. */
+export function fetchOfficialLut(): Promise<Lut3D> {
+  officialLut ??= fetch(DJI_OFFICIAL_LUT_URL)
+    .then((r) => {
+      if (!r.ok) throw new Error(`Couldn't load DJI's LUT (${r.status}).`);
+      return r.text();
+    })
+    .then((t) => parseCube(t))
+    .catch((e) => {
+      officialLut = null;
+      throw e;
+    });
+  return officialLut;
+}
+/** A conversion built from DJI's file: as-is, or with a look applied to every entry (exact, no resampling). */
+export function deriveLut(base: Lut3D, kind: FileLutKind): Lut3D {
+  const name = LUT_OPTIONS.find((o) => o.kind === kind)?.name ?? kind;
+  const L = LOOKS[kind];
+  if (L === PLAIN) return { ...base, title: name };
+  const data = new Float32Array(base.data.length);
+  for (let i = 0; i < data.length; i += 3) {
+    const o = applyLook([base.data[i], base.data[i + 1], base.data[i + 2]], L);
+    data[i] = o[0];
+    data[i + 1] = o[1];
+    data[i + 2] = o[2];
+  }
+  return { size: base.size, data, title: name };
 }
 
 /** A LUT as .cube text, for download. */

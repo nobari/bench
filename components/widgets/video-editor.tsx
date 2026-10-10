@@ -46,13 +46,16 @@ import {
   type ProxyHeight,
   type Title,
   type TitleFont,
+  isFileLutKind,
+  type FileLutKind,
   type LutKind,
+  type MathLutKind,
   type TitlePosition,
   type Transition,
   type TransitionKind,
 } from "@/lib/tools/video/project";
 import { drawTransition } from "@/lib/tools/video/transitions";
-import { LUT_OPTIONS, buildDlogLut, lutToCube, parseCube } from "@/lib/tools/video/lut";
+import { LUT_OPTIONS, buildDlogLut, deriveLut, fetchOfficialLut, lutToCube, parseCube, type Lut3D } from "@/lib/tools/video/lut";
 import { Grader, buildProxy, drawOverlays, encoderSupport, exportProject, probe } from "@/lib/tools/video/engine";
 import { ProjectStore, hasFileSystemAccess, AUTOSAVE_FILE, PROJECT_FILE, PROXY_DIR } from "@/lib/tools/video/store";
 import { cn } from "@/lib/utils";
@@ -139,6 +142,21 @@ export function VideoEditorWidget() {
   const pendingUrls = useRef<Set<string>>(new Set());
   const previewBoxRef = useRef<HTMLDivElement>(null);
   const cubeInput = useRef<HTMLInputElement>(null);
+  // DJI's own LUT file, fetched the first time a clip asks for it; both file-based conversions derive from it.
+  const [fileLuts, setFileLuts] = useState<Partial<Record<FileLutKind, Lut3D>> | null>(null);
+  const needsFileLut = project.clips.some((c) => isFileLutKind(c.grade.lut));
+  useEffect(() => {
+    if (!needsFileLut || fileLuts) return;
+    let active = true;
+    fetchOfficialLut()
+      .then((base) => {
+        if (active) setFileLuts({ "dji-official": deriveLut(base, "dji-official"), "dji-official-study": deriveLut(base, "dji-official-study") });
+      })
+      .catch((e: Error) => active && setError(e.message));
+    return () => {
+      active = false;
+    };
+  }, [needsFileLut, fileLuts]);
   const customLut = useMemo(() => {
     try {
       return project.customLut ? parseCube(project.customLut.cube) : null;
@@ -589,6 +607,7 @@ export function VideoEditorWidget() {
           if (!graderRef.current || graderRef.current.canvas.width !== w) graderRef.current = new Grader(w, h);
           const grader = graderRef.current;
           grader.setCustomLut(customLut);
+          if (fileLuts) for (const [k, l] of Object.entries(fileLuts)) if (l) grader.provideLut(k as LutKind, l);
           const ctx = c.getContext("2d")!;
           const alt = altRef.current;
           const tr = windows.length ? transitionAt(windows, playhead) : null;
@@ -652,7 +671,7 @@ export function VideoEditorWidget() {
     };
     raf = requestAnimationFrame(draw);
     return () => cancelAnimationFrame(raf);
-  }, [under, playhead, project, logo, duration, windows, playing, previewUrlFor, customLut]);
+  }, [under, playhead, project, logo, duration, windows, playing, previewUrlFor, customLut, fileLuts]);
 
   const update = (id: string, patch: Partial<Clip>) => setProject((p) => ({ ...p, clips: p.clips.map((c) => (c.id === id ? { ...c, ...patch } : c)) }));
   const updateMusic = (id: string, patch: Partial<MusicTrack>) => setProject((p) => ({ ...p, music: p.music.map((m) => (m.id === id ? { ...m, ...patch } : m)) }));
@@ -1039,6 +1058,8 @@ export function VideoEditorWidget() {
                   {current.grade.lut === "custom"
                     ? `${project.customLut?.name ?? "No file yet"} is applied as-is: it should expect the camera's log in and give Rec.709 out. `
                     : (LUT_OPTIONS.find((o) => o.kind === current.grade.lut)?.hint ?? "Pick the conversion for the camera's log profile; the sliders below fine-tune on top of it. ")}
+                  {isFileLutKind(current.grade.lut) && !fileLuts && " Loading DJI's LUT file… "}
+                  {!isFileLutKind(current.grade.lut) && current.grade.lut !== "custom" && current.grade.lut !== "none" ? " " : ""}
                   <button type="button" onClick={() => cubeInput.current?.click()} className="underline decoration-dotted underline-offset-2 hover:text-accent">
                     {project.customLut ? "Replace the .cube" : "Load a .cube"}
                   </button>
@@ -1048,8 +1069,10 @@ export function VideoEditorWidget() {
                       <button
                         type="button"
                         onClick={() => {
-                          const kind = current.grade.lut as Exclude<LutKind, "none" | "custom">;
-                          const blob = new Blob([lutToCube(buildDlogLut(kind))], { type: "text/plain" });
+                          const kind = current.grade.lut;
+                          const lut = isFileLutKind(kind) ? fileLuts?.[kind] : buildDlogLut(kind as MathLutKind);
+                          if (!lut) return setError("DJI's LUT file is still loading — try again in a moment.");
+                          const blob = new Blob([lutToCube(lut)], { type: "text/plain" });
                           const a = document.createElement("a");
                           a.href = URL.createObjectURL(blob);
                           a.download = `bench-${kind}.cube`;
