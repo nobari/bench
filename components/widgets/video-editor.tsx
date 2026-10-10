@@ -2124,7 +2124,7 @@ export function VideoEditorWidget() {
             <div className="pointer-events-none absolute bottom-0 top-0 w-px bg-[#e5484d]" style={{ left: playhead * pxPerSec }} />
           </div>
         </div>
-        <p className="mt-1 text-[11.5px] text-faint">Click the ruler to seek · space plays (hold for 2×) · ←/→ step a frame (⇧ for 1 s) · ↑/↓ jump between cuts · Home/End · M mutes · ⌘Z undoes · ⌘S saves. Clips are shown in playback order; music lanes stack, and overlaps on one lane crossfade.</p>
+        <p className="mt-1 text-[11.5px] text-faint">Click the ruler to seek · space plays (hold it to double the speed) · ←/→ step a frame (⇧ for 1 s) · ↑/↓ jump between cuts · Home/End · S saves a thumbnail of the frame (⇧S full-size JPEG, ⌥S PNG) · M mutes · ⌘Z undoes · ⌘S saves. Clips are shown in playback order; music lanes stack, and overlaps on one lane crossfade.</p>
       </div>
       {clearOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-labelledby="clear-project-title">
