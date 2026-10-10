@@ -153,11 +153,12 @@ export class ProjectStore {
    * Forget the project in this browser: the remembered folder handle and
    * anything pending. Nothing on disk changes.
    */
-  async forget(): Promise<void> {
+  async forget(projectId?: string): Promise<void> {
     this.cancelAutosave();
     this.dir = null;
     this.files.clear();
     await dbDelete("lastFolder").catch(() => undefined);
+    if (projectId) await dbDelete(`files:${projectId}`).catch(() => undefined);
   }
 
   /** Delete the project file and autosave from the folder — only the two files this tool writes; recordings are never touched. */
@@ -203,6 +204,44 @@ export class ProjectStore {
     const h = this.files.get(id);
     if (!h) return null;
     return h instanceof File ? h : h.getFile();
+  }
+
+  hasFile(id: string): boolean {
+    return this.files.has(id);
+  }
+
+  /** Media ids with no file behind them (after a reload, say). */
+  missing(ids: string[]): string[] {
+    return ids.filter((id) => !this.files.has(id));
+  }
+
+  /**
+   * Remember the file handles (not plain Files) in the browser, keyed by
+   * project, so recordings that live outside the project folder come back
+   * after a reload.
+   */
+  async persistHandles(projectId: string): Promise<void> {
+    const entries = [...this.files.entries()].filter(([, h]) => !(h instanceof File));
+    await dbSet(`files:${projectId}`, entries).catch(() => undefined);
+  }
+
+  /** Restore remembered handles; permission can only be asked for during a user gesture (interactive). Returns the ids restored. */
+  async restoreHandles(projectId: string, interactive: boolean): Promise<string[]> {
+    const entries = await dbGet<[string, FileSystemFileHandle][]>(`files:${projectId}`).catch(() => undefined);
+    if (!entries) return [];
+    type Perm = { queryPermission(o: { mode: string }): Promise<string>; requestPermission(o: { mode: string }): Promise<string> };
+    const restored: string[] = [];
+    for (const [id, handle] of entries) {
+      if (this.files.has(id)) continue;
+      const h = handle as unknown as Perm;
+      let state = await h.queryPermission({ mode: "read" }).catch(() => "denied");
+      if (state === "prompt" && interactive) state = await h.requestPermission({ mode: "read" }).catch(() => "denied");
+      if (state === "granted") {
+        this.files.set(id, handle);
+        restored.push(id);
+      }
+    }
+    return restored;
   }
 
   /** Try to resolve media by name inside the project folder (after reopening a project). */

@@ -153,6 +153,111 @@ export function normalizeTitle(t: Partial<Title> & { kind: Title["kind"] }): Tit
   };
 }
 
+/** A CSS colour the canvas will accept: #hex, rgb()/rgba(), or a plain name. */
+const COLOR_NAMES = new Set(["white", "black", "red", "green", "blue", "yellow", "orange", "cyan", "magenta", "gray", "grey", "silver", "gold", "navy", "teal", "olive", "maroon", "purple", "pink", "brown", "beige", "ivory", "coral", "salmon", "tomato", "crimson", "lime", "indigo", "violet", "turquoise", "lavender", "khaki", "tan", "wheat"]);
+const isCssColor = (v: unknown): v is string => typeof v === "string" && (/^#([0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/i.test(v) || /^(rgba?|hsla?)\(/i.test(v) || COLOR_NAMES.has(v.toLowerCase()));
+
+/**
+ * The JSON to hand an LLM: what the video contains, what a title can be,
+ * and the current titles as worked examples. Only `titles` is read back.
+ */
+export function titlesTemplate(p: Project): Record<string, unknown> {
+  const placed = placeClips(p.clips);
+  const fps = Object.values(p.media).find((m) => m.fps)?.fps ?? 30;
+  const strip = (t: Title) => {
+    const { id, ...rest } = t;
+    void id;
+    return rest;
+  };
+  return {
+    format: "bench-video-titles/1",
+    instructions: [
+      "Fill the titles array with the on-screen text for this driving video, then save this file and import it in the Titles tab of the Bench video editor (Import JSON).",
+      "Each title has: kind — intro (a full-screen card on black, usually at 0 s), title (text over the picture), or lowerThird (a small caption such as a place name, usually in a corner with a dark box); text; subtitle (optional, smaller line under the text); start and duration in seconds; fade in seconds (fade in and out); position — tl tc tr ml mc mr bl bc br meaning top/middle/bottom × left/centre/right; color as #rrggbb; background — empty string for none, rgba(0,0,0,0.55) for a dark box, rgba(255,255,255,0.85) for a light box, or #rrggbb; font — sans, serif, mono or rounded; size — text height as a fraction of the frame height, 0.02 to 0.16.",
+      "Keep every title inside 0 to durationSeconds, and inside the clip it belongs to where that matters (clips lists each recording with its start and end on the timeline). Titles may overlap in time only if they use different positions. Lower thirds for locations typically last 5 to 8 seconds at bl; an intro typically starts at 0 for 4 seconds.",
+      "Leave project, options and instructions as they are. Missing fields get sensible defaults and unknown fields are ignored on import.",
+    ],
+    project: {
+      name: p.name,
+      durationSeconds: +timelineDuration(p).toFixed(3),
+      fps,
+      clips: placed.map((c) => ({ file: p.media[c.media]?.name ?? c.media, start: +c.start.toFixed(3), end: +c.end.toFixed(3) })),
+    },
+    options: {
+      kinds: ["intro", "title", "lowerThird"],
+      positions: TITLE_POSITIONS,
+      fonts: Object.keys(TITLE_FONTS),
+      sizeRange: [0.02, 0.16],
+      backgroundPresets: { none: "", dark: "rgba(0,0,0,0.55)", light: "rgba(255,255,255,0.85)" },
+    },
+    titles: p.titles.length
+      ? p.titles.map(strip)
+      : [
+          { kind: "intro", text: p.name, subtitle: "<date or route, e.g. Tokyo → Yokohama, 9 Oct 2026>", start: 0, duration: 4, fade: 1, position: "mc", color: "#ffffff", background: "", font: "sans", size: 0.07 },
+          { kind: "lowerThird", text: "<Place name>", subtitle: "<road, district or landmark>", start: 12, duration: 6, fade: 1, position: "bl", color: "#ffffff", background: "rgba(0,0,0,0.55)", font: "sans", size: 0.04 },
+          { kind: "title", text: "<A short remark shown mid-drive>", subtitle: "", start: 40, duration: 5, fade: 1, position: "tc", color: "#ffffff", background: "", font: "sans", size: 0.05 },
+        ],
+  };
+}
+
+/** Read titles back from a filled template, or a bare array. Bad entries are skipped and odd values corrected, each with a note. */
+export function parseTitlesImport(text: string, p: Project): { titles: Title[]; warnings: string[] } {
+  let data: unknown;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    throw new Error("That file is not valid JSON.");
+  }
+  const list = Array.isArray(data) ? data : data && typeof data === "object" && Array.isArray((data as { titles?: unknown }).titles) ? (data as { titles: unknown[] }).titles : null;
+  if (!list) throw new Error("Expected a titles array — the shape of the downloaded template.");
+  const total = timelineDuration(p);
+  const warnings: string[] = [];
+  const titles: Title[] = [];
+  const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : typeof v === "string" && v.trim() !== "" && Number.isFinite(Number(v)) ? Number(v) : undefined);
+  list.forEach((raw, i) => {
+    const tag = `#${i + 1}`;
+    if (!raw || typeof raw !== "object") return void warnings.push(`${tag}: not an object, skipped`);
+    const r = raw as Record<string, unknown>;
+    const text = typeof r.text === "string" ? r.text.trim() : "";
+    if (!text) return void warnings.push(`${tag}: no text, skipped`);
+    let kind: Title["kind"] = "title";
+    if (r.kind === "intro" || r.kind === "lowerThird" || r.kind === "title") kind = r.kind;
+    else if (r.kind !== undefined) warnings.push(`${tag} "${text}": unknown kind "${String(r.kind)}", used title`);
+    let start = Math.max(0, num(r.start) ?? 0);
+    let duration = num(r.duration);
+    if (duration !== undefined && duration < 0.5) {
+      warnings.push(`${tag} "${text}": duration under 0.5 s, raised to 0.5`);
+      duration = 0.5;
+    }
+    if (total > 0 && start >= total) {
+      warnings.push(`${tag} "${text}": starts after the end of the video (${start} s), moved to the last ${duration ?? 5} s`);
+      start = Math.max(0, total - (duration ?? 5));
+    }
+    if (total > 0 && duration !== undefined && start + duration > total) duration = Math.max(0.5, total - start);
+    const color = isCssColor(r.color) ? r.color : r.color !== undefined ? (warnings.push(`${tag} "${text}": colour "${String(r.color)}" not understood, used white`), undefined) : undefined;
+    const background = r.background === "" || isCssColor(r.background) ? (r.background as string) : r.background !== undefined ? (warnings.push(`${tag} "${text}": background "${String(r.background)}" not understood, used none`), "") : undefined;
+    const size = num(r.size);
+    if (typeof r.position === "string" && !TITLE_POSITIONS.includes(r.position as TitlePosition)) warnings.push(`${tag} "${text}": position "${r.position}" not understood, used the default`);
+    if (typeof r.font === "string" && !(r.font in TITLE_FONTS)) warnings.push(`${tag} "${text}": font "${r.font}" not understood, used sans`);
+    titles.push(
+      normalizeTitle({
+        kind,
+        text,
+        subtitle: typeof r.subtitle === "string" ? r.subtitle : "",
+        start,
+        duration,
+        fade: num(r.fade),
+        position: typeof r.position === "string" ? (r.position as TitlePosition) : undefined,
+        color,
+        background,
+        font: typeof r.font === "string" ? (r.font as TitleFont) : undefined,
+        size: size !== undefined ? Math.min(0.16, Math.max(0.02, size)) : undefined,
+      }),
+    );
+  });
+  return { titles, warnings };
+}
+
 export interface Watermark {
   media: string | null;
   corner: "tl" | "tr" | "bl" | "br";

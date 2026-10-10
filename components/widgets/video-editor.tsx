@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, ChevronRight, Clapperboard, Crop, Download, FolderOpen, Loader, Maximize2, Minimize2, Music, Pause, Play, Save, Scissors, SlidersHorizontal, Trash2, Type, Upload, Volume2 } from "lucide-react";
+import { AlertTriangle, ChevronRight, Clapperboard, Crop, Download, FolderOpen, Loader, Maximize2, Minimize2, Music, Pause, Play, Repeat, Save, Scissors, SkipBack, SkipForward, SlidersHorizontal, StepBack, StepForward, Trash2, Type, Upload, Volume2, VolumeX } from "lucide-react";
 import {
   DEFAULT_CLIP_GAIN_DB,
   DEFAULT_EXPORT,
@@ -29,6 +29,7 @@ import {
   newProject,
   newTitle,
   orderRecordings,
+  parseTitlesImport,
   placeClips,
   planExport,
   removeRange,
@@ -37,6 +38,7 @@ import {
   splitClip,
   timelineDuration,
   titleLanes,
+  titlesTemplate,
   transitionAt,
   transitionWindows,
   type Clip,
@@ -131,6 +133,19 @@ export function VideoEditorWidget() {
   const [history, setHistory] = useState<Project[]>([]);
   const [timelineWidth, setTimelineWidth] = useState(800);
   const [seekToken, setSeekToken] = useState(0);
+  // Bumped whenever files are (re)registered, so the preview tries again instead of staying blank.
+  const [filesVersion, setFilesVersion] = useState(0);
+  const [missingMedia, setMissingMedia] = useState<string[]>([]);
+  // Preview transport: speed, looping (the export range when one is set), and a mute that silences clip audio and music.
+  const [speed, setSpeed] = useState(1);
+  const [loop, setLoop] = useState(false);
+  const [previewMuted, setPreviewMuted] = useState(false);
+  const loopRef = useRef(false);
+  const previewMutedRef = useRef(false);
+  useEffect(() => {
+    loopRef.current = loop;
+    previewMutedRef.current = previewMuted;
+  }, [loop, previewMuted]);
   const audioCtxRef = useRef<AudioContext | null>(null);
   const musicBuffers = useRef<Map<string, AudioBuffer>>(new Map());
   const musicNodes = useRef<Map<string, { src: AudioBufferSourceNode; gain: GainNode }>>(new Map());
@@ -198,7 +213,7 @@ export function VideoEditorWidget() {
       if (removed.length) notes.push(`deleted ${removed.join(" and ")}`);
     }
     if (folder && clearProxies && (await store.removeProxies())) notes.push(`deleted ${PROXY_DIR}/`);
-    await store.forget();
+    await store.forget(project.id);
     for (const url of proxyUrls.current.values()) URL.revokeObjectURL(url);
     proxyUrls.current.clear();
     pendingUrls.current.clear();
@@ -246,6 +261,10 @@ export function VideoEditorWidget() {
   const titleLaneOf = useMemo(() => titleLanes(project.titles), [project.titles]);
   const spans = useMemo(() => planExport(project), [project]);
   const range = useMemo(() => exportRange(project), [project]);
+  const rangeRef = useRef<{ from: number; to: number } | null>(null);
+  useEffect(() => {
+    rangeRef.current = range;
+  }, [range]);
   const setRange = (r: { from: number; to: number } | null) => setProject((p) => ({ ...p, export: { ...p.export, range: r } }));
   const estimate = useMemo(() => estimateExport(project, spans), [project, spans]);
   const current = selected ? project.clips.find((c) => c.id === selected) : undefined;
@@ -287,6 +306,10 @@ export function VideoEditorWidget() {
   useEffect(() => {
     previewRef.current = project.preview.proxyHeight;
   }, [project.preview.proxyHeight]);
+  useEffect(() => {
+    durationRef.current = duration;
+    fpsRef.current = Object.values(project.media).find((m) => m.fps)?.fps || 30;
+  }, [duration, project.media]);
 
   // Music for the preview is decoded once into Web Audio buffers; export mixes from the files independently.
   const decodeMusic = useCallback(async (mediaId: string, file: File) => {
@@ -307,9 +330,23 @@ export function VideoEditorWidget() {
     },
     [store, decodeMusic],
   );
+  const durationRef = useRef(0);
+  const fpsRef = useRef(30);
   const togglePlay = useCallback(() => {
     void audioCtxRef.current?.resume();
-    setPlaying((p) => !p);
+    setPlaying((p) => {
+      if (!p && playheadRef.current >= durationRef.current - 0.05) {
+        setPlayhead(0);
+        setSeekToken((x) => x + 1);
+      }
+      return !p;
+    });
+  }, []);
+  /** Park the playhead at an exact time (paused), e.g. one frame on. */
+  const stepTo = useCallback((t: number) => {
+    setPlaying(false);
+    setPlayhead(Math.max(0, Math.min(durationRef.current, t)));
+    setSeekToken((x) => x + 1);
   }, []);
 
   // Preview URL for a media id: the proxy if there is one, else the original — created on first use.
@@ -364,8 +401,19 @@ export function VideoEditorWidget() {
         setSelectedTransition(null);
       } else if (e.key === " " && !(e.target as HTMLElement).closest("input, textarea, select")) {
         e.preventDefault();
-        void audioCtxRef.current?.resume();
-        setPlaying((p) => !p);
+        togglePlay();
+      } else if (!(e.target as HTMLElement).closest("input, textarea, select") && !e.metaKey && !e.ctrlKey) {
+        const t = playheadRef.current, frame = 1 / fpsRef.current;
+        const cuts = placeClips(project.clips).map((c) => c.start).slice(1);
+        if (e.key === "ArrowLeft") stepTo(t - (e.shiftKey ? 1 : frame));
+        else if (e.key === "ArrowRight") stepTo(t + (e.shiftKey ? 1 : frame));
+        else if (e.key === "Home") stepTo(0);
+        else if (e.key === "End") stepTo(durationRef.current);
+        else if (e.key === "ArrowUp") stepTo([...cuts].reverse().find((c) => c < t - 0.01) ?? 0);
+        else if (e.key === "ArrowDown") stepTo(cuts.find((c) => c > t + 0.01) ?? durationRef.current);
+        else if (e.key === "m" || e.key === "M") setPreviewMuted((m) => !m);
+        else return;
+        e.preventDefault();
       }
     };
     window.addEventListener("keydown", onKey);
@@ -373,7 +421,38 @@ export function VideoEditorWidget() {
       window.removeEventListener("beforeunload", onUnload);
       window.removeEventListener("keydown", onKey);
     };
-  }, [store, undo, project, setProject]);
+  }, [store, undo, project, setProject, togglePlay, stepTo]);
+
+  /**
+   * Find the files behind a project's media: remembered handles first (they
+   * work for recordings anywhere on disk), then by name inside the folder.
+   * Runs before the project is shown, so the preview never asks for a file
+   * that is not there yet.
+   */
+  const resolveMedia = useCallback(
+    async (p: Project, interactive: boolean) => {
+      await store.restoreHandles(p.id, interactive);
+      for (const m of Object.values(p.media)) if (!store.hasFile(m.id)) await store.resolveByName(m.id, m.name);
+      setMissingMedia(store.missing(Object.keys(p.media)));
+      setFilesVersion((v) => v + 1);
+    },
+    [store],
+  );
+  const openLoadedProject = useCallback(
+    async (interactive: boolean) => {
+      const loaded = await store.load();
+      if (!loaded) return false;
+      await resolveMedia(loaded.project, interactive);
+      await loadProxies(loaded.project);
+      await primeMusic(loaded.project);
+      setProjectState(loaded.project);
+      setRecovered(loaded.recovered);
+      setPlayhead(0);
+      setSeekToken((x) => x + 1);
+      return true;
+    },
+    [store, resolveMedia, loadProxies, primeMusic],
+  );
 
   // Try to reopen the last project folder silently.
   useEffect(() => {
@@ -383,45 +462,36 @@ export function VideoEditorWidget() {
       if (!(await store.reopenLast())) return;
       if (!active) return;
       setFolder(store.folderName);
-      const loaded = await store.load();
-      if (loaded && active) {
-        setProjectState(loaded.project);
-        setRecovered(loaded.recovered);
-        for (const m of Object.values(loaded.project.media)) await store.resolveByName(m.id, m.name);
-        await loadProxies(loaded.project);
-        await primeMusic(loaded.project);
-      }
+      await openLoadedProject(false);
     })().catch(() => undefined);
     return () => {
       active = false;
     };
-  }, [store, loadProxies, primeMusic]);
+  }, [store, openLoadedProject]);
 
   const chooseFolder = async () => {
     try {
       await store.pickFolder();
       setFolder(store.folderName);
-      const loaded = await store.load();
-      if (loaded) {
-        setProjectState(loaded.project);
-        setRecovered(loaded.recovered);
-        for (const m of Object.values(loaded.project.media)) await store.resolveByName(m.id, m.name);
-        await loadProxies(loaded.project);
-        await primeMusic(loaded.project);
-        setStatus(loaded.recovered ? "Recovered from autosave" : "Project opened");
+      if (await openLoadedProject(true)) {
+        setStatus("Project opened");
       } else {
         await store.save(project);
+        await store.persistHandles(project.id);
       }
     } catch (e) {
       if ((e as DOMException).name !== "AbortError") setError(e instanceof Error ? e.message : String(e));
     }
   };
 
-  const addVideos = async (files: File[]) => {
+  const addVideos = async (inputs: (File | FileSystemFileHandle)[]) => {
     const refs: MediaRef[] = [];
-    for (const f of files) {
+    const files: File[] = [];
+    for (const h of inputs) {
       const id = newId();
-      store.registerFile(id, f);
+      const f = h instanceof File ? h : await h.getFile();
+      files.push(f);
+      store.registerFile(id, h);
       try {
         const info = await probe(f);
         if (!info.canDecode) {
@@ -441,6 +511,8 @@ export function VideoEditorWidget() {
       media: { ...p.media, ...Object.fromEntries(ordered.map((m) => [m.id, m])) },
       clips: [...p.clips, ...ordered.map((m): Clip => ({ id: newId(), media: m.id, in: 0, out: m.duration, transform: { ...NEUTRAL_TRANSFORM, crop: { ...NEUTRAL_TRANSFORM.crop } }, grade: { ...NEUTRAL_GRADE }, gainDb: DEFAULT_CLIP_GAIN_DB, muted: false }))],
     }));
+    void store.persistHandles(project.id);
+    setFilesVersion((v) => v + 1);
     // Proxies in the background, one at a time.
     if (store.hasFolder) for (const m of ordered) await makeProxy(m, files.find((f) => f.name === m.name)!, previewRef.current);
   };
@@ -476,6 +548,43 @@ export function VideoEditorWidget() {
     }
   };
 
+  /** Re-attach recordings the browser can no longer find: pick them again and match by name (then size). */
+  const relinkFiles = async () => {
+    const picker = (window as unknown as { showOpenFilePicker?: (o: unknown) => Promise<FileSystemFileHandle[]> }).showOpenFilePicker;
+    if (!picker) return fileInput.current?.click();
+    try {
+      const handles = await picker({ multiple: true, types: [{ description: "Recordings and music", accept: { "video/*": [".mp4", ".MP4", ".mov", ".MOV"], "audio/*": [".mp3", ".m4a", ".wav", ".aac", ".flac"] } }] });
+      const missing = missingMedia.map((id) => project.media[id]).filter(Boolean);
+      let linked = 0;
+      for (const h of handles) {
+        const f = await h.getFile();
+        const m = missing.find((x) => x.name === f.name && !store.hasFile(x.id)) ?? missing.find((x) => x.size === f.size && !store.hasFile(x.id));
+        if (m) {
+          store.registerFile(m.id, h);
+          linked++;
+        }
+      }
+      await store.persistHandles(project.id);
+      await resolveMedia(project, true);
+      setStatus(linked ? `Linked ${linked} file${linked === 1 ? "" : "s"}` : "None of those matched a missing recording by name or size");
+    } catch (e) {
+      if ((e as DOMException).name !== "AbortError") setError(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  /** Prefer the picker that hands back file handles (so files are remembered across reloads); fall back to the plain input. */
+  const pickFiles = async (kind: "video" | "audio") => {
+    const picker = (window as unknown as { showOpenFilePicker?: (o: unknown) => Promise<FileSystemFileHandle[]> }).showOpenFilePicker;
+    if (!picker) return void (kind === "video" ? fileInput.current : musicInput.current)?.click();
+    try {
+      const handles = await picker({ multiple: true, types: [kind === "video" ? { description: "Recordings", accept: { "video/*": [".mp4", ".MP4", ".mov", ".MOV"] } } : { description: "Music", accept: { "audio/*": [".mp3", ".m4a", ".wav", ".aac", ".flac", ".ogg"] } }] });
+      if (kind === "video") await addVideos(handles);
+      else await addMusic(handles);
+    } catch (e) {
+      if ((e as DOMException).name !== "AbortError") setError(e instanceof Error ? e.message : String(e));
+    }
+  };
+
   const rebuildProxies = async (height: ProxyHeight = previewRef.current, force = true) => {
     for (const id of [...new Set(project.clips.map((c) => c.media))]) {
       const f = await store.getFile(id), m = project.media[id];
@@ -486,10 +595,11 @@ export function VideoEditorWidget() {
     }
   };
 
-  const addMusic = async (files: File[]) => {
-    for (const f of files) {
+  const addMusic = async (inputs: (File | FileSystemFileHandle)[]) => {
+    for (const h of inputs) {
       const id = newId();
-      store.registerFile(id, f);
+      const f = h instanceof File ? h : await h.getFile();
+      store.registerFile(id, h);
       try {
         const info = await probe(f);
         const ref: MediaRef = { id, name: f.name, size: f.size, duration: info.duration, hasAudio: true, sampleRate: info.sampleRate };
@@ -520,7 +630,7 @@ export function VideoEditorWidget() {
       let url = proxyUrls.current.get(id);
       if (!url) {
         const f = await store.getFile(id);
-        if (!f) return;
+        if (!f) return setPreviewSrc(null);
         url = URL.createObjectURL(f);
         proxyUrls.current.set(id, url);
       }
@@ -529,19 +639,21 @@ export function VideoEditorWidget() {
     return () => {
       active = false;
     };
-  }, [under?.clip.media, store, under]);
+  }, [under?.clip.media, store, under, filesVersion]);
   useEffect(() => {
     const v = videoRef.current;
     if (!v || !under || !previewSrc) return;
     if (v.src !== previewSrc) v.src = previewSrc;
-    if (Math.abs(v.currentTime - under.sourceTime) > 0.3) v.currentTime = under.sourceTime;
+    // While playing, small drift is fine; paused, land on the exact frame so stepping works.
+    if (Math.abs(v.currentTime - under.sourceTime) > (playing ? 0.3 : 0.5 / fpsRef.current)) v.currentTime = under.sourceTime;
     // The clip's own sound, at its gain (an element can't go above unity; export can).
     const gain = under.clip.muted ? 0 : Math.min(1, dbToGain(under.clip.gainDb));
     v.volume = gain;
-    v.muted = gain === 0;
+    v.muted = gain === 0 || previewMuted;
+    v.playbackRate = speed;
     if (playing) void v.play().catch(() => undefined);
     else v.pause();
-  }, [previewSrc, under, playing]);
+  }, [previewSrc, under, playing, speed, previewMuted]);
 
   // Music in the preview: Web Audio sources started at the right offsets whenever playback (re)starts or the user seeks.
   useEffect(() => {
@@ -570,6 +682,7 @@ export function VideoEditorWidget() {
       if (at >= end) continue;
       const src = ctx.createBufferSource();
       src.buffer = buf;
+      src.playbackRate.value = speed;
       const gain = ctx.createGain();
       gain.gain.value = 0;
       src.connect(gain).connect(ctx.destination);
@@ -578,7 +691,7 @@ export function VideoEditorWidget() {
       nodes.set(m.id, { src, gain });
     }
     return stopAll;
-  }, [playing, seekToken, project.music, duration]);
+  }, [playing, seekToken, project.music, duration, speed]);
   useEffect(() => {
     if (!playing) return;
     let raf = 0;
@@ -586,9 +699,17 @@ export function VideoEditorWidget() {
       const v = videoRef.current;
       if (v && under) {
         const t = under.clip.start + (v.currentTime - under.clip.in);
-        if (v.currentTime >= under.clip.out - 0.05) {
-          if (under.clip.end >= duration - 0.05) setPlaying(false);
-          setPlayhead(Math.min(duration, under.clip.end + 0.001));
+        const loopTo = rangeRef.current ? rangeRef.current.from : 0, loopEnd = rangeRef.current ? rangeRef.current.to : duration;
+        const restart = () => {
+          setPlayhead(loopTo);
+          setSeekToken((x) => x + 1);
+        };
+        if (loopRef.current && t >= loopEnd - 0.03) restart();
+        else if (v.currentTime >= under.clip.out - 0.05) {
+          if (under.clip.end >= duration - 0.05) {
+            if (loopRef.current) restart();
+            else setPlaying(false);
+          } else setPlayhead(Math.min(duration, under.clip.end + 0.001));
         } else setPlayhead(t);
       }
       raf = requestAnimationFrame(tick);
@@ -661,7 +782,7 @@ export function VideoEditorWidget() {
           // Music gains follow the playhead so fades and crossfades are audible in the preview.
           for (const [id, node] of musicNodes.current) {
             const m = project.music.find((x) => x.id === id);
-            node.gain.gain.value = m ? musicGainAt(m, project.music, playhead, duration) : 0;
+            node.gain.gain.value = m && !previewMutedRef.current ? musicGainAt(m, project.music, playhead, duration) : 0;
           }
         } catch {
           /* WebGL unavailable: fall back to the raw video element behind the canvas */
@@ -708,6 +829,27 @@ export function VideoEditorWidget() {
     setProject((p) => ({ ...p, titles: [...p.titles, t] }));
     focusTitle(t);
   };
+  const titlesJsonInput = useRef<HTMLInputElement>(null);
+  const [importReplace, setImportReplace] = useState(false);
+  const downloadTitlesTemplate = () => {
+    const blob = new Blob([JSON.stringify(titlesTemplate(project), null, 2)], { type: "application/json" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `${project.name.replace(/[^\w-]+/g, "-") || "titles"}-titles.json`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  };
+  const importTitlesJson = async (file: File) => {
+    try {
+      const { titles, warnings } = parseTitlesImport(await file.text(), project);
+      setProject((p) => ({ ...p, titles: importReplace ? titles : [...p.titles, ...titles] }));
+      setSelectedTitle(titles[0]?.id ?? null);
+      setStatus(`Imported ${titles.length} title${titles.length === 1 ? "" : "s"} from ${file.name}${warnings.length ? ` with ${warnings.length} note${warnings.length === 1 ? "" : "s"}` : ""}`);
+      if (warnings.length) setError(`Import notes: ${warnings.join(" · ")}`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  };
   const removeTitle = (id: string) => {
     setProject((p) => ({ ...p, titles: p.titles.filter((x) => x.id !== id) }));
     setSelectedTitle((s) => (s === id ? null : s));
@@ -720,6 +862,11 @@ export function VideoEditorWidget() {
       useDirectory: (d: FileSystemDirectoryHandle) => {
         store.useDirectory(d);
         setFolder(d.name || "test");
+      },
+      reopenDirectory: async (d: FileSystemDirectoryHandle) => {
+        store.useDirectory(d);
+        setFolder(d.name || "test");
+        return openLoadedProject(false);
       },
       addVideos,
       addMusic,
@@ -783,11 +930,22 @@ export function VideoEditorWidget() {
         {support && !support.hevc && <span className="text-[12px] text-warn">No hardware HEVC 8K encoder found here — exports will use H.264 or need a lower resolution.</span>}
         <div className="ml-auto flex items-center gap-2">
           <input ref={fileInput} type="file" accept="video/*,.mp4,.mov" multiple hidden onChange={(e) => e.target.files && void addVideos(Array.from(e.target.files))} />
-          <button type="button" onClick={() => fileInput.current?.click()} className={cn(PRIMARY, "h-8 px-3 text-[13px]")}>
+          <button type="button" onClick={() => void pickFiles("video")} className={cn(PRIMARY, "h-8 px-3 text-[13px]")}>
             <Upload size={13} /> Add recordings
           </button>
         </div>
       </div>
+      {missingMedia.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2 rounded-[var(--radius-sm)] border border-warn/40 bg-warn/10 px-3 py-2 text-[13px]">
+          <AlertTriangle size={14} className="text-warn" />
+          <span>
+            {missingMedia.length === 1 ? "One recording can" : `${missingMedia.length} recordings can`}&apos;t be found right now: {missingMedia.map((id) => project.media[id]?.name ?? id).join(", ")}. The timeline is intact; pick the file{missingMedia.length === 1 ? "" : "s"} again to preview and export.
+          </span>
+          <button type="button" onClick={() => void relinkFiles()} className={cn(GHOST, "ml-auto border-accent text-accent")}>
+            Locate files…
+          </button>
+        </div>
+      )}
       {error && (
         <p className="flex items-center gap-1.5 text-[13px] text-danger">
           <AlertTriangle size={14} /> {error}
@@ -827,9 +985,16 @@ export function VideoEditorWidget() {
             onDrop={(e) => {
               e.preventDefault();
               setDragOver(false);
-              const fs = Array.from(e.dataTransfer.files);
-              void addVideos(fs.filter((f) => f.type.startsWith("video/") || /\.(mp4|mov)$/i.test(f.name)));
-              void addMusic(fs.filter((f) => f.type.startsWith("audio/")));
+              // Handles (when the browser offers them) are remembered across reloads; plain Files are not.
+              const items = Array.from(e.dataTransfer.items) as (DataTransferItem & { getAsFileSystemHandle?: () => Promise<FileSystemHandle | null> })[];
+              const pending = items.filter((i) => i.kind === "file").map((i) => (i.getAsFileSystemHandle ? i.getAsFileSystemHandle() : Promise.resolve(i.getAsFile())));
+              void (async () => {
+                const got = (await Promise.all(pending)).filter((x): x is FileSystemFileHandle | File => !!x && (x instanceof File || x.kind === "file")) as (FileSystemFileHandle | File)[];
+                const isVideo = (name: string, type: string) => type.startsWith("video/") || /\.(mp4|mov)$/i.test(name);
+                const withNames = await Promise.all(got.map(async (h) => ({ h, f: h instanceof File ? h : await h.getFile() })));
+                await addVideos(withNames.filter(({ f }) => isVideo(f.name, f.type)).map(({ h }) => h));
+                await addMusic(withNames.filter(({ f }) => f.type.startsWith("audio/") || /\.(mp3|m4a|wav|aac|flac|ogg)$/i.test(f.name)).map(({ h }) => h));
+              })();
             }}
           >
             <video ref={videoRef} playsInline className="absolute inset-0 h-full w-full object-contain opacity-0" />
@@ -850,7 +1015,20 @@ export function VideoEditorWidget() {
                   {fmtTime(playhead, first?.fps)} <span className="text-white/60">/ {fmtTime(duration)}</span>
                 </span>
                 {under && <span className="truncate text-[12px] text-white/60">{project.media[under.clip.media]?.name}</span>}
-                <span className="ml-auto text-[12px] text-white/60">Space plays · Esc leaves full screen</span>
+                <span className="text-[12px] text-white/60">
+                  {speed}×{loop ? " · loop" : ""}
+                  {previewMuted ? " · muted" : ""}
+                </span>
+                <span className="ml-auto text-[12px] text-white/60">Space plays · ←/→ step · Esc leaves full screen</span>
+              </div>
+            )}
+            {under && !previewSrc && missingMedia.includes(under.clip.media) && (
+              <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 p-6 text-center text-[13.5px] text-white/80">
+                <AlertTriangle size={24} className="text-warn" />
+                <span>Can&apos;t find {project.media[under.clip.media]?.name}</span>
+                <button type="button" onClick={() => void relinkFiles()} className="rounded-[var(--radius-sm)] bg-white/15 px-3 py-1.5 text-[13px] hover:bg-white/25">
+                  Locate the file…
+                </button>
               </div>
             )}
             {!project.clips.length && (
@@ -862,13 +1040,40 @@ export function VideoEditorWidget() {
             )}
           </div>
           <div className="mt-2 flex flex-wrap items-center gap-2">
-            <button type="button" onClick={togglePlay} disabled={!project.clips.length} className={cn(PRIMARY, "h-8 px-3 text-[13px]")}>
-              {playing ? <Pause size={13} /> : <Play size={13} />}
-              {playing ? "Pause" : "Play"}
-            </button>
+            <div className="flex items-center gap-0.5" role="group" aria-label="Transport">
+              <button type="button" onClick={() => stepTo(0)} disabled={!project.clips.length} className={cn(GHOST, "h-8 px-1.5")} title="To the start (Home)" aria-label="To the start">
+                <SkipBack size={13} />
+              </button>
+              <button type="button" onClick={() => stepTo(playhead - 1 / (first?.fps || 30))} disabled={!project.clips.length} className={cn(GHOST, "h-8 px-1.5")} title="Back one frame (←, ⇧← for 1 s)" aria-label="Back one frame">
+                <StepBack size={13} />
+              </button>
+              <button type="button" onClick={togglePlay} disabled={!project.clips.length} className={cn(PRIMARY, "h-8 px-3 text-[13px]")}>
+                {playing ? <Pause size={13} /> : <Play size={13} />}
+                {playing ? "Pause" : "Play"}
+              </button>
+              <button type="button" onClick={() => stepTo(playhead + 1 / (first?.fps || 30))} disabled={!project.clips.length} className={cn(GHOST, "h-8 px-1.5")} title="Forward one frame (→, ⇧→ for 1 s)" aria-label="Forward one frame">
+                <StepForward size={13} />
+              </button>
+              <button type="button" onClick={() => stepTo(duration)} disabled={!project.clips.length} className={cn(GHOST, "h-8 px-1.5")} title="To the end (End)" aria-label="To the end">
+                <SkipForward size={13} />
+              </button>
+            </div>
             <span className="font-mono text-[13px] text-ink tabular">
               {fmtTime(playhead, first?.fps)} <span className="text-faint">/ {fmtTime(duration)}</span>
             </span>
+            <select value={speed} onChange={(e) => setSpeed(Number(e.target.value))} className={cn(SEL, "h-7 text-[12px]")} aria-label="Preview speed" title="Preview speed (export is unaffected)">
+              {[0.25, 0.5, 1, 1.5, 2, 4].map((v) => (
+                <option key={v} value={v}>
+                  {v}×
+                </option>
+              ))}
+            </select>
+            <button type="button" onClick={() => setLoop((l) => !l)} aria-pressed={loop} className={cn(GHOST, "h-7 text-[12px]", loop && "border-accent text-accent")} title={range ? "Loop the export range" : "Loop the whole timeline"}>
+              <Repeat size={12} /> Loop{range ? " range" : ""}
+            </button>
+            <button type="button" onClick={() => setPreviewMuted((m) => !m)} aria-pressed={previewMuted} className={cn(GHOST, "h-7 text-[12px]", previewMuted && "border-accent text-accent")} title="Mute the preview (M) — export is unaffected" aria-label={previewMuted ? "Unmute preview" : "Mute preview"}>
+              {previewMuted ? <VolumeX size={12} /> : <Volume2 size={12} />}
+            </button>
             {under && (
               <span className="truncate text-[12px] text-faint">
                 {project.media[under.clip.media]?.name} · {project.proxies[under.clip.media]?.ready ? `${project.preview.proxyHeight}p proxy` : project.preview.proxyHeight ? "full-res (no proxy yet)" : "full-res"}
@@ -1111,7 +1316,7 @@ export function VideoEditorWidget() {
               <>
                 <div className="flex flex-wrap items-center gap-1.5">
                   <input ref={musicInput} type="file" accept="audio/*" multiple hidden onChange={(e) => e.target.files && void addMusic(Array.from(e.target.files))} />
-                  <button type="button" onClick={() => musicInput.current?.click()} className={GHOST}>
+                  <button type="button" onClick={() => void pickFiles("audio")} className={GHOST}>
                     <Music size={13} /> Add music
                   </button>
                   {current && (
@@ -1227,7 +1432,22 @@ export function VideoEditorWidget() {
                   <button type="button" onClick={() => logoInput.current?.click()} className={GHOST}>
                     {logo ? "Replace logo" : "+ Logo watermark"}
                   </button>
+                  <span className="ml-auto flex flex-wrap items-center gap-1.5">
+                    <button type="button" onClick={downloadTitlesTemplate} className={GHOST} title="A JSON with this timeline and every title property, ready to hand to ChatGPT or another LLM to fill in">
+                      <Download size={12} /> Template JSON
+                    </button>
+                    <input ref={titlesJsonInput} type="file" accept=".json,application/json" hidden onChange={(e) => e.target.files?.[0] && void importTitlesJson(e.target.files[0])} />
+                    <button type="button" onClick={() => titlesJsonInput.current?.click()} className={GHOST} title="Load a filled template back in">
+                      <Upload size={12} /> Import JSON
+                    </button>
+                    {project.titles.length > 0 && (
+                      <label className="flex items-center gap-1 text-[12px] text-muted" title="Otherwise imported titles are added to the current ones">
+                        <input type="checkbox" checked={importReplace} onChange={(e) => setImportReplace(e.target.checked)} className="accent-[var(--accent)]" /> replace current
+                      </label>
+                    )}
+                  </span>
                 </div>
+                <p className="text-[12px] text-faint">Download the template, give it to an LLM with your route notes (places, roads, dates), then import the JSON it returns: every title with its timing, position, colours, font and size arrives populated.</p>
                 {project.titles.length > 0 && <p className="text-[12px] text-faint">In time order. Open one to edit it; titles that overlap in time are all drawn, so give them different positions.</p>}
                 {[...project.titles]
                   .sort((a, b) => a.start - b.start)
@@ -1535,7 +1755,7 @@ export function VideoEditorWidget() {
             <div className="pointer-events-none absolute bottom-0 top-0 w-px bg-[#e5484d]" style={{ left: playhead * pxPerSec }} />
           </div>
         </div>
-        <p className="mt-1 text-[11.5px] text-faint">Click the ruler to seek · space plays · ⌘Z undoes · ⌘S saves. Clips are shown in playback order; music lanes stack, and overlaps on one lane crossfade.</p>
+        <p className="mt-1 text-[11.5px] text-faint">Click the ruler to seek · space plays · ←/→ step a frame (⇧ for 1 s) · ↑/↓ jump between cuts · Home/End · M mutes · ⌘Z undoes · ⌘S saves. Clips are shown in playback order; music lanes stack, and overlaps on one lane crossfade.</p>
       </div>
       {clearOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-labelledby="clear-project-title">
