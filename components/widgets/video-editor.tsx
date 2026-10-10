@@ -52,7 +52,7 @@ import {
   type TransitionKind,
 } from "@/lib/tools/video/project";
 import { drawTransition } from "@/lib/tools/video/transitions";
-import { LUT_OPTIONS, parseCube } from "@/lib/tools/video/lut";
+import { LUT_OPTIONS, buildDlogLut, lutToCube, parseCube } from "@/lib/tools/video/lut";
 import { Grader, buildProxy, drawOverlays, encoderSupport, exportProject, probe } from "@/lib/tools/video/engine";
 import { ProjectStore, hasFileSystemAccess, AUTOSAVE_FILE, PROJECT_FILE, PROXY_DIR } from "@/lib/tools/video/store";
 import { cn } from "@/lib/utils";
@@ -1042,6 +1042,27 @@ export function VideoEditorWidget() {
                   <button type="button" onClick={() => cubeInput.current?.click()} className="underline decoration-dotted underline-offset-2 hover:text-accent">
                     {project.customLut ? "Replace the .cube" : "Load a .cube"}
                   </button>
+                  {current.grade.lut !== "none" && current.grade.lut !== "custom" && (
+                    <>
+                      {" · "}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const kind = current.grade.lut as Exclude<LutKind, "none" | "custom">;
+                          const blob = new Blob([lutToCube(buildDlogLut(kind))], { type: "text/plain" });
+                          const a = document.createElement("a");
+                          a.href = URL.createObjectURL(blob);
+                          a.download = `bench-${kind}.cube`;
+                          a.click();
+                          setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+                        }}
+                        className="underline decoration-dotted underline-offset-2 hover:text-accent"
+                        title="Save this conversion as a 33-point .cube for Resolve, Premiere or Final Cut"
+                      >
+                        Download as .cube
+                      </button>
+                    </>
+                  )}
                   {" · "}
                   <a href="https://www.dji.com/lut" target="_blank" rel="noreferrer" className="underline decoration-dotted underline-offset-2 hover:text-accent">
                     DJI&apos;s official LUTs

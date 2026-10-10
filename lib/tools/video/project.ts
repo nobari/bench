@@ -6,8 +6,8 @@
  */
 
 /** Built-in conversions, plus the project's own .cube (DJI's official file, say). */
-export type LutKind = "none" | "dlogm" | "dlogm-natural" | "dlogm-vivid" | "dlog" | "custom";
-export const LUT_KINDS: LutKind[] = ["none", "dlogm", "dlogm-natural", "dlogm-vivid", "dlog", "custom"];
+export type LutKind = "none" | "dlogm" | "dlogm-study" | "dlogm-natural" | "dlogm-vivid" | "dlog" | "custom";
+export const LUT_KINDS: LutKind[] = ["none", "dlogm", "dlogm-study", "dlogm-natural", "dlogm-vivid", "dlog", "custom"];
 
 export interface Grade {
   /** Which conversion to apply first; "none" skips the LUT. */

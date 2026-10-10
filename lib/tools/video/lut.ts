@@ -125,12 +125,72 @@ const GREY_DISPLAY = pchip(DJI_TONE, 0.4);
 
 /** Options offered for log footage, in menu order. */
 export const LUT_OPTIONS: { kind: Exclude<LutKind, "none" | "custom">; name: string; hint: string }[] = [
-  { kind: "dlogm", name: "D-Log M → Rec.709 (DJI)", hint: "Matches DJI's official Osmo Action LUT: tone, hue and saturation were measured from the Action 6 file. The calm, true-to-life starting point." },
+  { kind: "dlogm", name: "D-Log M → Rec.709 (DJI)", hint: "Matches DJI's official Osmo Action LUT: tone, hue and saturation were measured from the Action 6 file. The true-to-life starting point." },
+  { kind: "dlogm-study", name: "D-Log M → Study drive", hint: "Tuned on Osmo Action 6 footage for long-play study, focus and work videos: DJI's tone with mids kept crisp, a soft shoulder that keeps sky gradients smooth, bright sky held off cyan, shadows opened a touch, a hint of warmth and calmer saturation." },
   { kind: "dlogm-natural", name: "D-Log M → Natural", hint: "DJI's rendering with 12 % less saturation and slightly less contrast — flattering for tarmac, dashboards and overcast days." },
   { kind: "dlogm-vivid", name: "D-Log M → Vivid", hint: "DJI's rendering with 10 % more saturation and a little more contrast, in the spirit of DJI's own vivid LUTs." },
   { kind: "dlog", name: "D-Log → Rec.709 (DJI)", hint: "DJI's published D-Log curve and D-Gamut matrix (Mavic 3 Pro Hasselblad camera, Inspire 3, Zenmuse), rendered with the same tone as the D-Log M look." },
 ];
-const LOOKS: Record<Exclude<LutKind, "none" | "custom">, { sat: number; con: number }> = { dlogm: { sat: 1, con: 1 }, "dlogm-natural": { sat: 0.88, con: 0.94 }, "dlogm-vivid": { sat: 1.1, con: 1.04 }, dlog: { sat: 1, con: 1 } };
+/**
+ * A look is a few display-space moves after DJI's rendering: exposure (stops),
+ * warmth (as the Temperature slider, 1 = +100), a nudge of blue-dominant
+ * pixels away from cyan, saturation with extra desaturation towards white
+ * (keeps bright sky and clouds neutral), contrast about 18 % grey, a soft
+ * shoulder above a display level, and a black lift.
+ */
+interface Look {
+  exposure: number;
+  warm: number;
+  blueHue: number;
+  sat: number;
+  hiDesat: number;
+  con: number;
+  shoulder: number;
+  lift: number;
+}
+const PLAIN: Look = { exposure: 0, warm: 0, blueHue: 0, sat: 1, hiDesat: 0, con: 1, shoulder: 1, lift: 0 };
+const LOOKS: Record<Exclude<LutKind, "none" | "custom">, Look> = {
+  dlogm: PLAIN,
+  // Measured on a sunny Tokyo drive: median 0.4 stop over grey, sky at code 0.35/0.5/0.65, p99 three stops over grey.
+  "dlogm-study": { exposure: -0.05, warm: 0.05, blueHue: 0.08, sat: 0.9, hiDesat: 0.35, con: 1, shoulder: 0.88, lift: 0.008 },
+  "dlogm-natural": { ...PLAIN, sat: 0.88, con: 0.94 },
+  "dlogm-vivid": { ...PLAIN, sat: 1.1, con: 1.04 },
+  dlog: PLAIN,
+};
+const smoothstep = (a: number, b: number, x: number) => {
+  const t = clamp01((x - a) / (b - a));
+  return t * t * (3 - 2 * t);
+};
+function applyLook(rgb: [number, number, number], L: Look): [number, number, number] {
+  let [r, g, b] = rgb;
+  if (L.exposure) {
+    const gain = 2 ** L.exposure;
+    r *= gain;
+    g *= gain;
+    b *= gain;
+  }
+  if (L.warm) {
+    r *= 1 + 0.25 * L.warm;
+    b *= 1 - 0.25 * L.warm;
+  }
+  if (L.blueHue && b > r && b > g) g -= L.blueHue * (b - r);
+  const y = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  const s = L.sat * (1 - L.hiDesat * smoothstep(0.7, 1, y));
+  if (s !== 1) {
+    r = y + s * (r - y);
+    g = y + s * (g - y);
+    b = y + s * (b - y);
+  }
+  if (L.con !== 1) {
+    r = GREY_DISPLAY + (r - GREY_DISPLAY) * L.con;
+    g = GREY_DISPLAY + (g - GREY_DISPLAY) * L.con;
+    b = GREY_DISPLAY + (b - GREY_DISPLAY) * L.con;
+  }
+  const k = L.shoulder;
+  const sh = (v: number) => (k < 1 && v > k ? k + (1 - k) * (1 - Math.exp(-(v - k) / (1 - k))) : v);
+  const fin = (v: number) => clamp01(L.lift + (1 - L.lift) * clamp01(sh(v)));
+  return [fin(r), fin(g), fin(b)];
+}
 
 const clamp01 = (v: number) => Math.min(1, Math.max(0, v));
 const mul3 = (m: readonly number[], v: [number, number, number]): [number, number, number] => [m[0] * v[0] + m[1] * v[1] + m[2] * v[2], m[3] * v[0] + m[4] * v[1] + m[5] * v[2], m[6] * v[0] + m[7] * v[1] + m[8] * v[2]];
@@ -146,12 +206,8 @@ export function convertLog(kind: Exclude<LutKind, "none" | "custom">, rgb: [numb
     const c = mul3(DJI_LOG_MATRIX, rgb);
     out = [djiTone(c[0]), djiTone(c[1]), djiTone(c[2])];
   }
-  const { sat, con } = LOOKS[kind];
-  if (sat !== 1 || con !== 1) {
-    const y = 0.2126 * out[0] + 0.7152 * out[1] + 0.0722 * out[2];
-    out = out.map((v) => clamp01(GREY_DISPLAY + ((y + sat * (v - y)) - GREY_DISPLAY) * con)) as [number, number, number];
-  }
-  return out;
+  const L = LOOKS[kind];
+  return L === PLAIN ? [clamp01(out[0]), clamp01(out[1]), clamp01(out[2])] : applyLook(out, L);
 }
 
 /** Build a built-in conversion as a 3D LUT (33³, the industry size). */
