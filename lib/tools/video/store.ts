@@ -10,6 +10,8 @@ import { deserialize, serialize, type Project } from "./project";
 export const PROJECT_FILE = "project.benchvideo.json";
 export const AUTOSAVE_FILE = "project.autosave.json";
 export const PROXY_DIR = "proxies";
+/** Full-resolution stills saved from the preview live here, inside the project folder. */
+export const FRAMES_DIR = "frames";
 const DB_NAME = "bench-video", DB_STORE = "handles";
 
 export const hasFileSystemAccess = () => typeof window !== "undefined" && "showDirectoryPicker" in window;

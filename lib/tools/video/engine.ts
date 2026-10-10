@@ -25,9 +25,9 @@ import {
   type VideoCodec,
 } from "mediabunny";
 import { GRADE_FRAGMENT_SHADER, buildDlogLut, deriveLut, fetchOfficialLut, lutTexture, parseCube, type Lut3D } from "./lut";
-import { dbToGain, fontFamilyCss, exportRange, isFileLutKind, musicGainAt, placeClips, planExport, transitionAt, transitionWindows, type Clip, type ExportSpan, type Grade, type LutKind, type MediaRef, type PlacedClip, type Project, type Title, type Transform, type TransitionWindow } from "./project";
+import { clipAt, dbToGain, fontFamilyCss, exportRange, isFileLutKind, musicGainAt, placeClips, planExport, transitionAt, transitionWindows, type Clip, type ExportSpan, type Grade, type LutKind, type MediaRef, type PlacedClip, type Project, type Title, type Transform, type TransitionWindow } from "./project";
 import { drawTransition } from "./transitions";
-import { ProgressTracker, type ExportProgress } from "./progress";
+import { ProgressTracker, defaultSpeeds, planSteps, type ExportProgress, type SpeedPriors, type StepProgress } from "./progress";
 
 export interface Probe {
   duration: number;
@@ -466,6 +466,8 @@ export interface ExportOptions {
   onProgress?: (p: ExportProgress) => void;
   /** Awaited between frames and audio blocks: return a promise while paused, nothing otherwise. */
   whilePaused?: () => Promise<void> | void;
+  /** Speeds from an earlier export on this machine, to estimate from before anything is measured. */
+  priors?: SpeedPriors;
   signal?: AbortSignal;
 }
 
@@ -527,7 +529,17 @@ class NeighbourFrames {
   }
 }
 
-export async function exportProject(opts: ExportOptions): Promise<{ bytesWritten: number; seconds: number; activeMs: number; pausedMs: number }> {
+export interface ExportResult {
+  bytesWritten: number;
+  seconds: number;
+  activeMs: number;
+  pausedMs: number;
+  /** Every step with its actual time, and the speeds measured, to seed the next export's estimates. */
+  steps: StepProgress[];
+  measured: SpeedPriors;
+}
+
+export async function exportProject(opts: ExportOptions): Promise<ExportResult> {
   const { project, getFile, logo, signal } = opts;
   const first = project.media[project.clips[0]?.media ?? ""];
   if (!first?.width || !first.height) throw new Error("Add at least one video clip.");
@@ -536,10 +548,38 @@ export async function exportProject(opts: ExportOptions): Promise<{ bytesWritten
   const fps = first.fps || 30;
   const codec: VideoCodec = project.export.codec;
   const bitrate = project.export.bitrateMbps * 1e6;
-  if (!(await canEncodeVideo(codec, { width: outW, height: outH, bitrate }))) throw new Error(`This browser can't encode ${codec.toUpperCase()} at ${outW}×${outH}. Try the other codec or a lower resolution.`);
   const spans = planExport(project);
   const total = spans.reduce((a, s) => a + (s.end - s.start), 0);
-  const tracker = new ProgressTracker(() => performance.now(), total, Math.round(total * fps));
+  const needsFileLut = project.clips.some((c) => isFileLutKind(c.grade.lut));
+  const lutsToLoad = [needsFileLut ? "DJI's conversion file" : "", project.customLut && project.clips.some((c) => c.grade.lut === "custom") ? `the custom .cube (${project.customLut.name})` : ""].filter(Boolean);
+  const steps = planSteps({
+    spans,
+    clipName: (id) => project.media[project.clips.find((c) => c.id === id)?.media ?? ""]?.name ?? id,
+    lutsToLoad,
+    audio: { clips: project.clips.filter((c) => !c.muted && c.gainDb > -60).length, music: project.music.filter((m) => !m.muted).length, bitrateKbps: project.export.audioBitrateKbps },
+    output: { codec, width: outW, height: outH, preset: project.export.preset, bitrateMbps: project.export.bitrateMbps },
+  });
+  const tracker = new ProgressTracker(() => performance.now(), steps, total, Math.round(total * fps), opts.priors, defaultSpeeds(first.width * first.height, outW * outH));
+  let lastEmit = 0;
+  const emit = (force = false) => {
+    const now = performance.now();
+    if (!force && now - lastEmit < 100) return;
+    lastEmit = now;
+    opts.onProgress?.(tracker.snapshot());
+  };
+  // A pause is whatever time whilePaused() keeps us waiting.
+  const pauseGate = async () => {
+    const p = opts.whilePaused?.();
+    if (!p) return;
+    tracker.pause();
+    emit(true);
+    await p;
+    tracker.resume();
+    emit(true);
+  };
+  tracker.beginStep("prepare");
+  emit(true);
+  if (!(await canEncodeVideo(codec, { width: outW, height: outH, bitrate }))) throw new Error(`This browser can't encode ${codec.toUpperCase()} at ${outW}×${outH}. Try the other codec or a lower resolution.`);
   // Count what reaches the file: every chunk passes through here on its way to the folder.
   const fileWriter = opts.writable.getWriter();
   const counted = new WritableStream<StreamTargetChunk>({
@@ -550,23 +590,6 @@ export async function exportProject(opts: ExportOptions): Promise<{ bytesWritten
     close: () => fileWriter.close(),
     abort: (r) => fileWriter.abort(r),
   });
-  let lastEmit = 0;
-  const emit = (phase: ExportProgress["phase"], span: ExportSpan | undefined, spanIndex: number, force = false) => {
-    const now = performance.now();
-    if (!force && now - lastEmit < 100) return;
-    lastEmit = now;
-    opts.onProgress?.(tracker.snapshot(phase, span, spanIndex, spans.length));
-  };
-  // A pause is whatever time whilePaused() keeps us waiting.
-  const pauseGate = async (phase: ExportProgress["phase"], span: ExportSpan | undefined, spanIndex: number) => {
-    const p = opts.whilePaused?.();
-    if (!p) return;
-    tracker.pause();
-    emit(phase, span, spanIndex, true);
-    await p;
-    tracker.resume();
-    emit(phase, span, spanIndex, true);
-  };
   // A partial export starts its file at zero: timeline times shift back by the range start.
   const offset = exportRange(project)?.from ?? 0;
   const windows = transitionWindows(placeClips(project.clips));
@@ -583,7 +606,7 @@ export async function exportProject(opts: ExportOptions): Promise<{ bytesWritten
       /* unreadable .cube: those clips export unconverted, as the preview showed */
     }
   }
-  if (project.clips.some((c) => isFileLutKind(c.grade.lut))) {
+  if (needsFileLut) {
     const base = await fetchOfficialLut();
     grader.provideLut("dji-official", deriveLut(base, "dji-official"));
     grader.provideLut("dji-official-study", deriveLut(base, "dji-official-study"));
@@ -594,6 +617,8 @@ export async function exportProject(opts: ExportOptions): Promise<{ bytesWritten
   const audioSource = new AudioSampleSource({ codec: "aac", bitrate: project.export.audioBitrateKbps * 1000 });
   output.addAudioTrack(audioSource);
   await output.start();
+  tracker.endStep();
+  emit(true);
   let written = 0;
   // Video, span by span, in timeline order.
   const inputs = new Map<string, Input>();
@@ -609,14 +634,15 @@ export async function exportProject(opts: ExportOptions): Promise<{ bytesWritten
   for (const span of spans) {
     spanIndex++;
     if (signal?.aborted) throw new DOMException("Cancelled", "AbortError");
-    emit("video", span, spanIndex, true);
+    tracker.beginStep(`span-${spanIndex}`);
+    emit(true);
     const clip = project.clips.find((c) => c.id === span.clipId)!;
     const media = project.media[clip.media];
     const input = await openInput(clip.media);
     const track = (await input.getPrimaryVideoTrack())!;
     const progress = (sourceT: number) => {
       tracker.frame(written + (sourceT - span.sourceIn));
-      emit("video", span, spanIndex);
+      emit();
     };
     // A copy span is only truly copyable if the encoder/container accept the source packets; we re-encode here
     // frame-accurately instead, but skip the GPU grade (identity draw) so it is still much faster than a graded span.
@@ -627,7 +653,7 @@ export async function exportProject(opts: ExportOptions): Promise<{ bytesWritten
         sample.close();
         throw new DOMException("Cancelled", "AbortError");
       }
-      await pauseGate("video", span, spanIndex);
+      await pauseGate();
       if (signal?.aborted) {
         sample.close();
         throw new DOMException("Cancelled", "AbortError");
@@ -665,26 +691,127 @@ export async function exportProject(opts: ExportOptions): Promise<{ bytesWritten
       sample.close();
     }
     written += span.end - span.start;
+    tracker.endStep();
+    emit(true);
   }
   await neighbour.reset();
   videoSource.close();
   // Audio.
-  emit("audio", undefined, spans.length, true);
+  tracker.beginStep("audio");
+  emit(true);
   await mixAudio({ project, getFile, sampleRate }, offset, offset + total, async (samples, timestamp) => {
-    await pauseGate("audio", undefined, spans.length);
+    await pauseGate();
     if (signal?.aborted) throw new DOMException("Cancelled", "AbortError");
     tracker.audio(timestamp - offset);
-    emit("audio", undefined, spans.length);
+    emit();
     const s = new AudioSample({ data: samples, format: "f32", numberOfChannels: 2, sampleRate, timestamp: timestamp - offset });
     await audioSource.add(s);
     s.close();
   }, signal);
   audioSource.close();
-  emit("finalize", undefined, spans.length, true);
+  tracker.endStep();
+  tracker.beginStep("finalize");
+  emit(true);
   await output.finalize();
-  emit("done", undefined, spans.length, true);
-  const done = tracker.snapshot("done", undefined, spans.length, spans.length);
-  return { bytesWritten: tracker.bytes, seconds: total, activeMs: done.elapsedMs, pausedMs: done.pausedMs };
+  tracker.endStep();
+  emit(true);
+  const done = tracker.snapshot();
+  return { bytesWritten: tracker.bytes, seconds: total, activeMs: done.elapsedMs, pausedMs: done.pausedMs, steps: done.steps, measured: tracker.measured() };
+}
+
+/* ------------------------------------------------------------- stills */
+
+export interface FrameOptions {
+  project: Project;
+  getFile: (mediaId: string) => Promise<File | null>;
+  logo: ImageBitmap | null;
+  /** Timeline instant, seconds. */
+  t: number;
+  /** PNG is lossless; JPEG takes a quality 0…1. */
+  type?: "image/png" | "image/jpeg";
+  quality?: number;
+}
+
+export interface RenderedFrame {
+  blob: Blob;
+  width: number;
+  height: number;
+  clipName: string;
+  sourceTime: number;
+}
+
+/**
+ * One timeline instant rendered exactly as an export would write it: the
+ * source frame (never the proxy) at the first clip's full resolution, graded
+ * on the GPU, composited through any transition, with titles and overlays.
+ */
+export async function renderFrame(opts: FrameOptions): Promise<RenderedFrame> {
+  const { project, getFile, logo, t } = opts;
+  const first = project.media[project.clips[0]?.media ?? ""];
+  if (!first?.width || !first.height) throw new Error("Add at least one video clip.");
+  const under = clipAt(project.clips, t);
+  if (!under) throw new Error("There is no clip under the playhead.");
+  const outW = first.width, outH = first.height;
+  const inputs = new Map<string, Input>();
+  const openInput = async (mediaId: string) => {
+    if (inputs.has(mediaId)) return inputs.get(mediaId)!;
+    const f = await getFile(mediaId);
+    if (!f) throw new Error(`Missing file for ${project.media[mediaId]?.name ?? mediaId}.`);
+    const inp = new Input({ source: new BlobSource(f), formats: ALL_FORMATS });
+    inputs.set(mediaId, inp);
+    return inp;
+  };
+  // The frame shown at a source instant: the last one decoded at or before it.
+  const frameOf = async (clip: PlacedClip, sourceT: number): Promise<VideoSample | null> => {
+    const track = await (await openInput(clip.media)).getPrimaryVideoTrack();
+    if (!track) return null;
+    return new VideoSampleSink(track).getSample(Math.max(clip.in, Math.min(clip.out - 1e-3, sourceT)));
+  };
+  const canvas = new OffscreenCanvas(outW, outH);
+  const ctx = canvas.getContext("2d")!;
+  const grader = new Grader(outW, outH);
+  if (project.customLut) {
+    try {
+      grader.setCustomLut(parseCube(project.customLut.cube));
+    } catch {
+      /* unreadable .cube: draw unconverted, as the preview does */
+    }
+  }
+  if (project.clips.some((c) => isFileLutKind(c.grade.lut))) {
+    const base = await fetchOfficialLut();
+    grader.provideLut("dji-official", deriveLut(base, "dji-official"));
+    grader.provideLut("dji-official-study", deriveLut(base, "dji-official-study"));
+  }
+  const main = await frameOf(under.clip, under.sourceTime);
+  if (!main) throw new Error("Couldn't decode a frame at the playhead.");
+  const media = project.media[under.clip.media];
+  const srcW = media?.width ?? main.displayWidth, srcH = media?.height ?? main.displayHeight;
+  const tr = transitionAt(transitionWindows(placeClips(project.clips)), t);
+  let composed = false;
+  if (tr) {
+    const outgoingIsThis = tr.window.outgoing.id === under.clip.id;
+    const other = outgoingIsThis ? tr.window.incoming : tr.window.outgoing;
+    const frame = await frameOf(other, other.in + (t - other.start));
+    if (frame) {
+      const a = new OffscreenCanvas(outW, outH), b = new OffscreenCanvas(outW, outH), scratch = new OffscreenCanvas(outW, outH);
+      const om = project.media[other.media];
+      grader.draw(main.toCanvasImageSource(), under.clip.grade, under.clip.transform, srcW, srcH);
+      a.getContext("2d")!.drawImage(grader.canvas, 0, 0, outW, outH);
+      grader.draw(frame.toCanvasImageSource(), other.grade, other.transform, om?.width ?? frame.displayWidth, om?.height ?? frame.displayHeight);
+      b.getContext("2d")!.drawImage(grader.canvas, 0, 0, outW, outH);
+      drawTransition(ctx, outgoingIsThis ? a : b, outgoingIsThis ? b : a, outW, outH, tr.window.kind, tr.progress, scratch);
+      frame.close();
+      composed = true;
+    }
+  }
+  if (!composed) {
+    grader.draw(main.toCanvasImageSource(), under.clip.grade, under.clip.transform, srcW, srcH);
+    ctx.drawImage(grader.canvas, 0, 0, outW, outH);
+  }
+  drawOverlays(ctx, outW, outH, t, project, logo);
+  main.close();
+  const blob = await canvas.convertToBlob({ type: opts.type ?? "image/png", quality: opts.quality });
+  return { blob, width: outW, height: outH, clipName: media?.name ?? under.clip.media, sourceTime: under.sourceTime };
 }
 
 /** Whether this browser can hardware-encode the project's codec at a given size. */

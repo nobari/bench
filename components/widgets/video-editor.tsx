@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, ChevronRight, Clapperboard, Crop, Download, FolderOpen, Loader, Maximize2, Minimize2, Music, Pause, Play, Repeat, Save, Scissors, SkipBack, SkipForward, SlidersHorizontal, StepBack, StepForward, Trash2, Type, Upload, Volume2, VolumeX } from "lucide-react";
+import { AlertTriangle, Camera, Check, ChevronRight, Circle, Clapperboard, Crop, Download, FolderOpen, Loader, Maximize2, Minimize2, Music, Pause, Play, Repeat, Save, Scissors, SkipBack, SkipForward, SlidersHorizontal, StepBack, StepForward, Trash2, Type, Upload, Volume2, VolumeX } from "lucide-react";
 import {
   DEFAULT_CLIP_GAIN_DB,
   DEFAULT_EXPORT,
@@ -64,9 +64,9 @@ import {
 } from "@/lib/tools/video/project";
 import { drawTransition } from "@/lib/tools/video/transitions";
 import { LUT_OPTIONS, buildDlogLut, deriveLut, fetchOfficialLut, lutToCube, parseCube, type Lut3D } from "@/lib/tools/video/lut";
-import { fmtBytes, fmtDuration, fmtMs, type ExportProgress } from "@/lib/tools/video/progress";
-import { Grader, buildProxy, drawOverlays, encoderSupport, exportProject, probe } from "@/lib/tools/video/engine";
-import { ProjectStore, hasFileSystemAccess, AUTOSAVE_FILE, PROJECT_FILE, PROXY_DIR } from "@/lib/tools/video/store";
+import { fmtBytes, fmtDelta, fmtDuration, fmtMs, type EstimateSource, type ExportProgress, type SpeedPriors, type StepProgress } from "@/lib/tools/video/progress";
+import { Grader, buildProxy, drawOverlays, encoderSupport, exportProject, probe, renderFrame } from "@/lib/tools/video/engine";
+import { ProjectStore, hasFileSystemAccess, AUTOSAVE_FILE, FRAMES_DIR, PROJECT_FILE, PROXY_DIR } from "@/lib/tools/video/store";
 import { cn } from "@/lib/utils";
 
 const SEL = "h-8 rounded-[var(--radius-sm)] border border-edge bg-base px-2 pr-7 text-[13px] text-ink outline-none focus:border-accent";
@@ -90,7 +90,7 @@ const TABS: [Tab, string, typeof Scissors][] = [
 ];
 
 interface Job {
-  kind: "proxy" | "export";
+  kind: "proxy" | "export" | "frame";
   label: string;
   fraction: number;
   message?: string;
@@ -99,6 +99,34 @@ interface Job {
   progress?: ExportProgress;
   output?: { name: string; codec: string; width: number; height: number; bitrateMbps: number; preset: string; estimatedBytes: number };
   paused?: boolean;
+}
+
+/**
+ * Speeds measured by earlier exports on this machine, per source→output profile,
+ * so the next export's estimates start from experience rather than a guess.
+ */
+const SPEEDS_KEY = "bench:video:export-speeds:v1";
+type LearnedSpeeds = Omit<SpeedPriors, "label"> & { at: number };
+function loadPriors(profile: string, describe: string): SpeedPriors | undefined {
+  try {
+    const all = JSON.parse(localStorage.getItem(SPEEDS_KEY) ?? "{}") as Record<string, LearnedSpeeds>;
+    const got = all[profile];
+    if (!got) return undefined;
+    const { at, ...rest } = got;
+    return { ...rest, label: `your last ${describe} export (${new Date(at).toLocaleDateString()})` };
+  } catch {
+    return undefined;
+  }
+}
+function savePriors(profile: string, measured: SpeedPriors) {
+  try {
+    const all = JSON.parse(localStorage.getItem(SPEEDS_KEY) ?? "{}") as Record<string, LearnedSpeeds>;
+    // Keep what this run measured; earlier values stand in for kinds it did not exercise (no copy spans this time, say).
+    all[profile] = { ...all[profile], ...measured, at: Date.now() };
+    localStorage.setItem(SPEEDS_KEY, JSON.stringify(all));
+  } catch {
+    /* no storage (private window): the next export starts from the defaults again */
+  }
 }
 
 function Slider({ label, value, min, max, step, onChange, format }: { label: string; value: number; min: number; max: number; step: number; onChange: (v: number) => void; format?: (v: number) => string }) {
@@ -416,6 +444,40 @@ export function VideoEditorWidget() {
     [store],
   );
 
+  /** A still of the frame under the playhead, rendered from the source at full resolution with the grade, transitions and titles. */
+  const saveFrame = useCallback(
+    async (jpeg = false) => {
+      if (!project.clips.length || job) return;
+      const t = Math.min(playheadRef.current, Math.max(0, durationRef.current - 0.001));
+      const kind = jpeg ? "JPEG" : "PNG";
+      setJob({ kind: "frame", label: "Saving frame", message: `${fmtMs(t)} at full resolution — decoding the source frame, grading it and encoding ${kind}…`, fraction: 0.5, abort: new AbortController() });
+      try {
+        const frame = await renderFrame({ project, getFile: (id) => store.getFile(id), logo, t, type: jpeg ? "image/jpeg" : "image/png", quality: jpeg ? 0.95 : undefined });
+        const name = `${project.name.replace(/[^\w-]+/g, "-")}-${fmtMs(t).replace(/[:.]/g, "-")}.${jpeg ? "jpg" : "png"}`;
+        const facts = `${frame.width}×${frame.height} ${kind}, ${fmtBytes(frame.blob.size)}, from ${frame.clipName} at ${fmtMs(frame.sourceTime)}`;
+        if (store.hasFolder) {
+          const { writable } = await store.createWritable(name, FRAMES_DIR);
+          await writable.write(frame.blob);
+          await writable.close();
+          setStatus(`Saved ${FRAMES_DIR}/${name} in the project folder — ${facts}`);
+        } else {
+          const url = URL.createObjectURL(frame.blob);
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = name;
+          a.click();
+          setTimeout(() => URL.revokeObjectURL(url), 30000);
+          setStatus(`Downloaded ${name} — ${facts}`);
+        }
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+      } finally {
+        setJob(null);
+      }
+    },
+    [project, job, store, logo],
+  );
+
   useEffect(() => {
     encoderSupport(7680, 4320).then(setSupport).catch(() => setSupport({ hevc: false, avc: false }));
     const onUnload = () => void store.flush();
@@ -453,6 +515,7 @@ export function VideoEditorWidget() {
         else if (e.key === "ArrowUp") stepTo([...cuts].reverse().find((c) => c < t - 0.01) ?? 0);
         else if (e.key === "ArrowDown") stepTo(cuts.find((c) => c > t + 0.01) ?? durationRef.current);
         else if (e.key === "m" || e.key === "M") setPreviewMuted((m) => !m);
+        else if (e.key === "s" || e.key === "S") void saveFrame(e.altKey);
         else return;
         e.preventDefault();
       }
@@ -470,7 +533,7 @@ export function VideoEditorWidget() {
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("keyup", onKeyUp);
     };
-  }, [store, undo, project, setProject, togglePlay, stepTo]);
+  }, [store, undo, project, setProject, togglePlay, stepTo, saveFrame]);
 
   /**
    * Find the files behind a project's media: remembered handles first (they
@@ -947,6 +1010,7 @@ export function VideoEditorWidget() {
     const outH = project.export.resolution === "source" ? (first?.height ?? 4320) : project.export.resolution;
     const outW = first?.width && first.height ? Math.round((first.width * (outH / first.height)) / 2) * 2 : Math.round((outH * 16) / 9);
     const output = { name, codec: project.export.codec.toUpperCase(), width: outW, height: outH, bitrateMbps: project.export.bitrateMbps, preset: project.export.preset, estimatedBytes: estimate.bytes };
+    const profile = `${first?.height ?? 0}>${outH}:${project.export.codec}:${project.export.preset}`;
     setJob({ kind: "export", label: "Exporting", fraction: 0, abort, output, paused: false });
     try {
       const { writable } = await store.createWritable(name);
@@ -956,13 +1020,18 @@ export function VideoEditorWidget() {
         logo,
         writable: writable as unknown as WritableStream<import("mediabunny").StreamTargetChunk>,
         signal: abort.signal,
+        priors: loadPriors(profile, `${outH}p ${project.export.codec.toUpperCase()}`),
         whilePaused: () => (pauseRef.current.paused ? new Promise<void>((r) => pauseRef.current.waiters.push(r)) : undefined),
         onProgress: (progress) => {
           setJob((j) => (j ? { ...j, fraction: progress.fraction, progress } : j));
           document.title = `${(progress.fraction * 100).toFixed(1)}% · ${progress.paused ? "Paused" : "Exporting"} · Bench`;
         },
       });
-      setStatus(`Exported ${name} — ${fmtBytes(result.bytesWritten)} in ${fmtDuration(result.activeMs)}${result.pausedMs > 500 ? ` plus ${fmtDuration(result.pausedMs)} paused` : ""} (${(result.seconds / Math.max(0.001, result.activeMs / 1000)).toFixed(2)}× realtime)`);
+      savePriors(profile, result.measured);
+      const stepMs = (kind: StepProgress["kind"]) => result.steps.filter((s) => s.kind === kind).reduce((a, s) => a + s.elapsedMs, 0);
+      setStatus(
+        `Exported ${name} — ${fmtBytes(result.bytesWritten)} in ${fmtDuration(result.activeMs)}${result.pausedMs > 500 ? ` plus ${fmtDuration(result.pausedMs)} paused` : ""} (${(result.seconds / Math.max(0.001, result.activeMs / 1000)).toFixed(2)}× realtime) · prepare ${fmtDuration(stepMs("prepare"))} · video ${fmtDuration(stepMs("video"))} · audio ${fmtDuration(stepMs("audio"))} · finish ${fmtDuration(stepMs("finalize"))}`,
+      );
     } catch (e) {
       if ((e as DOMException).name !== "AbortError") setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -1099,7 +1168,10 @@ export function VideoEditorWidget() {
                 <button type="button" onClick={() => setFsTimeline((v) => !v)} aria-pressed={fsTimeline} className={cn("h-8 rounded-[var(--radius-sm)] px-2.5 text-[12px]", fsTimeline ? "bg-white/25" : "bg-white/10 hover:bg-white/20")} title="Show or hide the timeline summary (T)">
                   Timeline
                 </button>
-                <span className="ml-auto text-[12px] text-white/60">Space plays, hold for 2× · ←/→ step · T timeline · Esc leaves full screen</span>
+                <button type="button" onClick={(e) => void saveFrame(e.altKey)} disabled={!!job} className="flex h-8 items-center gap-1.5 rounded-[var(--radius-sm)] bg-white/10 px-2.5 text-[12px] hover:bg-white/20 disabled:opacity-50" title="Save this frame at full resolution as PNG (S); Alt/Option for JPEG">
+                  <Camera size={13} /> Save frame
+                </button>
+                <span className="ml-auto text-[12px] text-white/60">Space plays, hold for 2× · ←/→ step · T timeline · S saves the frame · Esc leaves full screen</span>
               </div>
             )}
             {fullscreen && fsTimeline && project.clips.length > 0 && (
@@ -1217,6 +1289,9 @@ export function VideoEditorWidget() {
             </button>
             <button type="button" onClick={toggleFullscreen} disabled={!project.clips.length} className={cn(GHOST, "h-7 text-[12px]")} title="Watch the preview full screen">
               <Maximize2 size={12} /> Full screen
+            </button>
+            <button type="button" onClick={(e) => void saveFrame(e.altKey)} disabled={!project.clips.length || !!job} className={cn(GHOST, "h-7 text-[12px]")} title="Save this frame at full source resolution — graded, through any transition, with titles — as a lossless PNG into the project's frames folder (S). Hold Alt/Option for a JPEG." data-save-frame>
+              <Camera size={12} /> Save frame
             </button>
             <label className="ml-auto flex items-center gap-1.5 text-[12px] text-muted">
               Zoom
@@ -2047,14 +2122,32 @@ function Stat({ label, value, mono = true, title }: { label: string; value: Reac
   );
 }
 
-/** The export in full: what is being written, where it is, how fast, and how long is left. */
+const PHASE_LABEL: Record<ExportProgress["phase"], string> = { prepare: "Preparing", video: "Rendering video", audio: "Mixing audio", finalize: "Finishing the file", done: "Done" };
+const SOURCE_LABEL: Record<EstimateSource, string> = { default: "default guess", learned: "from your last export", measured: "measured", actual: "actual" };
+
+/** The export in full: what is being written, where it is, how fast, how long is left, and every step with its estimate. */
 function ExportPanel({ job, onPause, onResume, onCancel }: { job: Job; onPause: () => void; onResume: () => void; onCancel: () => void }) {
+  const [showSteps, setShowSteps] = useState(true);
   const p = job.progress;
   const out = job.output;
   const pct = ((p?.fraction ?? 0) * 100).toFixed(3);
-  const phaseLabel = !p ? "Starting…" : p.phase === "video" ? (p.span?.kind === "copy" ? "Copying video" : "Rendering video") : p.phase === "audio" ? "Mixing audio" : p.phase === "finalize" ? "Finishing the file" : "Done";
+  const phaseLabel = !p ? "Starting…" : p.phase === "video" && p.span?.kind === "copy" ? "Copying video" : PHASE_LABEL[p.phase];
   // Start + worked + paused + remaining, all from the snapshot: no clock reads while rendering.
-  const finishAt = p?.etaMs != null ? new Date(p.startedAt + p.elapsedMs + p.pausedMs + p.etaMs).toLocaleTimeString() : "—";
+  const finishAt = p ? new Date(p.startedAt + p.elapsedMs + p.pausedMs + p.etaMs).toLocaleTimeString() : "—";
+  const steps = p?.steps ?? [];
+  const doneSteps = steps.filter((s) => s.status === "done").length;
+  const unfinished = steps.filter((s) => s.status !== "done");
+  const bySource = (src: EstimateSource) => unfinished.filter((s) => s.source === src).length;
+  const basisSummary = !p ? "starting…" : unfinished.length ? [bySource("measured") ? `${bySource("measured")} measured` : "", bySource("learned") ? `${bySource("learned")} from your last export` : "", bySource("default") ? `${bySource("default")} default guess${bySource("default") === 1 ? "" : "es"}` : ""].filter(Boolean).join(", ") : "all done";
+  // Tick marks where each step is expected to hand over to the next, by estimated time.
+  const ticks: { at: number; title: string }[] = [];
+  if (p && p.totalEstimateMs > 0) {
+    let acc = 0;
+    for (const s of steps.slice(0, -1)) {
+      acc += s.estimateMs;
+      ticks.push({ at: acc / p.totalEstimateMs, title: `${s.title} → next` });
+    }
+  }
   return (
     <div className={cn("panel space-y-3 border-2 p-4", job.paused ? "border-warn" : "border-accent")} data-export-panel aria-live="polite">
       <div className="flex flex-wrap items-center gap-3">
@@ -2066,6 +2159,7 @@ function ExportPanel({ job, onPause, onResume, onCancel }: { job: Job; onPause: 
           <div className="text-[12.5px] text-muted">
             {phaseLabel}
             {p?.span && p.phase === "video" ? ` · span ${p.spanIndex} of ${p.spanCount}${p.span.reasons.length ? ` (${p.span.reasons.join(", ")})` : ""} · ${fmtMs(p.span.start)} → ${fmtMs(p.span.end)}` : ""}
+            {p ? ` · step ${Math.min(steps.length, doneSteps + 1)} of ${steps.length}` : ""}
             {job.paused ? " · resume to continue — keep this tab open, the file stays open while paused" : ""}
           </div>
         </div>
@@ -2077,7 +2171,7 @@ function ExportPanel({ job, onPause, onResume, onCancel }: { job: Job; onPause: 
             <Play size={13} /> Resume
           </button>
         ) : (
-          <button type="button" onClick={onPause} className={cn(GHOST, "h-9")} disabled={!p || p.phase === "finalize" || p.phase === "done"}>
+          <button type="button" onClick={onPause} className={cn(GHOST, "h-9")} disabled={!p || p.phase === "prepare" || p.phase === "finalize" || p.phase === "done"}>
             <Pause size={13} /> Pause
           </button>
         )}
@@ -2085,24 +2179,89 @@ function ExportPanel({ job, onPause, onResume, onCancel }: { job: Job; onPause: 
           Cancel
         </button>
       </div>
-      <div className="relative h-3 overflow-hidden rounded-full bg-raised">
+      <div className="relative h-3 overflow-hidden rounded-full bg-raised" title="Overall progress, weighted by each step's estimated time — it can step back when an estimate is revised well upward; the marks are where one step is expected to hand over to the next">
         <div className={cn("h-full transition-[width] duration-200", job.paused ? "bg-warn" : "bg-accent")} style={{ width: `${Math.min(100, (p?.fraction ?? 0) * 100)}%` }} />
-        {p && p.total > 0 && <div className="absolute top-0 h-full w-px bg-ink/40" style={{ left: "90%" }} title="Video done here; audio and finishing follow" />}
+        {ticks.map((t) => (
+          <div key={t.title} className="absolute top-0 h-full w-px bg-ink/40" style={{ left: `${(t.at * 100).toFixed(2)}%` }} title={t.title} />
+        ))}
       </div>
-      <div className="grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-3 lg:grid-cols-6">
+      <div className="grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-3 lg:grid-cols-4 2xl:grid-cols-6">
         <Stat label="Position" value={p ? `${fmtMs(p.phase === "audio" ? p.audioT : p.timelineT)} / ${fmtMs(p.total)}` : "—"} title="Timeline time covered so far, out of the export range" />
         <Stat label="Frames" value={p ? `${p.frames.toLocaleString()} / ${p.framesTotal.toLocaleString()}` : "—"} />
-        <Stat label="Speed" value={p && p.fps > 0 ? `${p.fps.toFixed(1)} fps · ${p.realtime.toFixed(3)}× realtime` : "—"} title="Frames per second over the last few seconds; timeline seconds per wall second overall" />
+        <Stat label="Speed" value={p && p.fps > 0 ? `${p.fps.toFixed(1)} fps · ${p.realtime.toFixed(3)}× realtime` : "—"} title="Frames per second over the last few seconds; timeline seconds per wall second spent on video" />
         <Stat label="Elapsed" value={p ? `${fmtDuration(p.elapsedMs)}${p.pausedMs > 500 ? ` (+${fmtDuration(p.pausedMs)} paused)` : ""}` : "0:00:00.0"} />
-        <Stat label="Remaining" value={p?.etaMs != null ? fmtDuration(p.etaMs) : "estimating…"} title="From the speed so far; audio and finishing included" />
-        <Stat label="Finish at" value={finishAt} />
+        <Stat label="Remaining" value={p ? `≈ ${fmtDuration(p.etaMs)} · ${SOURCE_LABEL[p.etaSource]}` : "estimating…"} title="The unfinished steps' estimates added up, and what most of that rests on" />
+        <Stat label="Finish at" value={finishAt} title="Expected clock time when the file is closed" />
         <Stat label="Written" value={p ? `${fmtBytes(p.bytesWritten)}${out ? ` of ~${fmtBytes(out.estimatedBytes)}` : ""}` : "0 kB"} title="Bytes that reached the file so far, against the estimate" />
         <Stat label="Output" value={out ? `${out.codec} ${out.width}×${out.height}` : "—"} />
         <Stat label="Bitrate · preset" value={out ? `${out.bitrateMbps} Mbps · ${out.preset}` : "—"} />
         <Stat label="Started" value={p ? new Date(p.startedAt).toLocaleTimeString() : "—"} />
-        <Stat label="Phase" value={phaseLabel} mono={false} />
+        <Stat label="Total expected" value={p ? `≈ ${fmtDuration(p.totalEstimateMs)} working` : "—"} title="Elapsed plus remaining, pauses excluded" />
         <Stat label="Progress" value={p ? `video ${Math.min(100, (p.timelineT / Math.max(1e-6, p.total)) * 100).toFixed(3)}% · audio ${Math.min(100, (p.audioT / Math.max(1e-6, p.total)) * 100).toFixed(3)}%` : "—"} title="Each phase on its own, to three decimals" />
       </div>
+      <div className="rounded-[var(--radius-sm)] border border-line" data-export-steps>
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2 text-[12px] text-muted">
+          <span className="font-medium text-ink">Steps</span>
+          <span>
+            {doneSteps} of {steps.length || "—"} done
+          </span>
+          <span title="Each unfinished step's estimate is a default guess until there is something to measure; a speed learned from your last export at these settings stands in between">estimates: {basisSummary}</span>
+          <button type="button" onClick={() => setShowSteps((v) => !v)} aria-expanded={showSteps} className="ml-auto text-accent hover:underline">
+            {showSteps ? "Hide steps" : "Show steps"}
+          </button>
+        </div>
+        {showSteps && steps.length > 0 && (
+          <ol className="divide-y divide-line border-t border-line">
+            {steps.map((s, i) => (
+              <StepRow key={s.id} step={s} index={i} paused={!!job.paused} />
+            ))}
+          </ol>
+        )}
+      </div>
     </div>
+  );
+}
+
+/** One export step: what it does, how far it is, what it was expected to take and what it actually took. */
+function StepRow({ step: s, index, paused }: { step: StepProgress; index: number; paused: boolean }) {
+  const running = s.status === "running", done = s.status === "done";
+  const timed = s.kind === "video" || s.kind === "audio";
+  const timing = done
+    ? `took ${fmtDuration(s.elapsedMs)}${s.promisedMs != null && s.promisedMs > 0 ? ` · expected ${fmtDuration(s.promisedMs)} (${fmtDelta(s.elapsedMs, s.promisedMs)})` : ""}`
+    : running
+      ? `${fmtDuration(s.elapsedMs)} of ≈ ${fmtDuration(s.estimateMs)} · ≈ ${fmtDuration(s.remainingMs)} left · ${s.basis}`
+      : `≈ ${fmtDuration(s.estimateMs)} · ${s.basis}`;
+  const when = s.startedAt != null ? `${new Date(s.startedAt).toLocaleTimeString()}${s.endedAt != null ? ` → ${new Date(s.endedAt).toLocaleTimeString()}` : " → …"}` : "";
+  return (
+    <li className={cn("grid grid-cols-[20px_1fr] gap-x-2 px-3 py-2", running && "bg-accent-soft/40")} data-step={s.id} data-status={s.status}>
+      <div className="pt-0.5">
+        {done ? <Check size={15} className="text-accent" aria-label="done" /> : running ? paused ? <Pause size={15} className="text-warn" aria-label="paused" /> : <Loader size={15} className="animate-spin text-accent" aria-label="running" /> : <Circle size={13} className="mt-0.5 text-faint" aria-label="pending" />}
+      </div>
+      <div className="min-w-0">
+        <div className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 text-[13px]">
+          <span className={cn("font-medium", done || running ? "text-ink" : "text-muted")}>
+            {index + 1}. {s.title}
+          </span>
+          {timed && (running || done) && (
+            <span className="font-mono tabular text-ink" data-step-inner>
+              {((s.fraction ?? 0) * 100).toFixed(3)}%
+            </span>
+          )}
+          {timed && <span className="font-mono tabular text-muted">{running || done ? `${fmtMs(s.done)} / ${fmtMs(s.units)}` : `${fmtMs(s.units)} of timeline`}</span>}
+          <span className="ml-auto font-mono text-[12px] tabular text-muted" data-step-timing>
+            {timing}
+          </span>
+        </div>
+        <div className="text-[12px] text-faint">
+          {s.detail}
+          {when ? ` · ${when}` : ""}
+        </div>
+        {running && (
+          <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-raised">
+            {s.fraction != null ? <div className={cn("h-full transition-[width] duration-200", paused ? "bg-warn" : "bg-accent")} style={{ width: `${Math.min(100, s.fraction * 100)}%` }} /> : <div className={cn("h-full w-1/3 animate-pulse", paused ? "bg-warn" : "bg-accent")} />}
+          </div>
+        )}
+      </div>
+    </li>
   );
 }
