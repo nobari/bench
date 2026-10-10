@@ -108,9 +108,36 @@ export interface Title {
   /** CSS colours; an empty background means no backing box. */
   color: string;
   background: string;
-  font: TitleFont;
+  /** A preset key (sans, serif, mono, rounded) or any font family name, including fonts installed on this machine. */
+  font: string;
   /** Text height as a fraction of the frame height. */
   size: number;
+  /** CSS font weight 300–800, italic, and letter spacing in em. */
+  weight: number;
+  italic: boolean;
+  letterSpacing: number;
+  shadow: TitleShadow;
+  shadowColor: string;
+  /** Text alignment inside the block; auto follows the position column. */
+  align: TitleAlign;
+  /** Box padding, corner radius and border width as multiples of the text size; the border draws even without a background. */
+  padding: number;
+  radius: number;
+  borderWidth: number;
+  borderColor: string;
+}
+export type TitleShadow = "none" | "soft" | "hard" | "outline";
+export const TITLE_SHADOWS: TitleShadow[] = ["none", "soft", "hard", "outline"];
+export type TitleAlign = "auto" | "left" | "center" | "right";
+export const TITLE_ALIGNS: TitleAlign[] = ["auto", "left", "center", "right"];
+export const TITLE_WEIGHTS = [300, 400, 500, 600, 700, 800];
+/** Families that are on nearly every Mac and PC, offered next to the presets and whatever is installed locally. */
+export const TITLE_FAMILIES = ["Inter", "Helvetica Neue", "Arial", "Avenir Next", "Futura", "Gill Sans", "Trebuchet MS", "Verdana", "Georgia", "Times New Roman", "Baskerville", "Palatino", "Didot", "Menlo", "Courier New", "Impact", "American Typewriter", "Chalkboard SE"];
+/** The CSS font-family for a title: a preset stack, or the family name quoted with a sans fallback. */
+export function fontFamilyCss(font: string): string {
+  if (font in TITLE_FONTS) return TITLE_FONTS[font as TitleFont];
+  const name = font.trim().replace(/["\\]/g, "");
+  return name ? `"${name}", ${TITLE_FONTS.sans}` : TITLE_FONTS.sans;
 }
 
 export type TitlePosition = "tl" | "tc" | "tr" | "ml" | "mc" | "mr" | "bl" | "bc" | "br";
@@ -123,15 +150,18 @@ export const TITLE_FONTS = {
 } as const;
 export type TitleFont = keyof typeof TITLE_FONTS;
 
-const TITLE_DEFAULTS: Record<Title["kind"], Pick<Title, "position" | "color" | "background" | "font" | "size" | "duration">> = {
-  intro: { position: "mc", color: "#ffffff", background: "", font: "sans", size: 0.07, duration: 4 },
-  title: { position: "mc", color: "#ffffff", background: "", font: "sans", size: 0.06, duration: 5 },
-  lowerThird: { position: "bl", color: "#ffffff", background: "rgba(0,0,0,0.55)", font: "sans", size: 0.04, duration: 5 },
+type TitleStyle = Pick<Title, "position" | "color" | "background" | "font" | "size" | "duration" | "weight" | "italic" | "letterSpacing" | "shadow" | "shadowColor" | "align" | "padding" | "radius" | "borderWidth" | "borderColor">;
+const STYLE_BASE = { font: "sans", weight: 600, italic: false, letterSpacing: 0, shadowColor: "rgba(0,0,0,0.6)", align: "auto" as TitleAlign, padding: 0.4, radius: 0.15, borderWidth: 0, borderColor: "#ffffff" };
+const TITLE_DEFAULTS: Record<Title["kind"], TitleStyle> = {
+  intro: { ...STYLE_BASE, position: "mc", color: "#ffffff", background: "", size: 0.07, duration: 4, shadow: "soft" },
+  title: { ...STYLE_BASE, position: "mc", color: "#ffffff", background: "", size: 0.06, duration: 5, shadow: "soft" },
+  lowerThird: { ...STYLE_BASE, position: "bl", color: "#ffffff", background: "rgba(0,0,0,0.55)", size: 0.04, duration: 5, shadow: "none" },
 };
 
 export function newTitle(kind: Title["kind"], start: number, text: string, subtitle = ""): Title {
   const d = TITLE_DEFAULTS[kind];
-  return { id: newId(), kind, text, subtitle, start, duration: d.duration, fade: 1, position: d.position, color: d.color, background: d.background, font: d.font, size: d.size };
+  const { duration, ...style } = d;
+  return { id: newId(), kind, text, subtitle, start, duration, fade: 1, ...style };
 }
 
 /** Fill in the fields older project files did not have. */
@@ -148,8 +178,18 @@ export function normalizeTitle(t: Partial<Title> & { kind: Title["kind"] }): Tit
     position: TITLE_POSITIONS.includes(t.position as TitlePosition) ? (t.position as TitlePosition) : d.position,
     color: t.color ?? d.color,
     background: t.background ?? d.background,
-    font: t.font && t.font in TITLE_FONTS ? t.font : d.font,
+    font: typeof t.font === "string" && t.font.trim() ? t.font.trim() : d.font,
     size: t.size ?? d.size,
+    weight: typeof t.weight === "number" ? Math.min(800, Math.max(300, Math.round(t.weight / 100) * 100)) : d.weight,
+    italic: typeof t.italic === "boolean" ? t.italic : d.italic,
+    letterSpacing: typeof t.letterSpacing === "number" ? Math.min(0.5, Math.max(-0.1, t.letterSpacing)) : d.letterSpacing,
+    shadow: TITLE_SHADOWS.includes(t.shadow as TitleShadow) ? (t.shadow as TitleShadow) : d.shadow,
+    shadowColor: typeof t.shadowColor === "string" && t.shadowColor ? t.shadowColor : d.shadowColor,
+    align: TITLE_ALIGNS.includes(t.align as TitleAlign) ? (t.align as TitleAlign) : d.align,
+    padding: typeof t.padding === "number" ? Math.min(2, Math.max(0, t.padding)) : d.padding,
+    radius: typeof t.radius === "number" ? Math.min(1, Math.max(0, t.radius)) : d.radius,
+    borderWidth: typeof t.borderWidth === "number" ? Math.min(0.5, Math.max(0, t.borderWidth)) : d.borderWidth,
+    borderColor: typeof t.borderColor === "string" && t.borderColor ? t.borderColor : d.borderColor,
   };
 }
 
@@ -173,7 +213,8 @@ export function titlesTemplate(p: Project): Record<string, unknown> {
     format: "bench-video-titles/1",
     instructions: [
       "Fill the titles array with the on-screen text for this driving video, then save this file and import it in the Titles tab of the Bench video editor (Import JSON).",
-      "Each title has: kind — intro (a full-screen card on black, usually at 0 s), title (text over the picture), or lowerThird (a small caption such as a place name, usually in a corner with a dark box); text; subtitle (optional, smaller line under the text); start and duration in seconds; fade in seconds (fade in and out); position — tl tc tr ml mc mr bl bc br meaning top/middle/bottom × left/centre/right; color as #rrggbb; background — empty string for none, rgba(0,0,0,0.55) for a dark box, rgba(255,255,255,0.85) for a light box, or #rrggbb; font — sans, serif, mono or rounded; size — text height as a fraction of the frame height, 0.02 to 0.16.",
+      "Each title has: kind — intro (a full-screen card on black, usually at 0 s), title (text over the picture), or lowerThird (a small caption such as a place name, usually in a corner with a dark box); text; subtitle (optional, smaller line under the text); start and duration in seconds; fade in seconds (fade in and out); position — tl tc tr ml mc mr bl bc br meaning top/middle/bottom × left/centre/right; color as #rrggbb; background — empty string for none, rgba(0,0,0,0.55) for a dark box, rgba(255,255,255,0.85) for a light box, or #rrggbb; font — sans, serif, mono, rounded, or any font family name installed on the editing machine (e.g. Avenir Next); size — text height as a fraction of the frame height, 0.02 to 0.16.",
+      "Styling, all optional: weight 300–800 (600 default); italic true/false; letterSpacing in em (0 default, up to 0.5); shadow — none, soft, hard or outline, with shadowColor (rgba or #rrggbb); align — auto (follows the position), left, center or right; padding, radius and borderWidth as multiples of the text size (0.4, 0.15 and 0 by default; a border draws even without a background) with borderColor.",
       "Keep every title inside 0 to durationSeconds, and inside the clip it belongs to where that matters (clips lists each recording with its start and end on the timeline). Titles may overlap in time only if they use different positions. Lower thirds for locations typically last 5 to 8 seconds at bl; an intro typically starts at 0 for 4 seconds.",
       "Leave project, options and instructions as they are. Missing fields get sensible defaults and unknown fields are ignored on import.",
     ],
@@ -186,8 +227,14 @@ export function titlesTemplate(p: Project): Record<string, unknown> {
     options: {
       kinds: ["intro", "title", "lowerThird"],
       positions: TITLE_POSITIONS,
-      fonts: Object.keys(TITLE_FONTS),
+      fonts: [...Object.keys(TITLE_FONTS), ...TITLE_FAMILIES, "<any installed family name>"],
       sizeRange: [0.02, 0.16],
+      weights: TITLE_WEIGHTS,
+      shadows: TITLE_SHADOWS,
+      aligns: TITLE_ALIGNS,
+      paddingRange: [0, 2],
+      radiusRange: [0, 1],
+      borderWidthRange: [0, 0.5],
       backgroundPresets: { none: "", dark: "rgba(0,0,0,0.55)", light: "rgba(255,255,255,0.85)" },
     },
     titles: p.titles.length
@@ -238,7 +285,10 @@ export function parseTitlesImport(text: string, p: Project): { titles: Title[]; 
     const background = r.background === "" || isCssColor(r.background) ? (r.background as string) : r.background !== undefined ? (warnings.push(`${tag} "${text}": background "${String(r.background)}" not understood, used none`), "") : undefined;
     const size = num(r.size);
     if (typeof r.position === "string" && !TITLE_POSITIONS.includes(r.position as TitlePosition)) warnings.push(`${tag} "${text}": position "${r.position}" not understood, used the default`);
-    if (typeof r.font === "string" && !(r.font in TITLE_FONTS)) warnings.push(`${tag} "${text}": font "${r.font}" not understood, used sans`);
+    if (typeof r.shadow === "string" && !TITLE_SHADOWS.includes(r.shadow as TitleShadow)) warnings.push(`${tag} "${text}": shadow "${r.shadow}" not understood, used the default`);
+    if (typeof r.align === "string" && !TITLE_ALIGNS.includes(r.align as TitleAlign)) warnings.push(`${tag} "${text}": align "${r.align}" not understood, used auto`);
+    const shadowColor = isCssColor(r.shadowColor) ? r.shadowColor : r.shadowColor !== undefined ? (warnings.push(`${tag} "${text}": shadowColor not understood, used the default`), undefined) : undefined;
+    const borderColor = isCssColor(r.borderColor) ? r.borderColor : r.borderColor !== undefined ? (warnings.push(`${tag} "${text}": borderColor not understood, used white`), undefined) : undefined;
     titles.push(
       normalizeTitle({
         kind,
@@ -250,8 +300,18 @@ export function parseTitlesImport(text: string, p: Project): { titles: Title[]; 
         position: typeof r.position === "string" ? (r.position as TitlePosition) : undefined,
         color,
         background,
-        font: typeof r.font === "string" ? (r.font as TitleFont) : undefined,
+        font: typeof r.font === "string" ? r.font : undefined,
         size: size !== undefined ? Math.min(0.16, Math.max(0.02, size)) : undefined,
+        weight: num(r.weight),
+        italic: typeof r.italic === "boolean" ? r.italic : r.italic === "true" ? true : undefined,
+        letterSpacing: num(r.letterSpacing),
+        shadow: typeof r.shadow === "string" ? (r.shadow as TitleShadow) : undefined,
+        shadowColor,
+        align: typeof r.align === "string" ? (r.align as TitleAlign) : undefined,
+        padding: num(r.padding),
+        radius: num(r.radius),
+        borderWidth: num(r.borderWidth),
+        borderColor,
       }),
     );
   });

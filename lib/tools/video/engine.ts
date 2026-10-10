@@ -25,7 +25,7 @@ import {
   type VideoCodec,
 } from "mediabunny";
 import { GRADE_FRAGMENT_SHADER, buildDlogLut, deriveLut, fetchOfficialLut, lutTexture, parseCube, type Lut3D } from "./lut";
-import { TITLE_FONTS, dbToGain, exportRange, isFileLutKind, musicGainAt, placeClips, planExport, transitionAt, transitionWindows, type Clip, type ExportSpan, type Grade, type LutKind, type MediaRef, type PlacedClip, type Project, type Title, type Transform, type TransitionWindow } from "./project";
+import { dbToGain, fontFamilyCss, exportRange, isFileLutKind, musicGainAt, placeClips, planExport, transitionAt, transitionWindows, type Clip, type ExportSpan, type Grade, type LutKind, type MediaRef, type PlacedClip, type Project, type Title, type Transform, type TransitionWindow } from "./project";
 import { drawTransition } from "./transitions";
 
 export interface Probe {
@@ -250,14 +250,17 @@ void main() { vUv = aUv; vec3 p = uTransform * vec3(aPos, 1.0); gl_Position = ve
 
 /** One title (text + optional subtitle) at its anchor, with its colour, font, size and optional backing box. */
 function drawTitleBlock(ctx: OffscreenCanvasRenderingContext2D, w: number, h: number, title: Title) {
-  const font = TITLE_FONTS[title.font] ?? TITLE_FONTS.sans;
+  const family = fontFamilyCss(title.font);
   const px = Math.max(8, Math.round(h * title.size));
   const pad = w * 0.04;
-  const lines = [{ text: title.text, size: px, weight: 600, alpha: 1 }];
-  if (title.subtitle) lines.push({ text: title.subtitle, size: Math.round(px * 0.5), weight: 400, alpha: 0.85 });
+  const style = (size: number, weight: number) => `${title.italic ? "italic " : ""}${weight} ${size}px ${family}`;
+  const lines = [{ text: title.text, size: px, weight: title.weight, alpha: 1 }];
+  if (title.subtitle) lines.push({ text: title.subtitle, size: Math.round(px * 0.5), weight: Math.max(300, title.weight - 200), alpha: 0.85 });
   const gap = px * 0.35;
+  const c = ctx as OffscreenCanvasRenderingContext2D & { letterSpacing?: string };
+  if ("letterSpacing" in c) c.letterSpacing = `${title.letterSpacing}em`;
   const widths = lines.map((l) => {
-    ctx.font = `${l.weight} ${l.size}px ${font}`;
+    ctx.font = style(l.size, l.weight);
     return ctx.measureText(l.text).width;
   });
   const blockW = Math.max(...widths), blockH = lines.reduce((a, l) => a + l.size, 0) + gap * (lines.length - 1);
@@ -265,25 +268,56 @@ function drawTitleBlock(ctx: OffscreenCanvasRenderingContext2D, w: number, h: nu
   const x = col === "l" ? pad : col === "r" ? w - pad - blockW : (w - blockW) / 2;
   const y = row === "t" ? pad : row === "b" ? h - pad - blockH : (h - blockH) / 2;
   const base = ctx.globalAlpha;
-  if (title.background) {
-    const bp = px * 0.4;
-    ctx.fillStyle = title.background;
-    ctx.fillRect(x - bp, y - bp, blockW + bp * 2, blockH + bp * 2);
-  } else {
-    ctx.shadowColor = "rgba(0,0,0,0.6)";
-    ctx.shadowBlur = px * 0.15;
+  // The box: padding, corners and a border, drawn without any text shadow.
+  const bp = px * title.padding, bw = px * title.borderWidth;
+  if (title.background || bw > 0) {
+    ctx.shadowColor = "transparent";
+    ctx.beginPath();
+    ctx.roundRect(x - bp, y - bp, blockW + bp * 2, blockH + bp * 2, px * title.radius);
+    if (title.background) {
+      ctx.fillStyle = title.background;
+      ctx.fill();
+    }
+    if (bw > 0) {
+      ctx.lineWidth = bw;
+      ctx.strokeStyle = title.borderColor;
+      ctx.stroke();
+    }
+  }
+  // Text shadow styles.
+  ctx.shadowColor = "transparent";
+  ctx.shadowBlur = 0;
+  ctx.shadowOffsetX = 0;
+  ctx.shadowOffsetY = 0;
+  if (title.shadow === "soft") {
+    ctx.shadowColor = title.shadowColor;
+    ctx.shadowBlur = px * 0.25;
+    ctx.shadowOffsetY = px * 0.05;
+  } else if (title.shadow === "hard") {
+    ctx.shadowColor = title.shadowColor;
+    ctx.shadowOffsetX = px * 0.06;
+    ctx.shadowOffsetY = px * 0.06;
   }
   ctx.textBaseline = "top";
-  ctx.textAlign = col === "l" ? "left" : col === "r" ? "right" : "center";
-  const tx = col === "l" ? x : col === "r" ? x + blockW : x + blockW / 2;
+  const align = title.align === "auto" ? (col === "l" ? "left" : col === "r" ? "right" : "center") : title.align;
+  ctx.textAlign = align;
+  const tx = align === "left" ? x : align === "right" ? x + blockW : x + blockW / 2;
+  ctx.lineJoin = "round";
   let cy = y;
   for (const l of lines) {
-    ctx.font = `${l.weight} ${l.size}px ${font}`;
-    ctx.fillStyle = title.color;
+    ctx.font = style(l.size, l.weight);
     ctx.globalAlpha = base * l.alpha;
+    if (title.shadow === "outline") {
+      ctx.lineWidth = Math.max(1, l.size * 0.1);
+      ctx.strokeStyle = title.shadowColor;
+      ctx.strokeText(l.text, tx, cy);
+    }
+    ctx.fillStyle = title.color;
     ctx.fillText(l.text, tx, cy);
     cy += l.size + gap;
   }
+  if ("letterSpacing" in c) c.letterSpacing = "0px";
+  ctx.shadowColor = "transparent";
 }
 
 /** Titles, intro card and watermark drawn with 2D canvas on top of the graded frame. */

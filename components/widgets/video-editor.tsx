@@ -7,8 +7,12 @@ import {
   DEFAULT_EXPORT,
   NEUTRAL_GRADE,
   NEUTRAL_TRANSFORM,
+  TITLE_ALIGNS,
+  TITLE_FAMILIES,
   TITLE_FONTS,
   TITLE_POSITIONS,
+  TITLE_SHADOWS,
+  TITLE_WEIGHTS,
   TRANSITIONS,
   addTransitionAt,
   appendMusic,
@@ -52,7 +56,9 @@ import {
   type FileLutKind,
   type LutKind,
   type MathLutKind,
+  type TitleAlign,
   type TitlePosition,
+  type TitleShadow,
   type Transition,
   type TransitionKind,
 } from "@/lib/tools/video/project";
@@ -138,6 +144,26 @@ export function VideoEditorWidget() {
   const [missingMedia, setMissingMedia] = useState<string[]>([]);
   // Preview transport: speed, looping (the export range when one is set), and a mute that silences clip audio and music.
   const [speed, setSpeed] = useState(1);
+  // Holding Space doubles the speed for as long as it is held; a tap toggles play as before.
+  const [boost, setBoost] = useState(false);
+  const boostRef = useRef(false);
+  const rate = speed * (boost ? 2 : 1);
+  const [fsTimeline, setFsTimeline] = useState(true);
+  const fsTimelineRef = useRef(true);
+  useEffect(() => {
+    fsTimelineRef.current = fsTimeline;
+  }, [fsTimeline]);
+  const [localFonts, setLocalFonts] = useState<string[] | null>(null);
+  const listLocalFonts = async () => {
+    const q = (window as unknown as { queryLocalFonts?: () => Promise<{ family: string }[]> }).queryLocalFonts;
+    if (!q) return setError("This browser can't list installed fonts (Chrome and Edge can). Type a family name instead.");
+    try {
+      const fonts = await q.call(window);
+      setLocalFonts([...new Set(fonts.map((f) => f.family))].sort((a, b) => a.localeCompare(b)));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  };
   const [loop, setLoop] = useState(false);
   const [previewMuted, setPreviewMuted] = useState(false);
   const loopRef = useRef(false);
@@ -332,6 +358,8 @@ export function VideoEditorWidget() {
   );
   const durationRef = useRef(0);
   const fpsRef = useRef(30);
+  /** True when a key event comes from a text field, where editing keys must keep their meaning. */
+  const inField = (e: KeyboardEvent) => e.target instanceof Element && !!e.target.closest("input, textarea, select");
   const togglePlay = useCallback(() => {
     void audioCtxRef.current?.resume();
     setPlaying((p) => {
@@ -394,15 +422,23 @@ export function VideoEditorWidget() {
       } else if ((e.metaKey || e.ctrlKey) && e.key === "s") {
         e.preventDefault();
         void store.save(project);
-      } else if ((e.key === "Delete" || e.key === "Backspace") && selectedTransitionRef.current && !(e.target as HTMLElement).closest("input, textarea, select")) {
+      } else if ((e.key === "Delete" || e.key === "Backspace") && selectedTransitionRef.current && !inField(e)) {
         e.preventDefault();
         const id = selectedTransitionRef.current;
         setProject((p) => ({ ...p, clips: setTransition(p.clips, id, null) }));
         setSelectedTransition(null);
-      } else if (e.key === " " && !(e.target as HTMLElement).closest("input, textarea, select")) {
+      } else if (e.key === " " && !inField(e)) {
         e.preventDefault();
-        togglePlay();
-      } else if (!(e.target as HTMLElement).closest("input, textarea, select") && !e.metaKey && !e.ctrlKey) {
+        if (e.repeat) {
+          if (!boostRef.current) {
+            boostRef.current = true;
+            setBoost(true);
+          }
+        } else togglePlay();
+      } else if ((e.key === "t" || e.key === "T") && document.fullscreenElement && !inField(e)) {
+        e.preventDefault();
+        setFsTimeline(!fsTimelineRef.current);
+      } else if (!inField(e) && !e.metaKey && !e.ctrlKey) {
         const t = playheadRef.current, frame = 1 / fpsRef.current;
         const cuts = placeClips(project.clips).map((c) => c.start).slice(1);
         if (e.key === "ArrowLeft") stepTo(t - (e.shiftKey ? 1 : frame));
@@ -416,10 +452,18 @@ export function VideoEditorWidget() {
         e.preventDefault();
       }
     };
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (e.key === " " && boostRef.current) {
+        boostRef.current = false;
+        setBoost(false);
+      }
+    };
     window.addEventListener("keydown", onKey);
+    window.addEventListener("keyup", onKeyUp);
     return () => {
       window.removeEventListener("beforeunload", onUnload);
       window.removeEventListener("keydown", onKey);
+      window.removeEventListener("keyup", onKeyUp);
     };
   }, [store, undo, project, setProject, togglePlay, stepTo]);
 
@@ -650,10 +694,10 @@ export function VideoEditorWidget() {
     const gain = under.clip.muted ? 0 : Math.min(1, dbToGain(under.clip.gainDb));
     v.volume = gain;
     v.muted = gain === 0 || previewMuted;
-    v.playbackRate = speed;
+    v.playbackRate = rate;
     if (playing) void v.play().catch(() => undefined);
     else v.pause();
-  }, [previewSrc, under, playing, speed, previewMuted]);
+  }, [previewSrc, under, playing, rate, previewMuted]);
 
   // Music in the preview: Web Audio sources started at the right offsets whenever playback (re)starts or the user seeks.
   useEffect(() => {
@@ -682,7 +726,7 @@ export function VideoEditorWidget() {
       if (at >= end) continue;
       const src = ctx.createBufferSource();
       src.buffer = buf;
-      src.playbackRate.value = speed;
+      src.playbackRate.value = rate;
       const gain = ctx.createGain();
       gain.gain.value = 0;
       src.connect(gain).connect(ctx.destination);
@@ -691,7 +735,7 @@ export function VideoEditorWidget() {
       nodes.set(m.id, { src, gain });
     }
     return stopAll;
-  }, [playing, seekToken, project.music, duration, speed]);
+  }, [playing, seekToken, project.music, duration, rate]);
   useEffect(() => {
     if (!playing) return;
     let raf = 0;
@@ -1016,10 +1060,47 @@ export function VideoEditorWidget() {
                 </span>
                 {under && <span className="truncate text-[12px] text-white/60">{project.media[under.clip.media]?.name}</span>}
                 <span className="text-[12px] text-white/60">
-                  {speed}×{loop ? " · loop" : ""}
+                  {rate}×{boost ? " held" : ""}
+                  {loop ? " · loop" : ""}
                   {previewMuted ? " · muted" : ""}
                 </span>
-                <span className="ml-auto text-[12px] text-white/60">Space plays · ←/→ step · Esc leaves full screen</span>
+                <button type="button" onClick={() => setFsTimeline((v) => !v)} aria-pressed={fsTimeline} className={cn("h-8 rounded-[var(--radius-sm)] px-2.5 text-[12px]", fsTimeline ? "bg-white/25" : "bg-white/10 hover:bg-white/20")} title="Show or hide the timeline summary (T)">
+                  Timeline
+                </button>
+                <span className="ml-auto text-[12px] text-white/60">Space plays, hold for 2× · ←/→ step · T timeline · Esc leaves full screen</span>
+              </div>
+            )}
+            {fullscreen && fsTimeline && project.clips.length > 0 && (
+              <div className="absolute inset-x-0 bottom-16 px-4 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100" data-fs-timeline>
+                <div
+                  className="relative h-16 cursor-pointer select-none overflow-hidden rounded-[var(--radius-sm)] bg-black/55 backdrop-blur-sm"
+                  onPointerDown={(e) => {
+                    e.stopPropagation();
+                    const r = e.currentTarget.getBoundingClientRect();
+                    stepTo(((e.clientX - r.left) / r.width) * duration);
+                  }}
+                  onDoubleClick={(e) => e.stopPropagation()}
+                  title="Click to seek"
+                >
+                  {range && <div className="absolute inset-y-0 bg-accent/15" style={{ left: `${(range.from / duration) * 100}%`, width: `${((range.to - range.from) / duration) * 100}%` }} />}
+                  {placed.map((c) => (
+                    <div key={c.id} className="absolute top-1 h-5 truncate rounded-[3px] border-r border-black/40 bg-white/25 px-1 text-[10px] leading-5 text-white/90" style={{ left: `${(c.start / duration) * 100}%`, width: `${((c.end - c.start) / duration) * 100}%` }}>
+                      {project.media[c.media]?.name}
+                    </div>
+                  ))}
+                  {windows.map((w) => (
+                    <div key={w.incoming.id} className="absolute top-1 h-5 bg-white/60" style={{ left: `${(w.start / duration) * 100}%`, width: `max(2px, ${((w.end - w.start) / duration) * 100}%)` }} />
+                  ))}
+                  {project.titles.map((t) => (
+                    <div key={t.id} className="absolute h-2 truncate rounded-[2px] bg-[#e5484d]/80 px-0.5 text-[8px] leading-[8px] text-white" style={{ left: `${(t.start / duration) * 100}%`, width: `max(2px, ${(t.duration / duration) * 100}%)`, top: 28 + (titleLaneOf.lanes[t.id] ?? 0) * 9 }} title={t.text}>
+                      {t.text}
+                    </div>
+                  ))}
+                  {project.music.map((m) => (
+                    <div key={m.id} className="absolute bottom-1 h-2 rounded-[2px]" style={{ left: `${(m.start / duration) * 100}%`, width: `max(2px, ${((effectiveMusicEnd(m, duration) - m.start) / duration) * 100}%)`, backgroundColor: LANE_COLORS[m.lane] + "cc", marginBottom: m.lane * 3 }} title={project.media[m.media]?.name} />
+                  ))}
+                  <div className="absolute inset-y-0 w-px bg-[#e5484d]" style={{ left: `${(Math.min(playhead, duration) / duration) * 100}%` }} />
+                </div>
               </div>
             )}
             {under && !previewSrc && missingMedia.includes(under.clip.media) && (
@@ -1068,6 +1149,7 @@ export function VideoEditorWidget() {
                 </option>
               ))}
             </select>
+            {boost && <span className="text-[12px] text-accent">{rate}× while held</span>}
             <button type="button" onClick={() => setLoop((l) => !l)} aria-pressed={loop} className={cn(GHOST, "h-7 text-[12px]", loop && "border-accent text-accent")} title={range ? "Loop the export range" : "Loop the whole timeline"}>
               <Repeat size={12} /> Loop{range ? " range" : ""}
             </button>
@@ -1513,19 +1595,111 @@ export function VideoEditorWidget() {
                       </label>
                       <label className="flex items-center gap-1">
                         Font
-                        <select value={t.font} onChange={(e) => patchTitle(t.id, { font: e.target.value as TitleFont })} className={cn(SEL, "h-6 text-[12px]")} aria-label="Font">
-                          {(Object.keys(TITLE_FONTS) as TitleFont[]).map((f) => (
-                            <option key={f} value={f}>
-                              {f}
-                            </option>
-                          ))}
+                        <select
+                          value={t.font in TITLE_FONTS || TITLE_FAMILIES.includes(t.font) || localFonts?.includes(t.font) ? t.font : "__other"}
+                          onChange={(e) => {
+                            const v = e.target.value;
+                            if (v === "__installed") return void listLocalFonts();
+                            patchTitle(t.id, { font: v === "__other" ? "" : v });
+                          }}
+                          className={cn(SEL, "h-6 max-w-[160px] text-[12px]")}
+                          aria-label="Font"
+                        >
+                          <optgroup label="Presets">
+                            {(Object.keys(TITLE_FONTS) as TitleFont[]).map((f) => (
+                              <option key={f} value={f}>
+                                {f}
+                              </option>
+                            ))}
+                          </optgroup>
+                          <optgroup label="Common families">
+                            {TITLE_FAMILIES.map((f) => (
+                              <option key={f} value={f}>
+                                {f}
+                              </option>
+                            ))}
+                          </optgroup>
+                          {localFonts ? (
+                            <optgroup label={`Installed (${localFonts.length})`}>
+                              {localFonts.map((f) => (
+                                <option key={f} value={f}>
+                                  {f}
+                                </option>
+                              ))}
+                            </optgroup>
+                          ) : (
+                            <option value="__installed">Installed fonts…</option>
+                          )}
+                          <option value="__other">Other family…</option>
                         </select>
+                        {!(t.font in TITLE_FONTS || TITLE_FAMILIES.includes(t.font) || localFonts?.includes(t.font)) && <input value={t.font} onChange={(e) => patchTitle(t.id, { font: e.target.value })} placeholder="Family name" className={cn(INPUT, "h-6 w-32 text-[12px]")} aria-label="Font family name" style={{ fontFamily: t.font ? `"${t.font}"` : undefined }} />}
                       </label>
                       <label className="flex min-w-[140px] flex-1 items-center gap-1">
                         Size
                         <input type="range" min={0.02} max={0.16} step={0.005} value={t.size} onChange={(e) => patchTitle(t.id, { size: Number(e.target.value) })} className={RANGE} aria-label="Text size" />
                         <span className="font-mono tabular">{Math.round(t.size * 100)}%</span>
                       </label>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-2 text-[12px] text-muted" data-style-row>
+                      <label className="flex items-center gap-1">
+                        Weight
+                        <select value={t.weight} onChange={(e) => patchTitle(t.id, { weight: Number(e.target.value) })} className={cn(SEL, "h-6 text-[12px]")} aria-label="Weight">
+                          {TITLE_WEIGHTS.map((w) => (
+                            <option key={w} value={w}>
+                              {w === 300 ? "Light" : w === 400 ? "Regular" : w === 500 ? "Medium" : w === 600 ? "Semibold" : w === 700 ? "Bold" : "Black"}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label className="flex items-center gap-1">
+                        <input type="checkbox" checked={t.italic} onChange={(e) => patchTitle(t.id, { italic: e.target.checked })} className="accent-[var(--accent)]" aria-label="Italic" /> italic
+                      </label>
+                      <label className="flex min-w-[120px] items-center gap-1">
+                        Spacing
+                        <input type="range" min={-0.05} max={0.3} step={0.01} value={t.letterSpacing} onChange={(e) => patchTitle(t.id, { letterSpacing: Number(e.target.value) })} className={RANGE} aria-label="Letter spacing" />
+                        <span className="font-mono tabular">{t.letterSpacing.toFixed(2)}em</span>
+                      </label>
+                      <label className="flex items-center gap-1">
+                        Shadow
+                        <select value={t.shadow} onChange={(e) => patchTitle(t.id, { shadow: e.target.value as TitleShadow })} className={cn(SEL, "h-6 text-[12px]")} aria-label="Shadow">
+                          {TITLE_SHADOWS.map((sh) => (
+                            <option key={sh} value={sh}>
+                              {sh}
+                            </option>
+                          ))}
+                        </select>
+                        {t.shadow !== "none" && <input type="color" value={toHex(t.shadowColor) === "#ffffff" && !/^#/.test(t.shadowColor) ? "#000000" : toHex(t.shadowColor)} onChange={(e) => patchTitle(t.id, { shadowColor: e.target.value })} className="h-6 w-8 cursor-pointer rounded border border-edge bg-base p-0" aria-label="Shadow colour" />}
+                      </label>
+                      <label className="flex items-center gap-1">
+                        Align
+                        <select value={t.align} onChange={(e) => patchTitle(t.id, { align: e.target.value as TitleAlign })} className={cn(SEL, "h-6 text-[12px]")} aria-label="Align">
+                          {TITLE_ALIGNS.map((al) => (
+                            <option key={al} value={al}>
+                              {al}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-2 text-[12px] text-muted" data-box-row>
+                      <span className="text-faint">Box</span>
+                      <label className="flex min-w-[120px] items-center gap-1">
+                        Padding
+                        <input type="range" min={0} max={1.5} step={0.05} value={t.padding} onChange={(e) => patchTitle(t.id, { padding: Number(e.target.value) })} className={RANGE} aria-label="Box padding" />
+                        <span className="font-mono tabular">{t.padding.toFixed(2)}</span>
+                      </label>
+                      <label className="flex min-w-[110px] items-center gap-1">
+                        Corners
+                        <input type="range" min={0} max={1} step={0.05} value={t.radius} onChange={(e) => patchTitle(t.id, { radius: Number(e.target.value) })} className={RANGE} aria-label="Corner radius" />
+                        <span className="font-mono tabular">{t.radius.toFixed(2)}</span>
+                      </label>
+                      <label className="flex min-w-[110px] items-center gap-1">
+                        Border
+                        <input type="range" min={0} max={0.3} step={0.01} value={t.borderWidth} onChange={(e) => patchTitle(t.id, { borderWidth: Number(e.target.value) })} className={RANGE} aria-label="Border width" />
+                        <span className="font-mono tabular">{t.borderWidth.toFixed(2)}</span>
+                      </label>
+                      {t.borderWidth > 0 && <input type="color" value={toHex(t.borderColor)} onChange={(e) => patchTitle(t.id, { borderColor: e.target.value })} className="h-6 w-8 cursor-pointer rounded border border-edge bg-base p-0" aria-label="Border colour" />}
+                      <span className="text-faint">× text size; the border draws even without a background</span>
                     </div>
                     </div>
                     )}
@@ -1755,7 +1929,7 @@ export function VideoEditorWidget() {
             <div className="pointer-events-none absolute bottom-0 top-0 w-px bg-[#e5484d]" style={{ left: playhead * pxPerSec }} />
           </div>
         </div>
-        <p className="mt-1 text-[11.5px] text-faint">Click the ruler to seek · space plays · ←/→ step a frame (⇧ for 1 s) · ↑/↓ jump between cuts · Home/End · M mutes · ⌘Z undoes · ⌘S saves. Clips are shown in playback order; music lanes stack, and overlaps on one lane crossfade.</p>
+        <p className="mt-1 text-[11.5px] text-faint">Click the ruler to seek · space plays (hold for 2×) · ←/→ step a frame (⇧ for 1 s) · ↑/↓ jump between cuts · Home/End · M mutes · ⌘Z undoes · ⌘S saves. Clips are shown in playback order; music lanes stack, and overlaps on one lane crossfade.</p>
       </div>
       {clearOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-labelledby="clear-project-title">
