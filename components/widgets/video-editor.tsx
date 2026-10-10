@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, Camera, Check, ChevronRight, Circle, Clapperboard, Crop, Download, FolderOpen, Loader, Maximize2, Minimize2, Music, Pause, Play, Repeat, Save, Scissors, SkipBack, SkipForward, SlidersHorizontal, StepBack, StepForward, Trash2, Type, Upload, Volume2, VolumeX } from "lucide-react";
+import { AlertTriangle, Camera, Check, ChevronDown, ChevronRight, Circle, Clapperboard, Crop, Download, FolderOpen, Loader, Maximize2, Minimize2, Music, Pause, Play, Repeat, Save, Scissors, SkipBack, SkipForward, SlidersHorizontal, StepBack, StepForward, Trash2, Type, Upload, Volume2, VolumeX } from "lucide-react";
 import {
   DEFAULT_CLIP_GAIN_DB,
   DEFAULT_EXPORT,
@@ -129,6 +129,17 @@ function savePriors(profile: string, measured: SpeedPriors) {
   }
 }
 
+/** Holding Space this long (or the first key repeat) switches the preview to double speed instead of toggling play. */
+const HOLD_MS = 250;
+/** YouTube wants 1280×720 thumbnails under 2 MB; the frame is scaled to this height (never upscaled). */
+const THUMB_HEIGHT = 720;
+type FrameKind = "thumb" | "jpeg" | "png";
+const FRAME_KINDS: Record<FrameKind, { label: string; note: string; height?: number; type: "image/jpeg" | "image/png"; quality?: number; ext: string }> = {
+  thumb: { label: "YouTube thumbnail · JPEG", note: "1280×720-class, well under 2 MB (S)", height: THUMB_HEIGHT, type: "image/jpeg", quality: 0.92, ext: "jpg" },
+  jpeg: { label: "Full size · JPEG", note: "source resolution, 95 % quality (Shift+S)", type: "image/jpeg", quality: 0.95, ext: "jpg" },
+  png: { label: "Full size · PNG, lossless", note: "source resolution, large file (Alt+S)", type: "image/png", ext: "png" },
+};
+
 function Slider({ label, value, min, max, step, onChange, format }: { label: string; value: number; min: number; max: number; step: number; onChange: (v: number) => void; format?: (v: number) => string }) {
   return (
     <label className="block text-[12.5px] text-muted">
@@ -180,7 +191,14 @@ export function VideoEditorWidget() {
   // Holding Space doubles the speed for as long as it is held; a tap toggles play as before.
   const [boost, setBoost] = useState(false);
   const boostRef = useRef(false);
+  const playingRef = useRef(false);
+  useEffect(() => {
+    playingRef.current = playing;
+  }, [playing]);
+  /** A Space press in flight: a short tap toggles play, a hold doubles the speed until release. */
+  const spaceRef = useRef<{ timer: ReturnType<typeof setTimeout> | null; boosted: boolean; startedPlayback: boolean } | null>(null);
   const rate = speed * (boost ? 2 : 1);
+  const [frameMenu, setFrameMenu] = useState(false);
   const [fsTimeline, setFsTimeline] = useState(true);
   const fsTimelineRef = useRef(true);
   useEffect(() => {
@@ -409,6 +427,38 @@ export function VideoEditorWidget() {
     setPlayhead(Math.max(0, Math.min(durationRef.current, t)));
     setSeekToken((x) => x + 1);
   }, []);
+  /**
+   * Space, held: double the preview speed (whatever it is set to) until the key is released. Held while paused, the
+   * preview plays at double speed for the hold and parks again. These live outside the key effect so a re-render
+   * mid-hold cannot cancel it.
+   */
+  const beginHold = useCallback(() => {
+    const h = spaceRef.current;
+    if (!h || h.boosted) return;
+    h.boosted = true;
+    boostRef.current = true;
+    setBoost(true);
+    if (!playingRef.current) {
+      h.startedPlayback = true;
+      togglePlay();
+    }
+  }, [togglePlay]);
+  /** Space released (or the window lost): end a hold, or treat a short press as a play/pause tap. */
+  const endHold = useCallback(
+    (released: boolean) => {
+      const h = spaceRef.current;
+      if (!h) return;
+      spaceRef.current = null;
+      if (h.timer) clearTimeout(h.timer);
+      if (h.boosted) {
+        boostRef.current = false;
+        setBoost(false);
+        if (h.startedPlayback) setPlaying(false);
+      } else if (released) togglePlay();
+    },
+    [togglePlay],
+  );
+  useEffect(() => () => endHold(false), [endHold]);
 
   // Preview URL for a media id: the proxy if there is one, else the original — created on first use.
   const previewUrlFor = useCallback(
@@ -444,17 +494,20 @@ export function VideoEditorWidget() {
     [store],
   );
 
-  /** A still of the frame under the playhead, rendered from the source at full resolution with the grade, transitions and titles. */
+  /**
+   * A still of the frame under the playhead, rendered from the source (never the proxy) with the grade, transitions and
+   * titles: a YouTube-sized JPEG thumbnail by default, or the full frame as JPEG or lossless PNG.
+   */
   const saveFrame = useCallback(
-    async (jpeg = false) => {
+    async (kind: FrameKind = "thumb") => {
       if (!project.clips.length || job) return;
       const t = Math.min(playheadRef.current, Math.max(0, durationRef.current - 0.001));
-      const kind = jpeg ? "JPEG" : "PNG";
-      setJob({ kind: "frame", label: "Saving frame", message: `${fmtMs(t)} at full resolution — decoding the source frame, grading it and encoding ${kind}…`, fraction: 0.5, abort: new AbortController() });
+      const spec = FRAME_KINDS[kind];
+      setJob({ kind: "frame", label: "Saving frame", message: `${fmtMs(t)} · ${spec.label} — decoding the source frame, grading it and encoding…`, fraction: 0.5, abort: new AbortController() });
       try {
-        const frame = await renderFrame({ project, getFile: (id) => store.getFile(id), logo, t, type: jpeg ? "image/jpeg" : "image/png", quality: jpeg ? 0.95 : undefined });
-        const name = `${project.name.replace(/[^\w-]+/g, "-")}-${fmtMs(t).replace(/[:.]/g, "-")}.${jpeg ? "jpg" : "png"}`;
-        const facts = `${frame.width}×${frame.height} ${kind}, ${fmtBytes(frame.blob.size)}, from ${frame.clipName} at ${fmtMs(frame.sourceTime)}`;
+        const frame = await renderFrame({ project, getFile: (id) => store.getFile(id), logo, t, height: spec.height, type: spec.type, quality: spec.quality });
+        const name = `${project.name.replace(/[^\w-]+/g, "-")}-${fmtMs(t).replace(/[:.]/g, "-")}${kind === "thumb" ? `-${frame.width}x${frame.height}` : ""}.${spec.ext}`;
+        const facts = `${frame.width}×${frame.height} ${spec.type === "image/png" ? "PNG" : "JPEG"}, ${fmtBytes(frame.blob.size)}, from ${frame.clipName} at ${fmtMs(frame.sourceTime)}`;
         if (store.hasFolder) {
           const { writable } = await store.createWritable(name, FRAMES_DIR);
           await writable.write(frame.blob);
@@ -496,12 +549,9 @@ export function VideoEditorWidget() {
         setSelectedTransition(null);
       } else if (e.key === " " && !inField(e)) {
         e.preventDefault();
-        if (e.repeat) {
-          if (!boostRef.current) {
-            boostRef.current = true;
-            setBoost(true);
-          }
-        } else togglePlay();
+        // A tap toggles play on release; a hold (a quarter second, or the first key repeat) doubles the speed until release.
+        if (!e.repeat && !spaceRef.current) spaceRef.current = { timer: setTimeout(beginHold, HOLD_MS), boosted: false, startedPlayback: false };
+        else if (e.repeat && spaceRef.current && !spaceRef.current.boosted) beginHold();
       } else if ((e.key === "t" || e.key === "T") && document.fullscreenElement && !inField(e)) {
         e.preventDefault();
         setFsTimeline(!fsTimelineRef.current);
@@ -515,25 +565,26 @@ export function VideoEditorWidget() {
         else if (e.key === "ArrowUp") stepTo([...cuts].reverse().find((c) => c < t - 0.01) ?? 0);
         else if (e.key === "ArrowDown") stepTo(cuts.find((c) => c > t + 0.01) ?? durationRef.current);
         else if (e.key === "m" || e.key === "M") setPreviewMuted((m) => !m);
-        else if (e.key === "s" || e.key === "S") void saveFrame(e.altKey);
+        else if (e.key === "s" || e.key === "S") void saveFrame(e.altKey ? "png" : e.shiftKey ? "jpeg" : "thumb");
         else return;
         e.preventDefault();
       }
     };
     const onKeyUp = (e: KeyboardEvent) => {
-      if (e.key === " " && boostRef.current) {
-        boostRef.current = false;
-        setBoost(false);
-      }
+      if (e.key === " ") endHold(true);
     };
+    // Losing the window mid-hold must not leave the preview stuck at double speed.
+    const onBlur = () => endHold(false);
     window.addEventListener("keydown", onKey);
     window.addEventListener("keyup", onKeyUp);
+    window.addEventListener("blur", onBlur);
     return () => {
       window.removeEventListener("beforeunload", onUnload);
+      window.removeEventListener("blur", onBlur);
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("keyup", onKeyUp);
     };
-  }, [store, undo, project, setProject, togglePlay, stepTo, saveFrame]);
+  }, [store, undo, project, setProject, togglePlay, stepTo, saveFrame, beginHold, endHold]);
 
   /**
    * Find the files behind a project's media: remembered handles first (they
@@ -1048,6 +1099,8 @@ export function VideoEditorWidget() {
   };
   const first = project.media[project.clips[0]?.media ?? ""];
   const previewAspect = first?.width && first.height ? first.width / first.height : 16 / 9;
+  const thumbH = Math.min(THUMB_HEIGHT, first?.height ?? THUMB_HEIGHT);
+  const thumbSize = `${Math.round((previewAspect * thumbH) / 2) * 2}×${thumbH}`;
 
   return (
     <div className="space-y-3">
@@ -1168,10 +1221,10 @@ export function VideoEditorWidget() {
                 <button type="button" onClick={() => setFsTimeline((v) => !v)} aria-pressed={fsTimeline} className={cn("h-8 rounded-[var(--radius-sm)] px-2.5 text-[12px]", fsTimeline ? "bg-white/25" : "bg-white/10 hover:bg-white/20")} title="Show or hide the timeline summary (T)">
                   Timeline
                 </button>
-                <button type="button" onClick={(e) => void saveFrame(e.altKey)} disabled={!!job} className="flex h-8 items-center gap-1.5 rounded-[var(--radius-sm)] bg-white/10 px-2.5 text-[12px] hover:bg-white/20 disabled:opacity-50" title="Save this frame at full resolution as PNG (S); Alt/Option for JPEG">
+                <button type="button" onClick={() => void saveFrame("thumb")} disabled={!!job} className="flex h-8 items-center gap-1.5 rounded-[var(--radius-sm)] bg-white/10 px-2.5 text-[12px] hover:bg-white/20 disabled:opacity-50" title="Save this frame as a YouTube thumbnail JPEG (S); Shift+S full-size JPEG, Alt+S full-size PNG">
                   <Camera size={13} /> Save frame
                 </button>
-                <span className="ml-auto text-[12px] text-white/60">Space plays, hold for 2× · ←/→ step · T timeline · S saves the frame · Esc leaves full screen</span>
+                <span className="ml-auto text-[12px] text-white/60">Space plays, hold for 2× · ←/→ step · T timeline · S saves a thumbnail · Esc leaves full screen</span>
               </div>
             )}
             {fullscreen && fsTimeline && project.clips.length > 0 && (
@@ -1290,9 +1343,44 @@ export function VideoEditorWidget() {
             <button type="button" onClick={toggleFullscreen} disabled={!project.clips.length} className={cn(GHOST, "h-7 text-[12px]")} title="Watch the preview full screen">
               <Maximize2 size={12} /> Full screen
             </button>
-            <button type="button" onClick={(e) => void saveFrame(e.altKey)} disabled={!project.clips.length || !!job} className={cn(GHOST, "h-7 text-[12px]")} title="Save this frame at full source resolution — graded, through any transition, with titles — as a lossless PNG into the project's frames folder (S). Hold Alt/Option for a JPEG." data-save-frame>
-              <Camera size={12} /> Save frame
-            </button>
+            <div
+              className="relative flex"
+              onBlur={(e) => {
+                if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setFrameMenu(false);
+              }}
+            >
+              <button type="button" onClick={() => void saveFrame("thumb")} disabled={!project.clips.length || !!job} className={cn(GHOST, "h-7 rounded-r-none text-[12px]")} title={`Save this frame as a YouTube thumbnail: ${thumbSize} JPEG from the source, graded, through any transition, with titles — into the project's frames folder (S)`} data-save-frame>
+                <Camera size={12} /> Save frame
+              </button>
+              <button type="button" onClick={() => setFrameMenu((v) => !v)} disabled={!project.clips.length || !!job} aria-haspopup="menu" aria-expanded={frameMenu} aria-label="Other frame sizes" className={cn(GHOST, "h-7 rounded-l-none border-l-0 px-1")} data-save-frame-menu>
+                <ChevronDown size={12} />
+              </button>
+              {frameMenu && (
+                <div role="menu" className="panel absolute top-full right-0 z-20 mt-1 flex w-72 flex-col p-1 text-[12.5px] shadow-lg">
+                  {(Object.keys(FRAME_KINDS) as FrameKind[]).map((k) => (
+                    <button
+                      key={k}
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        setFrameMenu(false);
+                        void saveFrame(k);
+                      }}
+                      className="flex items-start gap-2 rounded-[var(--radius-sm)] px-2 py-1.5 text-left hover:bg-raised"
+                    >
+                      <Camera size={13} className="mt-0.5 shrink-0 text-faint" />
+                      <span>
+                        <span className="text-ink">{FRAME_KINDS[k].label}</span>
+                        <span className="block text-[11.5px] text-faint">
+                          {k === "thumb" ? `${thumbSize} · ` : first?.width ? `${first.width}×${first.height} · ` : ""}
+                          {FRAME_KINDS[k].note}
+                        </span>
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
             <label className="ml-auto flex items-center gap-1.5 text-[12px] text-muted">
               Zoom
               <input type="range" min={1} max={40} step={1} value={zoom} onChange={(e) => setZoom(Number(e.target.value))} className={cn(RANGE, "w-28")} />

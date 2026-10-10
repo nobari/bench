@@ -727,6 +727,8 @@ export interface FrameOptions {
   logo: ImageBitmap | null;
   /** Timeline instant, seconds. */
   t: number;
+  /** Scale the frame to this height (never above the source); omitted, the source resolution. */
+  height?: number;
   /** PNG is lossless; JPEG takes a quality 0…1. */
   type?: "image/png" | "image/jpeg";
   quality?: number;
@@ -751,7 +753,8 @@ export async function renderFrame(opts: FrameOptions): Promise<RenderedFrame> {
   if (!first?.width || !first.height) throw new Error("Add at least one video clip.");
   const under = clipAt(project.clips, t);
   if (!under) throw new Error("There is no clip under the playhead.");
-  const outW = first.width, outH = first.height;
+  const outH = Math.round(Math.min(first.height, Math.max(2, opts.height ?? first.height)) / 2) * 2;
+  const outW = Math.round((first.width * (outH / first.height)) / 2) * 2;
   const inputs = new Map<string, Input>();
   const openInput = async (mediaId: string) => {
     if (inputs.has(mediaId)) return inputs.get(mediaId)!;
