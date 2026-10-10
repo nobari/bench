@@ -27,6 +27,7 @@ import {
 import { GRADE_FRAGMENT_SHADER, buildDlogLut, deriveLut, fetchOfficialLut, lutTexture, parseCube, type Lut3D } from "./lut";
 import { dbToGain, fontFamilyCss, exportRange, isFileLutKind, musicGainAt, placeClips, planExport, transitionAt, transitionWindows, type Clip, type ExportSpan, type Grade, type LutKind, type MediaRef, type PlacedClip, type Project, type Title, type Transform, type TransitionWindow } from "./project";
 import { drawTransition } from "./transitions";
+import { ProgressTracker, type ExportProgress } from "./progress";
 
 export interface Probe {
   duration: number;
@@ -462,7 +463,9 @@ export interface ExportOptions {
   getFile: (mediaId: string) => Promise<File | null>;
   logo: ImageBitmap | null;
   writable: WritableStream<StreamTargetChunk>;
-  onProgress?: (p: { phase: "video" | "audio" | "finalize"; fraction: number; span?: ExportSpan; message?: string }) => void;
+  onProgress?: (p: ExportProgress) => void;
+  /** Awaited between frames and audio blocks: return a promise while paused, nothing otherwise. */
+  whilePaused?: () => Promise<void> | void;
   signal?: AbortSignal;
 }
 
@@ -524,7 +527,7 @@ class NeighbourFrames {
   }
 }
 
-export async function exportProject(opts: ExportOptions): Promise<{ bytesWritten: number; seconds: number }> {
+export async function exportProject(opts: ExportOptions): Promise<{ bytesWritten: number; seconds: number; activeMs: number; pausedMs: number }> {
   const { project, getFile, logo, signal } = opts;
   const first = project.media[project.clips[0]?.media ?? ""];
   if (!first?.width || !first.height) throw new Error("Add at least one video clip.");
@@ -536,12 +539,40 @@ export async function exportProject(opts: ExportOptions): Promise<{ bytesWritten
   if (!(await canEncodeVideo(codec, { width: outW, height: outH, bitrate }))) throw new Error(`This browser can't encode ${codec.toUpperCase()} at ${outW}×${outH}. Try the other codec or a lower resolution.`);
   const spans = planExport(project);
   const total = spans.reduce((a, s) => a + (s.end - s.start), 0);
+  const tracker = new ProgressTracker(() => performance.now(), total, Math.round(total * fps));
+  // Count what reaches the file: every chunk passes through here on its way to the folder.
+  const fileWriter = opts.writable.getWriter();
+  const counted = new WritableStream<StreamTargetChunk>({
+    write: (chunk) => {
+      tracker.addBytes(chunk.data.byteLength);
+      return fileWriter.write(chunk);
+    },
+    close: () => fileWriter.close(),
+    abort: (r) => fileWriter.abort(r),
+  });
+  let lastEmit = 0;
+  const emit = (phase: ExportProgress["phase"], span: ExportSpan | undefined, spanIndex: number, force = false) => {
+    const now = performance.now();
+    if (!force && now - lastEmit < 100) return;
+    lastEmit = now;
+    opts.onProgress?.(tracker.snapshot(phase, span, spanIndex, spans.length));
+  };
+  // A pause is whatever time whilePaused() keeps us waiting.
+  const pauseGate = async (phase: ExportProgress["phase"], span: ExportSpan | undefined, spanIndex: number) => {
+    const p = opts.whilePaused?.();
+    if (!p) return;
+    tracker.pause();
+    emit(phase, span, spanIndex, true);
+    await p;
+    tracker.resume();
+    emit(phase, span, spanIndex, true);
+  };
   // A partial export starts its file at zero: timeline times shift back by the range start.
   const offset = exportRange(project)?.from ?? 0;
   const windows = transitionWindows(placeClips(project.clips));
   const neighbour = new NeighbourFrames((id) => openInput(id));
   let tmpA: OffscreenCanvas | null = null, tmpB: OffscreenCanvas | null = null, scratch: OffscreenCanvas | null = null;
-  const output = new Output({ format: new Mp4OutputFormat({ fastStart: false }), target: new StreamTarget(opts.writable, { chunked: true }) });
+  const output = new Output({ format: new Mp4OutputFormat({ fastStart: false }), target: new StreamTarget(counted, { chunked: true }) });
   const canvas = new OffscreenCanvas(outW, outH);
   const ctx2d = canvas.getContext("2d")!;
   const grader = new Grader(outW, outH);
@@ -574,18 +605,29 @@ export async function exportProject(opts: ExportOptions): Promise<{ bytesWritten
     inputs.set(mediaId, inp);
     return inp;
   };
+  let spanIndex = 0;
   for (const span of spans) {
+    spanIndex++;
     if (signal?.aborted) throw new DOMException("Cancelled", "AbortError");
+    emit("video", span, spanIndex, true);
     const clip = project.clips.find((c) => c.id === span.clipId)!;
     const media = project.media[clip.media];
     const input = await openInput(clip.media);
     const track = (await input.getPrimaryVideoTrack())!;
-    const progress = (sourceT: number) => opts.onProgress?.({ phase: "video", fraction: Math.min(1, (written + (sourceT - span.sourceIn)) / Math.max(1e-6, total)), span });
+    const progress = (sourceT: number) => {
+      tracker.frame(written + (sourceT - span.sourceIn));
+      emit("video", span, spanIndex);
+    };
     // A copy span is only truly copyable if the encoder/container accept the source packets; we re-encode here
     // frame-accurately instead, but skip the GPU grade (identity draw) so it is still much faster than a graded span.
     const sink = new VideoSampleSink(track);
     const srcW = media.width ?? track.displayWidth, srcH = media.height ?? track.displayHeight;
     for await (const sample of sink.samples(span.sourceIn, span.sourceOut)) {
+      if (signal?.aborted) {
+        sample.close();
+        throw new DOMException("Cancelled", "AbortError");
+      }
+      await pauseGate("video", span, spanIndex);
       if (signal?.aborted) {
         sample.close();
         throw new DOMException("Cancelled", "AbortError");
@@ -627,16 +669,22 @@ export async function exportProject(opts: ExportOptions): Promise<{ bytesWritten
   await neighbour.reset();
   videoSource.close();
   // Audio.
+  emit("audio", undefined, spans.length, true);
   await mixAudio({ project, getFile, sampleRate }, offset, offset + total, async (samples, timestamp) => {
-    opts.onProgress?.({ phase: "audio", fraction: Math.min(1, (timestamp - offset) / Math.max(1e-6, total)) });
+    await pauseGate("audio", undefined, spans.length);
+    if (signal?.aborted) throw new DOMException("Cancelled", "AbortError");
+    tracker.audio(timestamp - offset);
+    emit("audio", undefined, spans.length);
     const s = new AudioSample({ data: samples, format: "f32", numberOfChannels: 2, sampleRate, timestamp: timestamp - offset });
     await audioSource.add(s);
     s.close();
   }, signal);
   audioSource.close();
-  opts.onProgress?.({ phase: "finalize", fraction: 1 });
+  emit("finalize", undefined, spans.length, true);
   await output.finalize();
-  return { bytesWritten: 0, seconds: total };
+  emit("done", undefined, spans.length, true);
+  const done = tracker.snapshot("done", undefined, spans.length, spans.length);
+  return { bytesWritten: tracker.bytes, seconds: total, activeMs: done.elapsedMs, pausedMs: done.pausedMs };
 }
 
 /** Whether this browser can hardware-encode the project's codec at a given size. */

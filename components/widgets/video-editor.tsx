@@ -64,6 +64,7 @@ import {
 } from "@/lib/tools/video/project";
 import { drawTransition } from "@/lib/tools/video/transitions";
 import { LUT_OPTIONS, buildDlogLut, deriveLut, fetchOfficialLut, lutToCube, parseCube, type Lut3D } from "@/lib/tools/video/lut";
+import { fmtBytes, fmtDuration, fmtMs, type ExportProgress } from "@/lib/tools/video/progress";
 import { Grader, buildProxy, drawOverlays, encoderSupport, exportProject, probe } from "@/lib/tools/video/engine";
 import { ProjectStore, hasFileSystemAccess, AUTOSAVE_FILE, PROJECT_FILE, PROXY_DIR } from "@/lib/tools/video/store";
 import { cn } from "@/lib/utils";
@@ -94,6 +95,10 @@ interface Job {
   fraction: number;
   message?: string;
   abort: AbortController;
+  /** Export only: the live numbers, the output file, and whether it is paused. */
+  progress?: ExportProgress;
+  output?: { name: string; codec: string; width: number; height: number; bitrateMbps: number; preset: string; estimatedBytes: number };
+  paused?: boolean;
 }
 
 function Slider({ label, value, min, max, step, onChange, format }: { label: string; value: number; min: number; max: number; step: number; onChange: (v: number) => void; format?: (v: number) => string }) {
@@ -919,25 +924,49 @@ export function VideoEditorWidget() {
     };
   });
 
+  // The tab title shows export progress; this remembers what to put back.
+  const pageTitleRef = useRef("");
+  useEffect(() => {
+    pageTitleRef.current = document.title;
+  }, []);
+  // Pause gate for the export: the engine awaits this between frames while paused.
+  const pauseRef = useRef<{ paused: boolean; waiters: (() => void)[] }>({ paused: false, waiters: [] });
+  const setExportPaused = (paused: boolean) => {
+    pauseRef.current.paused = paused;
+    if (!paused) {
+      for (const w of pauseRef.current.waiters) w();
+      pauseRef.current.waiters = [];
+    }
+    setJob((j) => (j ? { ...j, paused } : j));
+  };
   const runExport = async () => {
     if (!store.hasFolder) return setError("Pick a project folder first — the export is written there.");
     const abort = new AbortController();
-    setJob({ kind: "export", label: "Exporting", fraction: 0, abort });
+    pauseRef.current = { paused: false, waiters: [] };
+    const name = `${project.name.replace(/[^\w-]+/g, "-")}-${project.export.resolution === "source" ? "8K" : project.export.resolution + "p"}${range ? `-${Math.round(range.from)}s-${Math.round(range.to)}s` : ""}.mp4`;
+    const outH = project.export.resolution === "source" ? (first?.height ?? 4320) : project.export.resolution;
+    const outW = first?.width && first.height ? Math.round((first.width * (outH / first.height)) / 2) * 2 : Math.round((outH * 16) / 9);
+    const output = { name, codec: project.export.codec.toUpperCase(), width: outW, height: outH, bitrateMbps: project.export.bitrateMbps, preset: project.export.preset, estimatedBytes: estimate.bytes };
+    setJob({ kind: "export", label: "Exporting", fraction: 0, abort, output, paused: false });
     try {
-      const name = `${project.name.replace(/[^\w-]+/g, "-")}-${project.export.resolution === "source" ? "8K" : project.export.resolution + "p"}${range ? `-${Math.round(range.from)}s-${Math.round(range.to)}s` : ""}.mp4`;
       const { writable } = await store.createWritable(name);
-      await exportProject({
+      const result = await exportProject({
         project,
         getFile: (id) => store.getFile(id),
         logo,
         writable: writable as unknown as WritableStream<import("mediabunny").StreamTargetChunk>,
         signal: abort.signal,
-        onProgress: ({ phase, fraction, span }) => setJob((j) => (j ? { ...j, fraction, message: phase === "video" ? `${span?.kind === "copy" ? "Copying" : "Rendering"} ${span ? fmtTime(span.start) : ""}` : phase === "audio" ? "Mixing audio" : "Finishing the file" } : j)),
+        whilePaused: () => (pauseRef.current.paused ? new Promise<void>((r) => pauseRef.current.waiters.push(r)) : undefined),
+        onProgress: (progress) => {
+          setJob((j) => (j ? { ...j, fraction: progress.fraction, progress } : j));
+          document.title = `${(progress.fraction * 100).toFixed(1)}% · ${progress.paused ? "Paused" : "Exporting"} · Bench`;
+        },
       });
-      setStatus(`Exported ${name}`);
+      setStatus(`Exported ${name} — ${fmtBytes(result.bytesWritten)} in ${fmtDuration(result.activeMs)}${result.pausedMs > 500 ? ` plus ${fmtDuration(result.pausedMs)} paused` : ""} (${(result.seconds / Math.max(0.001, result.activeMs / 1000)).toFixed(2)}× realtime)`);
     } catch (e) {
       if ((e as DOMException).name !== "AbortError") setError(e instanceof Error ? e.message : String(e));
     } finally {
+      document.title = pageTitleRef.current;
       setJob(null);
     }
   };
@@ -998,7 +1027,10 @@ export function VideoEditorWidget() {
           </button>
         </p>
       )}
-      {job && (
+      {job?.kind === "export" && (
+        <ExportPanel job={job} onPause={() => setExportPaused(true)} onResume={() => setExportPaused(false)} onCancel={() => job.abort.abort()} />
+      )}
+      {job && job.kind !== "export" && (
         <div className="panel flex items-center gap-3 p-2 text-[13px]">
           <Loader size={14} className="animate-spin text-accent" />
           <span className="text-ink">{job.label}</span>
@@ -2005,3 +2037,72 @@ function RangeCut({ duration, onCut }: { duration: number; onCut: (a: number, b:
 }
 
 export { DEFAULT_EXPORT };
+
+function Stat({ label, value, mono = true, title }: { label: string; value: React.ReactNode; mono?: boolean; title?: string }) {
+  return (
+    <div className="min-w-0" title={title}>
+      <div className="text-[11px] uppercase tracking-wide text-faint">{label}</div>
+      <div className={cn("truncate text-[13.5px] text-ink", mono && "font-mono tabular")}>{value}</div>
+    </div>
+  );
+}
+
+/** The export in full: what is being written, where it is, how fast, and how long is left. */
+function ExportPanel({ job, onPause, onResume, onCancel }: { job: Job; onPause: () => void; onResume: () => void; onCancel: () => void }) {
+  const p = job.progress;
+  const out = job.output;
+  const pct = ((p?.fraction ?? 0) * 100).toFixed(3);
+  const phaseLabel = !p ? "Starting…" : p.phase === "video" ? (p.span?.kind === "copy" ? "Copying video" : "Rendering video") : p.phase === "audio" ? "Mixing audio" : p.phase === "finalize" ? "Finishing the file" : "Done";
+  // Start + worked + paused + remaining, all from the snapshot: no clock reads while rendering.
+  const finishAt = p?.etaMs != null ? new Date(p.startedAt + p.elapsedMs + p.pausedMs + p.etaMs).toLocaleTimeString() : "—";
+  return (
+    <div className={cn("panel space-y-3 border-2 p-4", job.paused ? "border-warn" : "border-accent")} data-export-panel aria-live="polite">
+      <div className="flex flex-wrap items-center gap-3">
+        {job.paused ? <Pause size={18} className="text-warn" /> : <Loader size={18} className="animate-spin text-accent" />}
+        <div className="min-w-0 flex-1">
+          <div className="text-[15px] font-semibold text-ink">
+            {job.paused ? "Export paused" : "Exporting"} · {out?.name}
+          </div>
+          <div className="text-[12.5px] text-muted">
+            {phaseLabel}
+            {p?.span && p.phase === "video" ? ` · span ${p.spanIndex} of ${p.spanCount}${p.span.reasons.length ? ` (${p.span.reasons.join(", ")})` : ""} · ${fmtMs(p.span.start)} → ${fmtMs(p.span.end)}` : ""}
+            {job.paused ? " · resume to continue — keep this tab open, the file stays open while paused" : ""}
+          </div>
+        </div>
+        <span className="font-mono text-[26px] font-semibold tabular text-ink" data-export-pct>
+          {pct}%
+        </span>
+        {job.paused ? (
+          <button type="button" onClick={onResume} className={cn(PRIMARY, "h-9")}>
+            <Play size={13} /> Resume
+          </button>
+        ) : (
+          <button type="button" onClick={onPause} className={cn(GHOST, "h-9")} disabled={!p || p.phase === "finalize" || p.phase === "done"}>
+            <Pause size={13} /> Pause
+          </button>
+        )}
+        <button type="button" onClick={onCancel} className={cn(GHOST, "h-9 hover:border-danger hover:text-danger")}>
+          Cancel
+        </button>
+      </div>
+      <div className="relative h-3 overflow-hidden rounded-full bg-raised">
+        <div className={cn("h-full transition-[width] duration-200", job.paused ? "bg-warn" : "bg-accent")} style={{ width: `${Math.min(100, (p?.fraction ?? 0) * 100)}%` }} />
+        {p && p.total > 0 && <div className="absolute top-0 h-full w-px bg-ink/40" style={{ left: "90%" }} title="Video done here; audio and finishing follow" />}
+      </div>
+      <div className="grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-3 lg:grid-cols-6">
+        <Stat label="Position" value={p ? `${fmtMs(p.phase === "audio" ? p.audioT : p.timelineT)} / ${fmtMs(p.total)}` : "—"} title="Timeline time covered so far, out of the export range" />
+        <Stat label="Frames" value={p ? `${p.frames.toLocaleString()} / ${p.framesTotal.toLocaleString()}` : "—"} />
+        <Stat label="Speed" value={p && p.fps > 0 ? `${p.fps.toFixed(1)} fps · ${p.realtime.toFixed(3)}× realtime` : "—"} title="Frames per second over the last few seconds; timeline seconds per wall second overall" />
+        <Stat label="Elapsed" value={p ? `${fmtDuration(p.elapsedMs)}${p.pausedMs > 500 ? ` (+${fmtDuration(p.pausedMs)} paused)` : ""}` : "0:00:00.0"} />
+        <Stat label="Remaining" value={p?.etaMs != null ? fmtDuration(p.etaMs) : "estimating…"} title="From the speed so far; audio and finishing included" />
+        <Stat label="Finish at" value={finishAt} />
+        <Stat label="Written" value={p ? `${fmtBytes(p.bytesWritten)}${out ? ` of ~${fmtBytes(out.estimatedBytes)}` : ""}` : "0 kB"} title="Bytes that reached the file so far, against the estimate" />
+        <Stat label="Output" value={out ? `${out.codec} ${out.width}×${out.height}` : "—"} />
+        <Stat label="Bitrate · preset" value={out ? `${out.bitrateMbps} Mbps · ${out.preset}` : "—"} />
+        <Stat label="Started" value={p ? new Date(p.startedAt).toLocaleTimeString() : "—"} />
+        <Stat label="Phase" value={phaseLabel} mono={false} />
+        <Stat label="Progress" value={p ? `video ${Math.min(100, (p.timelineT / Math.max(1e-6, p.total)) * 100).toFixed(3)}% · audio ${Math.min(100, (p.audioT / Math.max(1e-6, p.total)) * 100).toFixed(3)}%` : "—"} title="Each phase on its own, to three decimals" />
+      </div>
+    </div>
+  );
+}
