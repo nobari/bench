@@ -131,6 +131,9 @@ function savePriors(profile: string, measured: SpeedPriors) {
 
 /** Holding Space this long (or the first key repeat) switches the preview to double speed instead of toggling play. */
 const HOLD_MS = 250;
+/** Browsers refuse playback rates above 16× on a video element, and silence the sound above 4×. */
+const MAX_PREVIEW_RATE = 16;
+const PREVIEW_SPEEDS = [0.25, 0.5, 1, 1.5, 2, 4, 8, 12, 16];
 /** YouTube wants 1280×720 thumbnails under 2 MB; the frame is scaled to this height (never upscaled). */
 const THUMB_HEIGHT = 720;
 type FrameKind = "thumb" | "jpeg" | "png";
@@ -197,7 +200,8 @@ export function VideoEditorWidget() {
   }, [playing]);
   /** A Space press in flight: a short tap toggles play, a hold doubles the speed until release. */
   const spaceRef = useRef<{ timer: ReturnType<typeof setTimeout> | null; boosted: boolean; startedPlayback: boolean } | null>(null);
-  const rate = speed * (boost ? 2 : 1);
+  // A hold doubles the set speed, up to the 16× that browsers allow a video element.
+  const rate = Math.min(MAX_PREVIEW_RATE, speed * (boost ? 2 : 1));
   const [frameMenu, setFrameMenu] = useState(false);
   const [fsTimeline, setFsTimeline] = useState(true);
   const fsTimelineRef = useRef(true);
@@ -837,6 +841,8 @@ export function VideoEditorWidget() {
       return;
     }
     const at = playheadRef.current;
+    // Above 4× the browser silences the video; pitch-shifted music at that speed is noise, so it goes quiet too.
+    if (rate > 4) return stopAll;
     for (const m of project.music) {
       if (m.muted) continue;
       const buf = musicBuffers.current.get(m.media);
@@ -1299,14 +1305,23 @@ export function VideoEditorWidget() {
             <span className="font-mono text-[13px] text-ink tabular">
               {fmtTime(playhead, first?.fps)} <span className="text-faint">/ {fmtTime(duration)}</span>
             </span>
-            <select value={speed} onChange={(e) => setSpeed(Number(e.target.value))} className={cn(SEL, "h-7 text-[12px]")} aria-label="Preview speed" title="Preview speed (export is unaffected)">
-              {[0.25, 0.5, 1, 1.5, 2, 4].map((v) => (
+            <select value={speed} onChange={(e) => setSpeed(Number(e.target.value))} className={cn(SEL, "h-7 text-[12px]")} aria-label="Preview speed" title="Preview speed (export is unaffected). Hold Space to double it. Browsers silence the sound above 4× and cap playback at 16×.">
+              {PREVIEW_SPEEDS.map((v) => (
                 <option key={v} value={v}>
                   {v}×
                 </option>
               ))}
             </select>
-            {boost && <span className="text-[12px] text-accent">{rate}× while held</span>}
+            {boost && (
+              <span className="text-[12px] text-accent" data-boost>
+                {rate}× while held{speed * 2 > MAX_PREVIEW_RATE ? ` — ${MAX_PREVIEW_RATE}× is the browser's ceiling` : ""}
+              </span>
+            )}
+            {!boost && speed > 4 && (
+              <span className="text-[11.5px] text-faint" title="Browsers silence video above 4×, and the music preview stops too; export is unaffected">
+                silent above 4×
+              </span>
+            )}
             <button type="button" onClick={() => setLoop((l) => !l)} aria-pressed={loop} className={cn(GHOST, "h-7 text-[12px]", loop && "border-accent text-accent")} title={range ? "Loop the export range" : "Loop the whole timeline"}>
               <Repeat size={12} /> Loop{range ? " range" : ""}
             </button>
