@@ -69,7 +69,16 @@ export interface Clip {
   transitionIn?: Transition;
   /** This clip continues the previous one with no visible cut: no marker, no transition, and shared grade, crop and audio. */
   joinedToPrevious?: boolean;
+  /** Playback speed: 2 plays the footage twice as fast (half as long on the timeline), 0.5 is slow motion. Missing means 1. */
+  speed?: number;
 }
+
+export const CLIP_SPEEDS = [0.25, 0.5, 0.75, 1, 1.5, 2, 3, 4, 8, 16] as const;
+export const MIN_CLIP_SPEED = 0.1, MAX_CLIP_SPEED = 16;
+/** A clip's speed, clamped; 1 when unset. */
+export const clipSpeed = (c: Pick<Clip, "speed">) => (c.speed && Number.isFinite(c.speed) ? Math.min(MAX_CLIP_SPEED, Math.max(MIN_CLIP_SPEED, c.speed)) : 1);
+/** Timeline instant → where in the source a clip is showing at that moment. */
+export const sourceTimeAt = (c: Clip & { start: number }, t: number) => c.in + (t - c.start) * clipSpeed(c);
 
 export interface Keyframe {
   /** Seconds from the start of the music track's own timeline position. */
@@ -418,7 +427,7 @@ export function applyTransitionToAll(clips: Clip[], tr: Transition | null): Clip
 /* ---------------------------------------------------------- merging clips */
 
 /** Whether b picks up exactly where a leaves off in the same recording. */
-export const isContiguous = (a: Clip, b: Clip) => a.media === b.media && Math.abs(b.in - a.out) < 0.002;
+export const isContiguous = (a: Clip, b: Clip) => a.media === b.media && Math.abs(b.in - a.out) < 0.002 && clipSpeed(a) === clipSpeed(b);
 
 /**
  * What "merge with next" would do for a clip: "merge" rejoins two halves of
@@ -432,8 +441,8 @@ export function canMergeWithNext(clips: Clip[], id: string): "merge" | "join" | 
 }
 
 /** The keys a joined run shares, so nothing changes at the hidden cut. */
-const SHARED_KEYS = ["grade", "transform", "gainDb", "muted"] as const;
-const shared = (from: Clip): Pick<Clip, (typeof SHARED_KEYS)[number]> => ({ grade: { ...from.grade }, transform: { ...from.transform, crop: { ...from.transform.crop } }, gainDb: from.gainDb, muted: from.muted });
+const SHARED_KEYS = ["grade", "transform", "gainDb", "muted", "speed"] as const;
+const shared = (from: Clip): Pick<Clip, (typeof SHARED_KEYS)[number]> => ({ grade: { ...from.grade }, transform: { ...from.transform, crop: { ...from.transform.crop } }, gainDb: from.gainDb, muted: from.muted, speed: clipSpeed(from) });
 
 /**
  * Merge a clip with the one after it. Two halves of the same recording become
@@ -591,7 +600,8 @@ export interface PlacedClip extends Clip {
   index: number;
 }
 
-export const clipLength = (c: Clip) => Math.max(0, c.out - c.in);
+/** How long a clip lasts on the timeline: its trimmed footage divided by its speed. */
+export const clipLength = (c: Clip) => Math.max(0, (c.out - c.in) / clipSpeed(c));
 
 /** Clips laid end to end, in order — continuous footage with no gaps. */
 export function placeClips(clips: Clip[]): PlacedClip[] {
@@ -607,7 +617,7 @@ export const timelineDuration = (p: Project) => placeClips(p.clips).reduce((m, c
 
 /** Which clip is under a timeline instant, and the matching source time. */
 export function clipAt(clips: Clip[], t: number): { clip: PlacedClip; sourceTime: number } | null {
-  for (const c of placeClips(clips)) if (t >= c.start && (t < c.end || (t === c.end && c.end === timelineDuration({ clips } as Project)))) return { clip: c, sourceTime: c.in + Math.min(t - c.start, clipLength(c)) };
+  for (const c of placeClips(clips)) if (t >= c.start && (t < c.end || (t === c.end && c.end === timelineDuration({ clips } as Project)))) return { clip: c, sourceTime: Math.min(c.out, sourceTimeAt(c, t)) };
   return null;
 }
 
@@ -616,7 +626,7 @@ export function splitClip(clips: Clip[], clipId: string, t: number): Clip[] {
   const placed = placeClips(clips);
   const p = placed.find((c) => c.id === clipId);
   if (!p || t <= p.start + 0.01 || t >= p.end - 0.01) return clips;
-  const cut = p.in + (t - p.start);
+  const cut = sourceTimeAt(p, t);
   const a: Clip = { ...p, out: cut, id: p.id };
   // The new second half follows its sibling with a plain cut; it never inherits the transition leading into the first half.
   const b: Clip = { ...p, in: cut, id: newId() };
@@ -634,9 +644,9 @@ export function removeRange(clips: Clip[], from: number, to: number): Clip[] {
     const strip = (c: PlacedClip): Clip => { const { start, end, index, ...rest } = c; void start; void end; void index; return rest; };
     if (c.end <= from || c.start >= to) out.push(strip(c));
     else {
-      if (c.start < from) out.push({ ...strip(c), out: c.in + (from - c.start) });
+      if (c.start < from) out.push({ ...strip(c), out: sourceTimeAt(c, from) });
       if (c.end > to) {
-        const tail: Clip = { ...strip(c), id: c.start < from ? newId() : c.id, in: c.in + (to - c.start) };
+        const tail: Clip = { ...strip(c), id: c.start < from ? newId() : c.id, in: sourceTimeAt(c, to) };
         if (c.start < from) delete tail.transitionIn;
         // Footage was removed just before this piece: the cut shows again.
         delete tail.joinedToPrevious;
@@ -798,6 +808,8 @@ export interface ExportSpan {
   end: number;
   /** Why this span re-encodes (for the UI). */
   reasons: string[];
+  /** Source seconds per timeline second (the clip's speed). */
+  speed: number;
 }
 
 const isNeutralGrade = (g: Grade) => g.lut === "none" && g.exposure === 0 && g.temperature === 0 && g.tint === 0 && g.contrast === 1 && g.saturation === 1;
@@ -823,9 +835,11 @@ export function planExport(p: Project): ExportSpan[] {
     if (!sameCodec(p.media[c.media])) reasons.push(`source is ${p.media[c.media]?.codec ?? "unknown"}, export is ${p.export.codec}`);
     if (p.export.resolution !== "source") reasons.push("scaled output");
     if (p.watermark.media) reasons.push("watermark");
+    const speed = clipSpeed(c);
+    if (speed !== 1) reasons.push(`speed ${speed}×`);
     const overlays = p.titles.filter((t) => t.start < c.end && t.start + t.duration > c.start);
     if (reasons.length) {
-      spans.push({ kind: "encode", clipId: c.id, sourceIn: c.in, sourceOut: c.out, start: c.start, end: c.end, reasons });
+      spans.push({ kind: "encode", clipId: c.id, sourceIn: c.in, sourceOut: c.out, start: c.start, end: c.end, reasons, speed });
       continue;
     }
     // Titles and transitions only force re-encoding of the frames they cover.
@@ -836,11 +850,11 @@ export function planExport(p: Project): ExportSpan[] {
     ].sort((a, b) => a[0] - b[0]);
     for (const [ts, te, why] of cuts) {
       if (te <= cursor) continue;
-      if (ts > cursor) spans.push({ kind: "copy", clipId: c.id, sourceIn: c.in + (cursor - c.start), sourceOut: c.in + (ts - c.start), start: cursor, end: ts, reasons: [] });
-      spans.push({ kind: "encode", clipId: c.id, sourceIn: c.in + (Math.max(cursor, ts) - c.start), sourceOut: c.in + (te - c.start), start: Math.max(cursor, ts), end: te, reasons: [why] });
+      if (ts > cursor) spans.push({ kind: "copy", clipId: c.id, sourceIn: c.in + (cursor - c.start), sourceOut: c.in + (ts - c.start), start: cursor, end: ts, reasons: [], speed: 1 });
+      spans.push({ kind: "encode", clipId: c.id, sourceIn: c.in + (Math.max(cursor, ts) - c.start), sourceOut: c.in + (te - c.start), start: Math.max(cursor, ts), end: te, reasons: [why], speed: 1 });
       cursor = Math.max(cursor, te);
     }
-    if (cursor < c.end) spans.push({ kind: "copy", clipId: c.id, sourceIn: c.in + (cursor - c.start), sourceOut: c.out, start: cursor, end: c.end, reasons: [] });
+    if (cursor < c.end) spans.push({ kind: "copy", clipId: c.id, sourceIn: c.in + (cursor - c.start), sourceOut: c.out, start: cursor, end: c.end, reasons: [], speed: 1 });
   }
   // A partial export keeps only what falls inside the range, trimming spans at its edges.
   const range = exportRange(p);
@@ -848,7 +862,7 @@ export function planExport(p: Project): ExportSpan[] {
   return spans.flatMap((s) => {
     const s0 = Math.max(s.start, range.from), e0 = Math.min(s.end, range.to);
     if (e0 - s0 <= 1e-6) return [];
-    return [{ ...s, sourceIn: s.sourceIn + (s0 - s.start), sourceOut: s.sourceOut - (s.end - e0), start: s0, end: e0 }];
+    return [{ ...s, sourceIn: s.sourceIn + (s0 - s.start) * s.speed, sourceOut: s.sourceOut - (s.end - e0) * s.speed, start: s0, end: e0 }];
   });
 }
 
@@ -887,7 +901,7 @@ export function deserialize(json: string): Project | null {
     const known = TRANSITIONS.some((t) => t.kind === legacy.kind);
     const transition: Transition = { kind: known ? (legacy.kind as TransitionKind) : DEFAULT_TRANSITION.kind, duration: legacy.duration ?? DEFAULT_TRANSITION.duration };
     const migrated = known && !p.clips.some((c) => c.transitionIn) ? applyTransitionToAll(p.clips, transition) : p.clips;
-    const clips = migrated.map((c) => (LUT_KINDS.includes(c.grade?.lut) ? c : { ...c, grade: { ...c.grade, lut: "none" as LutKind } }));
+    const clips = migrated.map((c) => ({ ...(LUT_KINDS.includes(c.grade?.lut) ? c : { ...c, grade: { ...c.grade, lut: "none" as LutKind } }), ...(c.speed !== undefined ? { speed: clipSpeed(c) } : {}) }));
     return { ...newProject(), ...p, clips, export: { ...DEFAULT_EXPORT, ...p.export }, preview: { ...DEFAULT_PREVIEW, ...(p.preview ?? (Object.values(p.proxies ?? {}).some((x) => x?.ready) ? { proxyHeight: 1080 } : {})) }, transition, titles: (p.titles ?? []).map((t) => normalizeTitle(t)) };
   } catch {
     return null;

@@ -25,7 +25,7 @@ import {
   type VideoCodec,
 } from "mediabunny";
 import { GRADE_FRAGMENT_SHADER, buildDlogLut, deriveLut, fetchOfficialLut, lutTexture, parseCube, type Lut3D } from "./lut";
-import { clipAt, dbToGain, fontFamilyCss, exportRange, isFileLutKind, musicGainAt, placeClips, planExport, transitionAt, transitionWindows, type Clip, type ExportSpan, type Grade, type LutKind, type MediaRef, type PlacedClip, type Project, type Title, type Transform, type TransitionWindow } from "./project";
+import { clipAt, clipSpeed, sourceTimeAt, dbToGain, fontFamilyCss, exportRange, isFileLutKind, musicGainAt, placeClips, planExport, transitionAt, transitionWindows, type Clip, type ExportSpan, type Grade, type LutKind, type MediaRef, type PlacedClip, type Project, type Title, type Transform, type TransitionWindow } from "./project";
 import { drawTransition } from "./transitions";
 import { ProgressTracker, defaultSpeeds, planSteps, type ExportProgress, type SpeedPriors, type StepProgress } from "./progress";
 
@@ -361,6 +361,9 @@ export interface MixInput {
  * Mix original clip audio with the music lanes for a timeline range, in
  * fixed-size blocks. Returns interleaved stereo f32 blocks via the callback.
  */
+/** Original sound follows a clip's speed between these; beyond them it is pitch-shifted noise, so it goes quiet. */
+export const MIN_AUDIBLE_SPEED = 0.25, MAX_AUDIBLE_SPEED = 4;
+
 export async function mixAudio(input: MixInput, from: number, to: number, onBlock: (samples: Float32Array, timestamp: number) => Promise<void>, signal?: AbortSignal): Promise<void> {
   const { project, getFile, sampleRate } = input;
   const block = 4096;
@@ -436,10 +439,22 @@ export async function mixAudio(input: MixInput, from: number, to: number, onBloc
     const mix = new Float32Array(n * 2);
     // Original audio from whichever clip is under this block.
     const here = placed.find((c) => t >= c.start && t < c.end);
-    if (here && !here.muted && project.media[here.media]?.hasAudio) {
+    const hereSpeed = here ? clipSpeed(here) : 1;
+    if (here && !here.muted && project.media[here.media]?.hasAudio && hereSpeed >= MIN_AUDIBLE_SPEED && hereSpeed <= MAX_AUDIBLE_SPEED) {
       const g = dbToGain(here.gainDb);
-      const s = await pull(here.media, here.in + (t - here.start), n);
-      for (let i = 0; i < n * 2; i++) mix[i] += s[i] * g;
+      if (hereSpeed === 1) {
+        const s = await pull(here.media, sourceTimeAt(here, t), n);
+        for (let i = 0; i < n * 2; i++) mix[i] += s[i] * g;
+      } else {
+        // Sped-up or slowed footage: read the matching stretch of source audio and resample it to this block (pitch follows).
+        const srcN = Math.ceil(n * hereSpeed) + 1;
+        const s = await pull(here.media, sourceTimeAt(here, t), srcN);
+        for (let i = 0; i < n; i++) {
+          const x = i * hereSpeed, j = Math.min(srcN - 2, Math.floor(x)), f = x - j;
+          mix[i * 2] += (s[j * 2] * (1 - f) + s[(j + 1) * 2] * f) * g;
+          mix[i * 2 + 1] += (s[j * 2 + 1] * (1 - f) + s[(j + 1) * 2 + 1] * f) * g;
+        }
+      }
     }
     for (const m of project.music) {
       if (m.muted || t + n / sampleRate < m.start || t > m.start + (m.out - m.in)) continue;
@@ -498,7 +513,7 @@ class NeighbourFrames {
       this.key = key;
       const track = await (await this.openInput(clip.media)).getPrimaryVideoTrack();
       if (!track) return null;
-      const from = Math.max(0, clip.in + (window.start - clip.start)), to = clip.in + (window.end - clip.start) + 0.5;
+      const from = Math.max(0, sourceTimeAt(clip, window.start)), to = sourceTimeAt(clip, window.end) + 0.5;
       this.iter = new VideoSampleSink(track).samples(from, to)[Symbol.asyncIterator]();
     }
     while (this.iter && !this.done) {
@@ -648,24 +663,19 @@ export async function exportProject(opts: ExportOptions): Promise<ExportResult> 
     // frame-accurately instead, but skip the GPU grade (identity draw) so it is still much faster than a graded span.
     const sink = new VideoSampleSink(track);
     const srcW = media.width ?? track.displayWidth, srcH = media.height ?? track.displayHeight;
-    for await (const sample of sink.samples(span.sourceIn, span.sourceOut)) {
-      if (signal?.aborted) {
-        sample.close();
-        throw new DOMException("Cancelled", "AbortError");
-      }
-      await pauseGate();
-      if (signal?.aborted) {
-        sample.close();
-        throw new DOMException("Cancelled", "AbortError");
-      }
-      const timelineT = span.start + (sample.timestamp - span.sourceIn);
+    const speed = span.speed || 1;
+    // At 1× every source frame becomes an output frame. At other speeds the output keeps the source frame rate: each
+    // output tick shows the source frame playing at that moment, so 2× drops every other frame and 0.5× holds each twice.
+    let nextTick = span.start;
+    const frameDur = 1 / fps;
+    const compose = async (sample: VideoSample, timelineT: number) => {
       const tr = windows.length && span.kind === "encode" ? transitionAt(windows, timelineT) : null;
       let composed = false;
       if (tr) {
         // Inside a transition: grade both sides, then composite them.
         const outgoingIsThis = tr.window.outgoing.id === clip.id;
         const other = outgoingIsThis ? tr.window.incoming : tr.window.outgoing;
-        const frame = await neighbour.frameAt(other, tr.window, other.in + (timelineT - other.start));
+        const frame = await neighbour.frameAt(other, tr.window, sourceTimeAt(other, timelineT));
         if (frame) {
           tmpA ??= new OffscreenCanvas(outW, outH);
           tmpB ??= new OffscreenCanvas(outW, outH);
@@ -686,8 +696,33 @@ export async function exportProject(opts: ExportOptions): Promise<ExportResult> 
         ctx2d.drawImage(sample.toCanvasImageSource(), 0, 0, outW, outH);
       }
       drawOverlays(ctx2d, outW, outH, timelineT, project, logo);
-      await videoSource.add(timelineT - offset, sample.duration || 1 / fps);
-      progress(sample.timestamp);
+    };
+    for await (const sample of sink.samples(span.sourceIn, span.sourceOut)) {
+      if (signal?.aborted) {
+        sample.close();
+        throw new DOMException("Cancelled", "AbortError");
+      }
+      await pauseGate();
+      if (signal?.aborted) {
+        sample.close();
+        throw new DOMException("Cancelled", "AbortError");
+      }
+      if (speed === 1) {
+        const timelineT = span.start + (sample.timestamp - span.sourceIn);
+        await compose(sample, timelineT);
+        await videoSource.add(timelineT - offset, sample.duration || frameDur);
+        progress(sample.timestamp);
+      } else {
+        // This source frame is on screen until its successor's timeline time; emit every output tick that falls inside.
+        const shownUntil = span.start + (sample.timestamp + (sample.duration || frameDur * speed) - span.sourceIn) / speed;
+        while (nextTick < shownUntil - 1e-6 && nextTick < span.end - 1e-6) {
+          await compose(sample, nextTick);
+          await videoSource.add(nextTick - offset, frameDur);
+          nextTick += frameDur;
+          tracker.frame(written + (nextTick - span.start));
+          emit();
+        }
+      }
       sample.close();
     }
     written += span.end - span.start;
@@ -794,7 +829,7 @@ export async function renderFrame(opts: FrameOptions): Promise<RenderedFrame> {
   if (tr) {
     const outgoingIsThis = tr.window.outgoing.id === under.clip.id;
     const other = outgoingIsThis ? tr.window.incoming : tr.window.outgoing;
-    const frame = await frameOf(other, other.in + (t - other.start));
+    const frame = await frameOf(other, sourceTimeAt(other, t));
     if (frame) {
       const a = new OffscreenCanvas(outW, outH), b = new OffscreenCanvas(outW, outH), scratch = new OffscreenCanvas(outW, outH);
       const om = project.media[other.media];

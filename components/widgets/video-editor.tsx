@@ -44,8 +44,12 @@ import {
   titlesTemplate,
   transitionAt,
   transitionWindows,
+  CLIP_SPEEDS,
   canMergeWithNext,
+  clipLength,
+  clipSpeed,
   groupOf,
+  sourceTimeAt,
   mergeWithNext,
   moveClip,
   unjoin,
@@ -71,7 +75,7 @@ import {
 import { drawTransition } from "@/lib/tools/video/transitions";
 import { LUT_OPTIONS, buildDlogLut, deriveLut, fetchOfficialLut, lutToCube, parseCube, type Lut3D } from "@/lib/tools/video/lut";
 import { fmtBytes, fmtDelta, fmtDuration, fmtMs, type EstimateSource, type ExportProgress, type SpeedPriors, type StepProgress } from "@/lib/tools/video/progress";
-import { Grader, buildProxy, drawOverlays, encoderSupport, exportProject, probe, renderFrame } from "@/lib/tools/video/engine";
+import { Grader, MAX_AUDIBLE_SPEED, MIN_AUDIBLE_SPEED, buildProxy, drawOverlays, encoderSupport, exportProject, probe, renderFrame } from "@/lib/tools/video/engine";
 import { ProjectStore, hasFileSystemAccess, AUTOSAVE_FILE, FRAMES_DIR, PROJECT_FILE, PROXY_DIR } from "@/lib/tools/video/store";
 import { cn } from "@/lib/utils";
 
@@ -831,7 +835,7 @@ export function VideoEditorWidget() {
     const gain = under.clip.muted ? 0 : Math.min(1, dbToGain(under.clip.gainDb));
     v.volume = gain;
     v.muted = gain === 0 || previewMuted;
-    v.playbackRate = rate;
+    v.playbackRate = Math.min(MAX_PREVIEW_RATE, rate * clipSpeed(under.clip));
     if (playing) void v.play().catch(() => undefined);
     else v.pause();
   }, [previewSrc, under, playing, rate, previewMuted]);
@@ -881,7 +885,7 @@ export function VideoEditorWidget() {
     const tick = () => {
       const v = videoRef.current;
       if (v && under) {
-        const t = under.clip.start + (v.currentTime - under.clip.in);
+        const t = under.clip.start + (v.currentTime - under.clip.in) / clipSpeed(under.clip);
         const loopTo = rangeRef.current ? rangeRef.current.from : 0, loopEnd = rangeRef.current ? rangeRef.current.to : duration;
         const restart = () => {
           setPlayhead(loopTo);
@@ -925,7 +929,8 @@ export function VideoEditorWidget() {
                 alt.src = url;
                 alt.dataset.src = url;
               }
-              const want = Math.max(0, other.in + (playhead - other.start));
+              const want = Math.max(0, sourceTimeAt(other, playhead));
+              alt.playbackRate = Math.min(MAX_PREVIEW_RATE, rate * clipSpeed(other));
               if (playing) {
                 if (alt.paused) void alt.play().catch(() => undefined);
                 if (Math.abs(alt.currentTime - want) > 0.3) alt.currentTime = want;
@@ -953,7 +958,7 @@ export function VideoEditorWidget() {
               if (url && alt.dataset.src !== url) {
                 alt.src = url;
                 alt.dataset.src = url;
-                alt.currentTime = Math.max(0, next.incoming.in + (next.start - next.incoming.start));
+                alt.currentTime = Math.max(0, sourceTimeAt(next.incoming, next.start));
               }
             }
           }
@@ -975,7 +980,7 @@ export function VideoEditorWidget() {
     };
     raf = requestAnimationFrame(draw);
     return () => cancelAnimationFrame(raf);
-  }, [under, playhead, project, logo, duration, windows, playing, previewUrlFor, customLut, fileLuts]);
+  }, [under, playhead, project, logo, duration, windows, playing, rate, previewUrlFor, customLut, fileLuts]);
 
   // Grade, crop and audio changes reach every clip of a joined run, so a hidden cut stays invisible.
   const update = (id: string, patch: Partial<Clip>) => setProject((p) => ({ ...p, clips: updateClip(p.clips, id, patch) }));
@@ -1481,9 +1486,30 @@ export function VideoEditorWidget() {
                     Move later ▶
                   </button>
                 </div>
+                <div className="flex flex-wrap items-center gap-2 rounded-[var(--radius-sm)] border border-edge p-2" data-speed-box>
+                  <label className="flex items-center gap-1.5 text-[12.5px] text-muted">
+                    Speed
+                    <select value={current ? clipSpeed(current) : 1} disabled={!current} onChange={(e) => current && update(current.id, { speed: Number(e.target.value) })} className={cn(SEL, "h-7 text-[12px]")} aria-label="Clip speed" title="Play this clip faster (time-lapse) or slower (slow motion); it gets shorter or longer on the timeline and the export follows">
+                      {CLIP_SPEEDS.map((v) => (
+                        <option key={v} value={v}>
+                          {v}×
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  {current && clipSpeed(current) !== 1 && (
+                    <span className="text-[12px] text-faint">
+                      {fmtTime(current.out - current.in)} of footage plays in {fmtTime(clipLength(current))}
+                      {clipSpeed(current) > MAX_AUDIBLE_SPEED || clipSpeed(current) < MIN_AUDIBLE_SPEED ? " · original sound off at this speed" : " · original sound follows (pitch shifts)"}
+                    </span>
+                  )}
+                  <button type="button" disabled={!current || project.clips.length < 2} onClick={() => current && setProject((p) => ({ ...p, clips: p.clips.map((c) => ({ ...c, speed: clipSpeed(current) })) }))} className={cn(GHOST, "ml-auto h-7 text-[12px]")} title="Give every clip this clip's speed">
+                    Apply speed to all
+                  </button>
+                </div>
                 {currentRun.length > 1 && (
                   <p className="text-[12px] text-faint" data-run-note>
-                    Part of a joined run of {currentRun.length} clips shown as one shot: grade, crop and audio changes apply to all of them. Split or unjoin to break it up.
+                    Part of a joined run of {currentRun.length} clips shown as one shot: grade, crop, audio and speed changes apply to all of them. Split or unjoin to break it up.
                   </p>
                 )}
                 <RangeCut duration={duration} onCut={(a, b) => setProject((p) => ({ ...p, clips: removeRange(p.clips, a, b) }))} />
@@ -2126,6 +2152,7 @@ export function VideoEditorWidget() {
                           {runCount > 1 ? ` +${runCount - 1}` : ""}
                         </span>
                         <span className="block truncate text-faint">
+                          {clipSpeed(c) !== 1 ? `${clipSpeed(c)}× · ` : ""}
                           {c.grade.lut !== "none" || c.grade.exposure || c.grade.saturation !== 1 ? "graded · " : ""}
                           {c.transform.rotate || c.transform.straighten || c.transform.crop.w !== 1 || c.transform.crop.h !== 1 ? "cropped · " : ""}
                           {runCount > 1 ? `${runCount} joined · ${fmtTime(runEnd - c.start)}` : fmtTime(c.end - c.start)}
