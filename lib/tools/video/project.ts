@@ -67,6 +67,8 @@ export interface Clip {
   muted: boolean;
   /** The transition leading into this clip from the one before it, if any. */
   transitionIn?: Transition;
+  /** This clip continues the previous one with no visible cut: no marker, no transition, and shared grade, crop and audio. */
+  joinedToPrevious?: boolean;
 }
 
 export interface Keyframe {
@@ -380,7 +382,7 @@ export function transitionWindows(placed: PlacedClip[]): TransitionWindow[] {
   const out: TransitionWindow[] = [];
   for (let i = 1; i < placed.length; i++) {
     const a = placed[i - 1], b = placed[i], tr = b.transitionIn;
-    if (!tr || !(tr.duration > 0)) continue;
+    if (!tr || !(tr.duration > 0) || b.joinedToPrevious) continue;
     const d = Math.min(tr.duration, a.end - a.start, b.end - b.start);
     if (d < 0.2) continue;
     out.push({ kind: tr.kind, outgoing: a, incoming: b, cut: b.start, start: b.start - d / 2, end: b.start + d / 2 });
@@ -388,23 +390,109 @@ export function transitionWindows(placed: PlacedClip[]): TransitionWindow[] {
   return out;
 }
 
-/** Set (or with null, remove) the transition on the cut leading into a clip. The first clip has no cut before it. */
+/**
+ * Set (or with null, remove) the transition on the cut leading into a clip.
+ * The first clip has no cut before it. Putting a transition on a joined cut
+ * makes the cut visible again.
+ */
 export function setTransition(clips: Clip[], incomingId: string, tr: Transition | null): Clip[] {
   return clips.map((c, i) => {
     if (c.id !== incomingId) return c;
+    const { transitionIn, joinedToPrevious, ...rest } = c;
+    void transitionIn;
+    if (tr && i > 0) return { ...rest, transitionIn: { ...tr } };
+    return joinedToPrevious ? { ...rest, joinedToPrevious } : rest;
+  });
+}
+
+/** Stamp one transition on every visible cut (null clears them all); joined cuts stay hidden. */
+export function applyTransitionToAll(clips: Clip[], tr: Transition | null): Clip[] {
+  return clips.map((c, i) => {
+    if (c.joinedToPrevious) return c;
     const { transitionIn, ...rest } = c;
     void transitionIn;
     return tr && i > 0 ? { ...rest, transitionIn: { ...tr } } : rest;
   });
 }
 
-/** Stamp one transition on every cut (null clears them all). */
-export function applyTransitionToAll(clips: Clip[], tr: Transition | null): Clip[] {
-  return clips.map((c, i) => {
-    const { transitionIn, ...rest } = c;
-    void transitionIn;
-    return tr && i > 0 ? { ...rest, transitionIn: { ...tr } } : rest;
+/* ---------------------------------------------------------- merging clips */
+
+/** Whether b picks up exactly where a leaves off in the same recording. */
+export const isContiguous = (a: Clip, b: Clip) => a.media === b.media && Math.abs(b.in - a.out) < 0.002;
+
+/**
+ * What "merge with next" would do for a clip: "merge" rejoins two halves of
+ * one recording into a single clip; "join" hides the cut to a different (or
+ * non-adjacent) piece of footage; null when there is no next clip.
+ */
+export function canMergeWithNext(clips: Clip[], id: string): "merge" | "join" | null {
+  const i = clips.findIndex((c) => c.id === id);
+  if (i < 0 || i + 1 >= clips.length) return null;
+  return isContiguous(clips[i], clips[i + 1]) ? "merge" : "join";
+}
+
+/** The keys a joined run shares, so nothing changes at the hidden cut. */
+const SHARED_KEYS = ["grade", "transform", "gainDb", "muted"] as const;
+const shared = (from: Clip): Pick<Clip, (typeof SHARED_KEYS)[number]> => ({ grade: { ...from.grade }, transform: { ...from.transform, crop: { ...from.transform.crop } }, gainDb: from.gainDb, muted: from.muted });
+
+/**
+ * Merge a clip with the one after it. Two halves of the same recording become
+ * one clip again (the first keeps its settings and transition). Anything else
+ * is joined: the second clip stays its own piece of footage but the cut is
+ * hidden — no marker, no transition — and it takes the first clip's grade,
+ * crop and audio so the seam is invisible.
+ */
+export function mergeWithNext(clips: Clip[], id: string): Clip[] {
+  const i = clips.findIndex((c) => c.id === id);
+  if (i < 0 || i + 1 >= clips.length) return clips;
+  const a = clips[i], b = clips[i + 1];
+  if (isContiguous(a, b)) return clips.flatMap((c, k) => (k === i ? [{ ...a, out: b.out }] : k === i + 1 ? [] : [c]));
+  const { transitionIn, ...rest } = b;
+  void transitionIn;
+  return clips.map((c, k) => (k === i + 1 ? { ...rest, ...shared(a), joinedToPrevious: true } : c));
+}
+
+/** Make the cut before a clip visible again. */
+export function unjoin(clips: Clip[], id: string): Clip[] {
+  return clips.map((c) => {
+    if (c.id !== id || !c.joinedToPrevious) return c;
+    const { joinedToPrevious, ...rest } = c;
+    void joinedToPrevious;
+    return rest;
   });
+}
+
+/** Ids of the joined run a clip belongs to (just itself when it stands alone), in timeline order. */
+export function groupOf(clips: Clip[], id: string): string[] {
+  const i = clips.findIndex((c) => c.id === id);
+  if (i < 0) return [];
+  let from = i, to = i;
+  while (from > 0 && clips[from].joinedToPrevious) from--;
+  while (to + 1 < clips.length && clips[to + 1].joinedToPrevious) to++;
+  return clips.slice(from, to + 1).map((c) => c.id);
+}
+
+/** Patch one clip; grade, crop and audio changes also go to the rest of its joined run. */
+export function updateClip(clips: Clip[], id: string, patch: Partial<Clip>): Clip[] {
+  const run = new Set(groupOf(clips, id));
+  const sharedPatch: Partial<Clip> = {};
+  for (const k of SHARED_KEYS) if (k in patch) (sharedPatch as Record<string, unknown>)[k] = patch[k];
+  const spread = Object.keys(sharedPatch).length > 0;
+  return clips.map((c) => (c.id === id ? { ...c, ...patch } : spread && run.has(c.id) ? { ...c, ...sharedPatch } : c));
+}
+
+/** Timeline instants of the cuts that show: every clip start after the first, except joined ones. */
+export function visibleCuts(placed: PlacedClip[]): number[] {
+  return placed.filter((c, i) => i > 0 && !c.joinedToPrevious).map((c) => c.start);
+}
+
+/** Swap a clip with its neighbour; cuts around the moved clips become visible, since the footage no longer continues. */
+export function moveClip(clips: Clip[], id: string, dir: -1 | 1): Clip[] {
+  const i = clips.findIndex((c) => c.id === id), j = i + dir;
+  if (i < 0 || j < 0 || j >= clips.length) return clips;
+  const out = moveItem(clips, id, dir);
+  const lo = Math.min(i, j), hi = Math.max(i, j) + 1;
+  return out.map((c, k) => (k >= lo && k <= hi ? unjoin([c], c.id)[0] : c));
 }
 
 /**
@@ -533,6 +621,7 @@ export function splitClip(clips: Clip[], clipId: string, t: number): Clip[] {
   // The new second half follows its sibling with a plain cut; it never inherits the transition leading into the first half.
   const b: Clip = { ...p, in: cut, id: newId() };
   delete b.transitionIn;
+  delete b.joinedToPrevious;
   const strip = (c: PlacedClip): Clip => { const { start, end, index, ...rest } = c; void start; void end; void index; return rest; };
   return clips.flatMap((c) => (c.id === clipId ? [strip({ ...a, start: 0, end: 0, index: 0 }), strip({ ...b, start: 0, end: 0, index: 0 })] : [c]));
 }
@@ -549,11 +638,19 @@ export function removeRange(clips: Clip[], from: number, to: number): Clip[] {
       if (c.end > to) {
         const tail: Clip = { ...strip(c), id: c.start < from ? newId() : c.id, in: c.in + (to - c.start) };
         if (c.start < from) delete tail.transitionIn;
+        // Footage was removed just before this piece: the cut shows again.
+        delete tail.joinedToPrevious;
         out.push(tail);
       }
     }
   }
-  return out;
+  // A clip stays joined only while the footage right before it is what it was: the same recording ending at the same frame.
+  return out.map((c, i) => {
+    if (!c.joinedToPrevious) return c;
+    if (i === 0) return unjoin([c], c.id)[0];
+    const was = clips[clips.findIndex((x) => x.id === c.id) - 1], now = out[i - 1];
+    return was && was.media === now.media && was.out === now.out ? c : unjoin([c], c.id)[0];
+  });
 }
 
 /**

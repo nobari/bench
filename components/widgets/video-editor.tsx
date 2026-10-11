@@ -26,7 +26,6 @@ import {
   estimateExport,
   exportRange,
   fmtTime,
-  moveItem,
   musicGainAt,
   musicLength,
   newId,
@@ -45,6 +44,13 @@ import {
   titlesTemplate,
   transitionAt,
   transitionWindows,
+  canMergeWithNext,
+  groupOf,
+  mergeWithNext,
+  moveClip,
+  unjoin,
+  updateClip,
+  visibleCuts,
   type Clip,
   type MediaRef,
   type MusicTrack,
@@ -536,7 +542,15 @@ export function VideoEditorWidget() {
   );
 
   useEffect(() => {
-    encoderSupport(7680, 4320).then(setSupport).catch(() => setSupport({ hevc: false, avc: false }));
+    let active = true;
+    encoderSupport(7680, 4320)
+      .then((s) => active && setSupport(s))
+      .catch(() => active && setSupport({ hevc: false, avc: false }));
+    return () => {
+      active = false;
+    };
+  }, []);
+  useEffect(() => {
     const onUnload = () => void store.flush();
     window.addEventListener("beforeunload", onUnload);
     const onKey = (e: KeyboardEvent) => {
@@ -561,7 +575,7 @@ export function VideoEditorWidget() {
         setFsTimeline(!fsTimelineRef.current);
       } else if (!inField(e) && !e.metaKey && !e.ctrlKey) {
         const t = playheadRef.current, frame = 1 / fpsRef.current;
-        const cuts = placeClips(project.clips).map((c) => c.start).slice(1);
+        const cuts = visibleCuts(placeClips(project.clips));
         if (e.key === "ArrowLeft") stepTo(t - (e.shiftKey ? 1 : frame));
         else if (e.key === "ArrowRight") stepTo(t + (e.shiftKey ? 1 : frame));
         else if (e.key === "Home") stepTo(0);
@@ -963,7 +977,22 @@ export function VideoEditorWidget() {
     return () => cancelAnimationFrame(raf);
   }, [under, playhead, project, logo, duration, windows, playing, previewUrlFor, customLut, fileLuts]);
 
-  const update = (id: string, patch: Partial<Clip>) => setProject((p) => ({ ...p, clips: p.clips.map((c) => (c.id === id ? { ...c, ...patch } : c)) }));
+  // Grade, crop and audio changes reach every clip of a joined run, so a hidden cut stays invisible.
+  const update = (id: string, patch: Partial<Clip>) => setProject((p) => ({ ...p, clips: updateClip(p.clips, id, patch) }));
+  const mergeKind = current ? canMergeWithNext(project.clips, current.id) : null;
+  const currentRun = current ? groupOf(project.clips, current.id) : [];
+  const selectedRun = useMemo(() => new Set(selected ? groupOf(project.clips, selected) : []), [project.clips, selected]);
+  /** For each clip bar: whether the next clip continues it, and how many clips its joined run spans (0 for a continuation). */
+  const runInfo = useMemo(
+    () =>
+      placed.map((c, i) => {
+        if (c.joinedToPrevious) return { joinsNext: !!placed[i + 1]?.joinedToPrevious, runCount: 0, runEnd: c.end };
+        let k = i;
+        while (placed[k + 1]?.joinedToPrevious) k++;
+        return { joinsNext: k > i, runCount: k - i + 1, runEnd: placed[k].end };
+      }),
+    [placed],
+  );
   const updateMusic = (id: string, patch: Partial<MusicTrack>) => setProject((p) => ({ ...p, music: p.music.map((m) => (m.id === id ? { ...m, ...patch } : m)) }));
   // Transitions live on the cut they lead into; selecting one parks the playhead on the cut so the preview shows its middle.
   const focusTransition = (incomingId: string | null) => {
@@ -1421,6 +1450,21 @@ export function VideoEditorWidget() {
                   <button type="button" disabled={!under} onClick={() => under && setProject((p) => ({ ...p, clips: splitClip(p.clips, under.clip.id, playhead) }))} className={GHOST}>
                     <Scissors size={13} /> Split at playhead
                   </button>
+                  <button
+                    type="button"
+                    disabled={!current || !mergeKind}
+                    onClick={() => current && setProject((p) => ({ ...p, clips: mergeWithNext(p.clips, current.id) }))}
+                    className={GHOST}
+                    title={mergeKind === "merge" ? "The next clip is the rest of this recording: make them one clip again, with no cut" : mergeKind === "join" ? "Hide the cut to the next clip: no marker or transition, and it takes this clip's grade, crop and audio so the seam is invisible" : "Select a clip that has one after it"}
+                    data-merge-next
+                  >
+                    {mergeKind === "join" ? "Join with next" : "Merge with next"}
+                  </button>
+                  {current?.joinedToPrevious && (
+                    <button type="button" onClick={() => setProject((p) => ({ ...p, clips: unjoin(p.clips, current.id) }))} className={GHOST} title="Show the cut before this clip again" data-unjoin>
+                      Unjoin from previous
+                    </button>
+                  )}
                   <button type="button" disabled={!under} onClick={() => under && update(under.clip.id, { in: under.sourceTime })} className={GHOST}>
                     Trim start to here
                   </button>
@@ -1430,18 +1474,23 @@ export function VideoEditorWidget() {
                   <button type="button" disabled={!current} onClick={() => current && setProject((p) => ({ ...p, clips: p.clips.filter((c) => c.id !== current.id) }))} className={cn(GHOST, "hover:border-danger hover:text-danger")}>
                     <Trash2 size={13} /> Delete clip
                   </button>
-                  <button type="button" disabled={!current || placed.findIndex((c) => c.id === current.id) === 0} onClick={() => current && setProject((p) => ({ ...p, clips: moveItem(p.clips, current.id, -1) }))} className={GHOST} title="Play this clip before the previous one">
+                  <button type="button" disabled={!current || placed.findIndex((c) => c.id === current.id) === 0} onClick={() => current && setProject((p) => ({ ...p, clips: moveClip(p.clips, current.id, -1) }))} className={GHOST} title="Play this clip before the previous one">
                     ◀ Move earlier
                   </button>
-                  <button type="button" disabled={!current || placed.findIndex((c) => c.id === current.id) === placed.length - 1} onClick={() => current && setProject((p) => ({ ...p, clips: moveItem(p.clips, current.id, 1) }))} className={GHOST} title="Play this clip after the next one">
+                  <button type="button" disabled={!current || placed.findIndex((c) => c.id === current.id) === placed.length - 1} onClick={() => current && setProject((p) => ({ ...p, clips: moveClip(p.clips, current.id, 1) }))} className={GHOST} title="Play this clip after the next one">
                     Move later ▶
                   </button>
                 </div>
+                {currentRun.length > 1 && (
+                  <p className="text-[12px] text-faint" data-run-note>
+                    Part of a joined run of {currentRun.length} clips shown as one shot: grade, crop and audio changes apply to all of them. Split or unjoin to break it up.
+                  </p>
+                )}
                 <RangeCut duration={duration} onCut={(a, b) => setProject((p) => ({ ...p, clips: removeRange(p.clips, a, b) }))} />
                 <div className={cn("space-y-2 rounded-[var(--radius-sm)] border p-2", selectedWindow ? "border-accent" : "border-edge")} data-transition-box>
                   <div className="flex items-center justify-between text-[12.5px]">
                     <span className="font-medium text-ink">{selectedWindow ? `Transition at ${fmtTime(selectedWindow.cut)}` : "Transitions"}</span>
-                    <span className="text-faint">{placed.length > 1 ? `${windows.length} of ${placed.length - 1} cut${placed.length === 2 ? "" : "s"}` : "no cuts yet"}</span>
+                    <span className="text-faint">{visibleCuts(placed).length ? `${windows.length} of ${visibleCuts(placed).length} cut${visibleCuts(placed).length === 1 ? "" : "s"}` : "no cuts yet"}</span>
                   </div>
                   <select value={selectedWindow?.kind ?? project.transition.kind} onChange={(e) => changeTransition({ kind: e.target.value as TransitionKind })} className={SEL} aria-label="Transition">
                     {TRANSITIONS.map((t) => (
@@ -2049,30 +2098,43 @@ export function VideoEditorWidget() {
             </div>
             {/* video lane */}
             <div className="relative mt-1 h-12">
-              {placed.map((c) => (
-                <button
-                  key={c.id}
-                  type="button"
-                  onPointerDown={(e) => e.stopPropagation()}
-                  onClick={() => {
-                    setSelected(c.id);
-                    setSelectedMusic(null);
-                    setSelectedTransition(null);
-                    setPlayhead(c.start);
-                    setSeekToken((t) => t + 1);
-                  }}
-                  className={cn("absolute top-0 h-full overflow-hidden rounded-[var(--radius-sm)] border px-2 text-left text-[11.5px]", selected === c.id ? "border-accent bg-accent-soft text-ink" : "border-edge bg-raised text-muted")}
-                  style={{ left: c.start * pxPerSec, width: Math.max(4, (c.end - c.start) * pxPerSec - 1) }}
-                  title={`${project.media[c.media]?.name} ${fmtTime(c.in)}–${fmtTime(c.out)}`}
-                >
-                  <span className="block truncate font-medium">{project.media[c.media]?.name}</span>
-                  <span className="block truncate text-faint">
-                    {c.grade.lut !== "none" || c.grade.exposure || c.grade.saturation !== 1 ? "graded · " : ""}
-                    {c.transform.rotate || c.transform.straighten || c.transform.crop.w !== 1 || c.transform.crop.h !== 1 ? "cropped · " : ""}
-                    {fmtTime(c.end - c.start)}
-                  </span>
-                </button>
-              ))}
+              {placed.map((c, i) => {
+                // Joined clips draw as one continuous bar: no edge or gap at the hidden cut, and only the first carries a label.
+                const { joinsNext, runCount, runEnd } = runInfo[i];
+                return (
+                  <button
+                    key={c.id}
+                    type="button"
+                    onPointerDown={(e) => e.stopPropagation()}
+                    onClick={() => {
+                      setSelected(c.id);
+                      setSelectedMusic(null);
+                      setSelectedTransition(null);
+                      setPlayhead(c.start);
+                      setSeekToken((t) => t + 1);
+                    }}
+                    className={cn("absolute top-0 h-full overflow-hidden border text-left text-[11.5px]", c.joinedToPrevious ? "rounded-l-none border-l-0 pl-0" : "rounded-l-[var(--radius-sm)] pl-2", joinsNext ? "rounded-r-none border-r-0 pr-0" : "rounded-r-[var(--radius-sm)] pr-2", selectedRun.has(c.id) ? "border-accent bg-accent-soft text-ink" : "border-edge bg-raised text-muted")}
+                    style={{ left: c.start * pxPerSec, width: Math.max(4, (c.end - c.start) * pxPerSec - (joinsNext ? 0 : 1)) }}
+                    title={`${project.media[c.media]?.name} ${fmtTime(c.in)}–${fmtTime(c.out)}${c.joinedToPrevious ? " · joined to the previous clip" : ""}`}
+                    data-clip={c.id}
+                    data-joined={c.joinedToPrevious ? "true" : undefined}
+                  >
+                    {!c.joinedToPrevious && (
+                      <>
+                        <span className="block truncate font-medium">
+                          {project.media[c.media]?.name}
+                          {runCount > 1 ? ` +${runCount - 1}` : ""}
+                        </span>
+                        <span className="block truncate text-faint">
+                          {c.grade.lut !== "none" || c.grade.exposure || c.grade.saturation !== 1 ? "graded · " : ""}
+                          {c.transform.rotate || c.transform.straighten || c.transform.crop.w !== 1 || c.transform.crop.h !== 1 ? "cropped · " : ""}
+                          {runCount > 1 ? `${runCount} joined · ${fmtTime(runEnd - c.start)}` : fmtTime(c.end - c.start)}
+                        </span>
+                      </>
+                    )}
+                  </button>
+                );
+              })}
               {range && <div className="pointer-events-none absolute top-0 h-full border-x-2 border-accent bg-accent/10" style={{ left: range.from * pxPerSec, width: (range.to - range.from) * pxPerSec }} title={`Export range ${fmtTime(range.from)} → ${fmtTime(range.to)}`} data-export-band />}
               {windows.map((w) => (
                 <button
@@ -2139,7 +2201,7 @@ export function VideoEditorWidget() {
             <div className="pointer-events-none absolute bottom-0 top-0 w-px bg-[#e5484d]" style={{ left: playhead * pxPerSec }} />
           </div>
         </div>
-        <p className="mt-1 text-[11.5px] text-faint">Click the ruler to seek · space plays (hold it to double the speed) · ←/→ step a frame (⇧ for 1 s) · ↑/↓ jump between cuts · Home/End · S saves a thumbnail of the frame (⇧S full-size JPEG, ⌥S PNG) · M mutes · ⌘Z undoes · ⌘S saves. Clips are shown in playback order; music lanes stack, and overlaps on one lane crossfade.</p>
+        <p className="mt-1 text-[11.5px] text-faint">Click the ruler to seek · space plays (hold it to double the speed) · ←/→ step a frame (⇧ for 1 s) · ↑/↓ jump between cuts · Home/End · Merge with next (Trim) rejoins a split or hides a cut · S saves a thumbnail of the frame (⇧S full-size JPEG, ⌥S PNG) · M mutes · ⌘Z undoes · ⌘S saves. Clips are shown in playback order; music lanes stack, and overlaps on one lane crossfade.</p>
       </div>
       {clearOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-labelledby="clear-project-title">
