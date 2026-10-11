@@ -25,9 +25,10 @@ import {
   type VideoCodec,
 } from "mediabunny";
 import { GRADE_FRAGMENT_SHADER, buildDlogLut, deriveLut, fetchOfficialLut, lutTexture, parseCube, type Lut3D } from "./lut";
-import { clipAt, clipSpeed, sourceTimeAt, dbToGain, fontFamilyCss, exportRange, isFileLutKind, musicGainAt, placeClips, planExport, transitionAt, transitionWindows, type Clip, type ExportSpan, type Grade, type LutKind, type MediaRef, type PlacedClip, type Project, type Title, type Transform, type TransitionWindow } from "./project";
+import { clipAt, clipSpeed, sourceTimeAt, dbToGain, exportTags, fontFamilyCss, exportRange, isFileLutKind, musicGainAt, placeClips, planExport, transitionAt, transitionWindows, type Clip, type ExportSpan, type Grade, type LutKind, type MediaRef, type PlacedClip, type Project, type Title, type Transform, type TransitionWindow } from "./project";
 import { drawTransition } from "./transitions";
 import { ProgressTracker, defaultSpeeds, planSteps, type ExportProgress, type SpeedPriors, type StepProgress } from "./progress";
+import pkg from "@/package.json";
 
 export interface Probe {
   duration: number;
@@ -555,6 +556,17 @@ export interface ExportResult {
 }
 
 export async function exportProject(opts: ExportOptions): Promise<ExportResult> {
+  // A 250 ms pulse keeps the panel's clocks moving through the stages that report nothing of their own.
+  const pulse: { emit: (() => void) | null } = { emit: null };
+  const ticker = setInterval(() => pulse.emit?.(), 250);
+  try {
+    return await exportWithPulse(opts, pulse);
+  } finally {
+    clearInterval(ticker);
+  }
+}
+
+async function exportWithPulse(opts: ExportOptions, pulse: { emit: (() => void) | null }): Promise<ExportResult> {
   const { project, getFile, logo, signal } = opts;
   const first = project.media[project.clips[0]?.media ?? ""];
   if (!first?.width || !first.height) throw new Error("Add at least one video clip.");
@@ -574,7 +586,7 @@ export async function exportProject(opts: ExportOptions): Promise<ExportResult> 
     audio: { clips: project.clips.filter((c) => !c.muted && c.gainDb > -60).length, music: project.music.filter((m) => !m.muted).length, bitrateKbps: project.export.audioBitrateKbps },
     output: { codec, width: outW, height: outH, preset: project.export.preset, bitrateMbps: project.export.bitrateMbps },
   });
-  const tracker = new ProgressTracker(() => performance.now(), steps, total, Math.round(total * fps), opts.priors, defaultSpeeds(first.width * first.height, outW * outH));
+  const tracker = new ProgressTracker(() => performance.now(), steps, total, Math.round(total * fps), opts.priors, defaultSpeeds(first.width * first.height, outW * outH), Date.now(), ((bitrate + project.export.audioBitrateKbps * 1000) / 8) * total);
   let lastEmit = 0;
   const emit = (force = false) => {
     const now = performance.now();
@@ -582,6 +594,8 @@ export async function exportProject(opts: ExportOptions): Promise<ExportResult> 
     lastEmit = now;
     opts.onProgress?.(tracker.snapshot());
   };
+  // Steps without inner progress (prepare, closing the file) still get a ticking clock.
+  pulse.emit = () => emit();
   // A pause is whatever time whilePaused() keeps us waiting.
   const pauseGate = async () => {
     const p = opts.whilePaused?.();
@@ -600,9 +614,15 @@ export async function exportProject(opts: ExportOptions): Promise<ExportResult> 
   const counted = new WritableStream<StreamTargetChunk>({
     write: (chunk) => {
       tracker.addBytes(chunk.data.byteLength);
+      emit();
       return fileWriter.write(chunk);
     },
-    close: () => fileWriter.close(),
+    close: async () => {
+      // Everything is written; from here the browser reads the file back to check it, then moves it into place.
+      tracker.beginClose();
+      emit(true);
+      await fileWriter.close();
+    },
     abort: (r) => fileWriter.abort(r),
   });
   // A partial export starts its file at zero: timeline times shift back by the range start.
@@ -631,6 +651,7 @@ export async function exportProject(opts: ExportOptions): Promise<ExportResult> 
   const sampleRate = 48000;
   const audioSource = new AudioSampleSource({ codec: "aac", bitrate: project.export.audioBitrateKbps * 1000 });
   output.addAudioTrack(audioSource);
+  output.setMetadataTags(exportTags(project, `Bench video editor ${pkg.version}`));
   await output.start();
   tracker.endStep();
   emit(true);

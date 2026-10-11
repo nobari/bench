@@ -46,6 +46,8 @@ export interface StepProgress extends ExportStep {
   promisedMs: number | null;
   startedAt: number | null;
   endedAt: number | null;
+  /** What a running step is doing right now, when it has stages ("closing the file: …"). */
+  stage?: string;
 }
 
 export interface ExportProgress {
@@ -87,7 +89,14 @@ export interface SpeedPriors {
   copy?: number;
   audio?: number;
   prepareMs?: number;
-  finalizeMs?: number;
+  /** Flushing the encoders and writing the MP4 index: fixed ms. */
+  flushMs?: number;
+  /**
+   * How fast the browser closes the file, in bytes per second. Chrome reads every
+   * byte back to check it (a Safe Browsing hash) before moving the file into
+   * place, so closing a 20 GB export takes a good while — and scales with size.
+   */
+  closeBytesPerS?: number;
   /** Where these came from, for the UI ("your last export at 2160p HEVC on 9 Oct"). */
   label?: string;
 }
@@ -99,7 +108,7 @@ export interface SpeedPriors {
 export function defaultSpeeds(sourcePixels: number, outputPixels: number): Required<Omit<SpeedPriors, "label">> {
   const px = Math.max(1, sourcePixels, outputPixels);
   const encode = Math.min(8, Math.max(0.15, 25e6 / px));
-  return { encode, copy: Math.min(12, encode * 1.6), audio: 40, prepareMs: 800, finalizeMs: 1200 };
+  return { encode, copy: Math.min(12, encode * 1.6), audio: 40, prepareMs: 800, flushMs: 1500, closeBytesPerS: 400e6 };
 }
 
 export interface PlanInput {
@@ -145,7 +154,7 @@ export function planSteps(input: PlanInput): ExportStep[] {
     units: offset,
     offset: 0,
   });
-  steps.push({ id: "finalize", kind: "finalize", title: "Finish the file", detail: "Flush the encoders, write the MP4 index (moov) and close the file in the project folder.", units: 1, offset: 0 });
+  steps.push({ id: "finalize", kind: "finalize", title: "Finish the file", detail: "Flush the encoders, write the MP4 index (moov), then close the file: the browser reads the whole file back to check it before moving it into place, so this part grows with the file size.", units: 1, offset: 0 });
   return steps;
 }
 
@@ -183,8 +192,12 @@ export class ProgressTracker {
   private maxFraction = 0;
   private maxTotal = 0;
   private readonly now: () => number;
+  /** What the bitrates promise for the finished file, before anything is written. */
+  private readonly expectedBytes: number;
+  /** Active ms when the file close began (the second stage of finishing), once it has. */
+  private closeAt: number | null = null;
 
-  constructor(now: () => number, steps: ExportStep[], total: number, framesTotal: number, priors: SpeedPriors = {}, defaults = defaultSpeeds(0, 0), startedAt = Date.now()) {
+  constructor(now: () => number, steps: ExportStep[], total: number, framesTotal: number, priors: SpeedPriors = {}, defaults = defaultSpeeds(0, 0), startedAt = Date.now(), expectedBytes = 0) {
     this.now = now;
     this.steps = steps;
     this.total = total;
@@ -193,6 +206,7 @@ export class ProgressTracker {
     this.defaults = defaults;
     this.start = now();
     this.startedAt = startedAt;
+    this.expectedBytes = expectedBytes;
     for (const s of steps) this.state.set(s.id, { status: "pending", startActive: null, endActive: null, startedAt: null, endedAt: null, promisedMs: null });
   }
 
@@ -249,6 +263,16 @@ export class ProgressTracker {
   addBytes(n: number) {
     this.bytes += n;
   }
+  /** The finish step's second stage: everything is written and the browser is now closing (checking and sealing) the file. */
+  beginClose() {
+    if (this.closeAt === null) this.closeAt = this.elapsedMs();
+  }
+  /** Bytes the finished file is expected to hold: scaled from what the video written so far weighs, else the bitrates' promise. */
+  projectedBytes() {
+    // The writer hands over 16 MB at a time, so the first seconds of video weigh nothing yet: the promise stands until then.
+    const fromRate = this.processed >= 2 && this.bytes > 0 ? (this.bytes * this.total) / this.processed : 0;
+    return Math.max(this.bytes, fromRate || this.expectedBytes);
+  }
   audio(timelineT: number) {
     this.audioT = Math.min(this.total, Math.max(this.audioT, timelineT));
   }
@@ -296,18 +320,39 @@ export class ProgressTracker {
     }
     return prior;
   }
+  /** Time left in a stage with no inner progress: what is left of the guess — and once past it, a quarter of the time spent so far, so the promise keeps moving instead of sticking at zero. */
+  private static overrun(guess: number, elapsed: number) {
+    return Math.max(guess - elapsed, 0.25 * Math.max(guess, elapsed));
+  }
   private estimate(s: ExportStep): { estimateMs: number; remainingMs: number; source: EstimateSource; basis: string } {
     const st = this.state.get(s.id)!;
     const elapsed = this.stepActive(s.id);
     if (st.status === "done") return { estimateMs: elapsed, remainingMs: 0, source: "actual", basis: "actual time" };
-    if (s.kind === "prepare" || s.kind === "finalize") {
-      const key = s.kind === "prepare" ? "prepareMs" : "finalizeMs";
-      const learned = this.priors[key];
-      const guess = learned ?? this.defaults[key];
+    const late = " · past the guess, still going";
+    if (s.kind === "prepare") {
+      const learned = this.priors.prepareMs;
+      const guess = learned ?? this.defaults.prepareMs;
       const source: EstimateSource = learned !== undefined ? "learned" : "default";
-      // No inner progress to measure: once past the guess, promise a little more rather than zero.
-      const remaining = st.status === "running" ? Math.max(elapsed > guess ? guess * 0.25 : guess - elapsed, 0) : guess;
-      return { estimateMs: elapsed + remaining, remainingMs: remaining, source, basis: describe(source, this.priors.label) };
+      const remaining = st.status === "running" ? ProgressTracker.overrun(guess, elapsed) : guess;
+      return { estimateMs: elapsed + remaining, remainingMs: remaining, source, basis: describe(source, this.priors.label) + (elapsed > guess ? late : "") };
+    }
+    if (s.kind === "finalize") {
+      // Two stages: a fixed flush (encoders, MP4 index), then the browser's close, which reads every byte back — so it scales with the file.
+      const flushLearned = this.priors.flushMs, closeLearned = this.priors.closeBytesPerS;
+      const flushGuess = flushLearned ?? this.defaults.flushMs;
+      const closeRate = Math.max(1, closeLearned ?? this.defaults.closeBytesPerS);
+      const bytes = this.projectedBytes();
+      const closeGuess = (bytes / closeRate) * 1000;
+      const closing = st.status === "running" && this.closeAt !== null && st.startActive !== null;
+      const closeElapsed = closing ? elapsed - (this.closeAt! - st.startActive!) : 0;
+      const remaining = st.status !== "running" ? flushGuess + closeGuess : closing ? ProgressTracker.overrun(closeGuess, closeElapsed) : ProgressTracker.overrun(flushGuess, elapsed) + closeGuess;
+      // The estimate is as good as its bigger half.
+      const source: EstimateSource = (closeGuess >= flushGuess ? closeLearned : flushLearned) !== undefined ? "learned" : "default";
+      const rate = `${fmtBytes(closeRate)}/s`;
+      const basis = closing
+        ? `closing ${fmtBytes(this.bytes)} at ${rate} (${describe(source, this.priors.label)})${closeElapsed > closeGuess ? late : ""}`
+        : `${describe(source, this.priors.label)}: ≈${(flushGuess / 1000).toFixed(1)} s to flush, then ${fmtBytes(bytes)} to close at ${rate}${st.status === "running" && elapsed > flushGuess ? late : ""}`;
+      return { estimateMs: elapsed + remaining, remainingMs: remaining, source, basis };
     }
     const kind = s.kind === "audio" ? "audio" : s.span?.kind === "copy" ? "copy" : "encode";
     const r = this.rate(kind);
@@ -324,8 +369,13 @@ export class ProgressTracker {
       const ms = this.activeIn(pick), units = this.steps.filter(pick).reduce((a, s) => a + this.doneUnits(s), 0);
       if (ms >= 150 && units >= 0.5) out[kind] = units / (ms / 1000);
     }
-    for (const [id, key] of [["prepare", "prepareMs"], ["finalize", "finalizeMs"]] as const) {
-      if (this.state.get(id)?.status === "done") out[key] = this.stepActive(id);
+    if (this.state.get("prepare")?.status === "done") out.prepareMs = this.stepActive("prepare");
+    const fin = this.state.get("finalize");
+    if (fin?.status === "done" && fin.startActive !== null && fin.endActive !== null && this.closeAt !== null) {
+      out.flushMs = this.closeAt - fin.startActive;
+      const closeMs = fin.endActive - this.closeAt;
+      // A close too quick or a file too small says more about fixed overheads than about throughput.
+      if (closeMs >= 100 && this.bytes >= 8e6) out.closeBytesPerS = this.bytes / (closeMs / 1000);
     }
     return out;
   }
@@ -348,6 +398,7 @@ export class ProgressTracker {
         promisedMs: st.promisedMs,
         startedAt: st.startedAt,
         endedAt: st.endedAt,
+        stage: s.kind === "finalize" && st.status === "running" ? (this.closeAt === null ? "flushing the encoders and writing the MP4 index" : `closing the file: the browser reads all ${fmtBytes(this.bytes)} back to check it, then moves it into place`) : undefined,
       };
     });
     const cur = steps.find((s) => s.status === "running") ?? null;

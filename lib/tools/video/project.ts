@@ -351,6 +351,44 @@ export interface ExportSettings {
   smartCopy: boolean;
   /** Export only this part of the timeline (seconds); null means all of it. */
   range: { from: number; to: number } | null;
+  /** What the file says about itself: the iTunes-style tags written into the MP4. */
+  tags: ExportTags;
+}
+
+/**
+ * Tags written into the MP4's metadata (the `ilst` atoms players, libraries
+ * and ffprobe read), the same ones `ffmpeg -metadata` writes. "Music video"
+ * also sets the media kind atom (`stik` = 6) that ffmpeg writes for
+ * `-metadata media_type=6`.
+ */
+export interface ExportTags {
+  kind: "music-video" | "video";
+  /** Empty: the project name. */
+  title: string;
+  artist: string;
+  album: string;
+  genre: string;
+  year: string;
+  comment: string;
+}
+export const DEFAULT_TAGS: ExportTags = { kind: "music-video", title: "", artist: "", album: "", genre: "Music", year: "", comment: "" };
+
+/** The metadata object for the MP4 writer (mediabunny's MetadataTags): only the fields that are filled in, plus the encoder name and the media kind. */
+export function exportTags(p: Project, encoder: string): { title: string; artist?: string; albumArtist?: string; album?: string; genre?: string; comment?: string; raw: Record<string, string | Uint8Array> } {
+  const t = { ...DEFAULT_TAGS, ...p.export.tags };
+  const s = (v: string) => (v.trim() ? v.trim() : undefined);
+  const raw: Record<string, string | Uint8Array> = { "©too": encoder };
+  if (s(t.year)) raw["©day"] = s(t.year)!;
+  if (t.kind === "music-video") raw.stik = new Uint8Array([6]);
+  const out: ReturnType<typeof exportTags> = { title: s(t.title) ?? p.name, raw };
+  if (s(t.artist)) {
+    out.artist = s(t.artist);
+    out.albumArtist = s(t.artist);
+  }
+  if (s(t.album)) out.album = s(t.album);
+  if (s(t.genre)) out.genre = s(t.genre);
+  if (s(t.comment)) out.comment = s(t.comment);
+  return out;
 }
 
 export type TransitionKind = "dissolve" | "dipBlack" | "dipWhite" | "zoom" | "blur" | "wipe" | "push";
@@ -571,7 +609,7 @@ export interface Project {
   proxies: Record<string, { ready: boolean; file?: string }>;
 }
 
-export const DEFAULT_EXPORT: ExportSettings = { codec: "hevc", bitrateMbps: 100, preset: "balanced", audioBitrateKbps: 256, resolution: "source", smartCopy: true, range: null };
+export const DEFAULT_EXPORT: ExportSettings = { codec: "hevc", bitrateMbps: 100, preset: "balanced", audioBitrateKbps: 256, resolution: "source", smartCopy: true, range: null, tags: { ...DEFAULT_TAGS } };
 
 /** The part of the timeline an export covers: the chosen range clamped to the timeline, or null for all of it (also when the range is empty or backwards). */
 export function exportRange(p: Project): { from: number; to: number } | null {
@@ -869,21 +907,25 @@ export function planExport(p: Project): ExportSpan[] {
 export interface ExportEstimate {
   copySeconds: number;
   encodeSeconds: number;
-  /** Rough wall-clock estimate in seconds, given an encode speed in frames/s. */
+  /** Rough wall-clock estimate in seconds, given an encode speed in frames/s — finishing the file included. */
   wallSeconds: number;
+  /** Closing the file: the browser reads it all back to check it before moving it into place. */
+  finishSeconds: number;
   /** Output size estimate in bytes. */
   bytes: number;
 }
 
 /** Export time and size: copying is I/O-bound (fast); re-encoding 8K runs near real time on Apple silicon. */
-export function estimateExport(p: Project, spans: ExportSpan[], encodeFps = 30, copyGBps = 0.4): ExportEstimate {
+export function estimateExport(p: Project, spans: ExportSpan[], encodeFps = 30, copyGBps = 0.4, closeBytesPerS = 400e6): ExportEstimate {
   const copySeconds = spans.filter((s) => s.kind === "copy").reduce((a, s) => a + (s.end - s.start), 0);
   const encodeSeconds = spans.filter((s) => s.kind === "encode").reduce((a, s) => a + (s.end - s.start), 0);
   const fps = Object.values(p.media).find((m) => m.fps)?.fps ?? 30;
   const videoBytes = ((p.export.bitrateMbps * 1e6) / 8) * (copySeconds + encodeSeconds);
   const audioBytes = ((p.export.audioBitrateKbps * 1e3) / 8) * (copySeconds + encodeSeconds);
   const copyBytes = spans.filter((s) => s.kind === "copy").reduce((a, s) => { const m = p.media[p.clips.find((c) => c.id === s.clipId)?.media ?? ""]; return a + (m ? (m.size / Math.max(1, m.duration)) * (s.end - s.start) : 0); }, 0);
-  return { copySeconds, encodeSeconds, wallSeconds: (encodeSeconds * fps) / encodeFps + copyBytes / (copyGBps * 1e9), bytes: videoBytes + audioBytes };
+  const bytes = videoBytes + audioBytes;
+  const finishSeconds = 1.5 + bytes / closeBytesPerS;
+  return { copySeconds, encodeSeconds, wallSeconds: (encodeSeconds * fps) / encodeFps + copyBytes / (copyGBps * 1e9) + finishSeconds, finishSeconds, bytes };
 }
 
 /* --------------------------------------------------------- serialisation */
@@ -902,7 +944,7 @@ export function deserialize(json: string): Project | null {
     const transition: Transition = { kind: known ? (legacy.kind as TransitionKind) : DEFAULT_TRANSITION.kind, duration: legacy.duration ?? DEFAULT_TRANSITION.duration };
     const migrated = known && !p.clips.some((c) => c.transitionIn) ? applyTransitionToAll(p.clips, transition) : p.clips;
     const clips = migrated.map((c) => ({ ...(LUT_KINDS.includes(c.grade?.lut) ? c : { ...c, grade: { ...c.grade, lut: "none" as LutKind } }), ...(c.speed !== undefined ? { speed: clipSpeed(c) } : {}) }));
-    return { ...newProject(), ...p, clips, export: { ...DEFAULT_EXPORT, ...p.export }, preview: { ...DEFAULT_PREVIEW, ...(p.preview ?? (Object.values(p.proxies ?? {}).some((x) => x?.ready) ? { proxyHeight: 1080 } : {})) }, transition, titles: (p.titles ?? []).map((t) => normalizeTitle(t)) };
+    return { ...newProject(), ...p, clips, export: { ...DEFAULT_EXPORT, ...p.export, tags: { ...DEFAULT_TAGS, ...(p.export?.tags ?? {}) } }, preview: { ...DEFAULT_PREVIEW, ...(p.preview ?? (Object.values(p.proxies ?? {}).some((x) => x?.ready) ? { proxyHeight: 1080 } : {})) }, transition, titles: (p.titles ?? []).map((t) => normalizeTitle(t)) };
   } catch {
     return null;
   }

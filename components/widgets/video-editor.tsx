@@ -70,8 +70,7 @@ import {
   type TitlePosition,
   type TitleShadow,
   type Transition,
-  type TransitionKind,
-} from "@/lib/tools/video/project";
+  type TransitionKind, type ExportTags } from "@/lib/tools/video/project";
 import { drawTransition } from "@/lib/tools/video/transitions";
 import { LUT_OPTIONS, buildDlogLut, deriveLut, fetchOfficialLut, lutToCube, parseCube, type Lut3D } from "@/lib/tools/video/lut";
 import { fmtBytes, fmtDelta, fmtDuration, fmtMs, type EstimateSource, type ExportProgress, type SpeedPriors, type StepProgress } from "@/lib/tools/video/progress";
@@ -121,9 +120,11 @@ function loadPriors(profile: string, describe: string): SpeedPriors | undefined 
   try {
     const all = JSON.parse(localStorage.getItem(SPEEDS_KEY) ?? "{}") as Record<string, LearnedSpeeds>;
     const got = all[profile];
-    if (!got) return undefined;
-    const { at, ...rest } = got;
-    return { ...rest, label: `your last ${describe} export (${new Date(at).toLocaleDateString()})` };
+    // How fast the browser closes a file depends on the machine, not the codec: the newest figure from any profile serves.
+    const closeFrom = Object.values(all).filter((x) => x.closeBytesPerS).sort((a, b) => b.at - a.at)[0];
+    if (!got && !closeFrom) return undefined;
+    const { at, ...rest } = got ?? { at: closeFrom!.at };
+    return { ...(closeFrom ? { closeBytesPerS: closeFrom.closeBytesPerS } : {}), ...rest, label: got ? `your last ${describe} export (${new Date(at).toLocaleDateString()})` : `an earlier export (${new Date(closeFrom!.at).toLocaleDateString()})` };
   } catch {
     return undefined;
   }
@@ -357,6 +358,7 @@ export function VideoEditorWidget() {
     rangeRef.current = range;
   }, [range]);
   const setRange = (r: { from: number; to: number } | null) => setProject((p) => ({ ...p, export: { ...p.export, range: r } }));
+  const setTags = (patch: Partial<ExportTags>) => setProject((p) => ({ ...p, export: { ...p.export, tags: { ...p.export.tags, ...patch } } }));
   const estimate = useMemo(() => estimateExport(project, spans), [project, spans]);
   const current = selected ? project.clips.find((c) => c.id === selected) : undefined;
   const currentMusic = selectedMusic ? project.music.find((m) => m.id === selectedMusic) : undefined;
@@ -2096,8 +2098,49 @@ export function VideoEditorWidget() {
                     <span>
                       Roughly <span className="font-mono text-ink">{fmtTime(estimate.wallSeconds)}</span> to export
                     </span>
+                    <span title="Chrome reads the whole file back to check it before moving it into place, so closing a big export takes a while; the export panel learns the real speed from your first export">
+                      of which ≈ <span className="font-mono text-ink">{fmtTime(estimate.finishSeconds)}</span> closing the file
+                    </span>
                   </div>
                   {spans.some((s) => s.kind === "encode") && <p className="mt-1 text-faint">Re-encoding because: {[...new Set(spans.flatMap((s) => s.reasons))].join(", ") || "titles"}.</p>}
+                </div>
+                <div className="space-y-1.5 rounded-[var(--radius-sm)] border border-edge p-2 text-[12.5px]" data-export-tags>
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-medium text-ink">File tags</span>
+                    <select value={project.export.tags.kind} onChange={(e) => setTags({ kind: e.target.value as ExportTags["kind"] })} className={SEL} aria-label="Media kind">
+                      <option value="music-video">Music video</option>
+                      <option value="video">Plain video</option>
+                    </select>
+                  </div>
+                  <div className="grid grid-cols-2 gap-1.5">
+                    <label className="col-span-2 text-muted">
+                      Title
+                      <input value={project.export.tags.title} onChange={(e) => setTags({ title: e.target.value })} placeholder={project.name} className={cn(INPUT, "mt-0.5")} aria-label="Tag title" />
+                    </label>
+                    <label className="text-muted">
+                      Artist
+                      <input value={project.export.tags.artist} onChange={(e) => setTags({ artist: e.target.value })} className={cn(INPUT, "mt-0.5")} aria-label="Tag artist" />
+                    </label>
+                    <label className="text-muted">
+                      Album
+                      <input value={project.export.tags.album} onChange={(e) => setTags({ album: e.target.value })} className={cn(INPUT, "mt-0.5")} aria-label="Tag album" />
+                    </label>
+                    <label className="text-muted">
+                      Genre
+                      <input value={project.export.tags.genre} onChange={(e) => setTags({ genre: e.target.value })} className={cn(INPUT, "mt-0.5")} aria-label="Tag genre" />
+                    </label>
+                    <label className="text-muted">
+                      Year
+                      <input value={project.export.tags.year} onChange={(e) => setTags({ year: e.target.value })} placeholder={String(new Date().getFullYear())} inputMode="numeric" className={cn(INPUT, "mt-0.5 font-mono")} aria-label="Tag year" />
+                    </label>
+                    <label className="col-span-2 text-muted">
+                      Comment
+                      <input value={project.export.tags.comment} onChange={(e) => setTags({ comment: e.target.value })} className={cn(INPUT, "mt-0.5")} aria-label="Tag comment" />
+                    </label>
+                  </div>
+                  <p className="text-[12px] text-faint">
+                    Written into the MP4 as the iTunes-style atoms ffmpeg writes from <span className="font-mono">-metadata</span> — title, artist, album, genre, year, comment, encoder — and, for a music video, the media kind ffmpeg sets with <span className="font-mono">media_type=6</span>. YouTube takes the title from the file; the Music category and the song credits are set on the upload page, and that is what YouTube Music lists by.
+                  </p>
                 </div>
                 <button type="button" onClick={() => void runExport()} disabled={!project.clips.length || !!job} className={PRIMARY}>
                   <Download size={14} /> Export to project folder
@@ -2323,7 +2366,8 @@ function ExportPanel({ job, onPause, onResume, onCancel }: { job: Job; onPause: 
   const p = job.progress;
   const out = job.output;
   const pct = ((p?.fraction ?? 0) * 100).toFixed(3);
-  const phaseLabel = !p ? "Starting…" : p.phase === "video" && p.span?.kind === "copy" ? "Copying video" : PHASE_LABEL[p.phase];
+  const running = p?.steps.find((s) => s.status === "running");
+  const phaseLabel = !p ? "Starting…" : p.phase === "video" && p.span?.kind === "copy" ? "Copying video" : PHASE_LABEL[p.phase] + (running?.stage ? ` — ${running.stage}` : "");
   // Start + worked + paused + remaining, all from the snapshot: no clock reads while rendering.
   const finishAt = p ? new Date(p.startedAt + p.elapsedMs + p.pausedMs + p.etaMs).toLocaleTimeString() : "—";
   const steps = p?.steps ?? [];
@@ -2448,6 +2492,11 @@ function StepRow({ step: s, index, paused }: { step: StepProgress; index: number
           {s.detail}
           {when ? ` · ${when}` : ""}
         </div>
+        {running && s.stage && (
+          <div className="mt-0.5 text-[12px] text-ink" data-step-stage>
+            now: {s.stage}
+          </div>
+        )}
         {running && (
           <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-raised">
             {s.fraction != null ? <div className={cn("h-full transition-[width] duration-200", paused ? "bg-warn" : "bg-accent")} style={{ width: `${Math.min(100, s.fraction * 100)}%` }} /> : <div className={cn("h-full w-1/3 animate-pulse", paused ? "bg-warn" : "bg-accent")} />}
