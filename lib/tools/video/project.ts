@@ -835,7 +835,16 @@ export function musicGainAt(track: MusicTrack, all: MusicTrack[], timelineT: num
 }
 
 /** Where a track actually stops: its own end, or the end of the video if that comes first. */
-export const effectiveMusicEnd = (track: MusicTrack, timelineEnd: number) => Math.min(track.start + musicLength(track), timelineEnd);
+export const effectiveMusicEnd = (track: MusicTrack, timelineEnd: number) => Math.max(track.start, Math.min(track.start + musicLength(track), timelineEnd));
+
+/** Seconds of a track that run past the end of the video and are never heard. */
+export const musicUnused = (track: MusicTrack, timelineEnd: number) => Math.max(0, track.start + musicLength(track) - Math.max(track.start, effectiveMusicEnd(track, timelineEnd)));
+
+/** A track must begin inside the video with at least a second of it (or all of a shorter track) before the end. */
+export function clampMusicStart(start: number, track: Pick<MusicTrack, "in" | "out">, timelineEnd: number): number {
+  const latest = Math.max(0, timelineEnd - Math.min(1, musicLength(track as MusicTrack)));
+  return Math.max(0, Math.min(start, latest));
+}
 
 /** Move a music track earlier or later on its lane; the lane is re-laid keeping each slot's overlap. */
 export function reorderMusic(music: MusicTrack[], id: string, dir: -1 | 1): MusicTrack[] {
@@ -872,10 +881,25 @@ export function crossfades(music: MusicTrack[]): { a: string; b: string; from: n
 }
 
 /** Drop a track so that it overlaps the previous one on the lane by `overlap` seconds. */
-export function appendMusic(music: MusicTrack[], track: Omit<MusicTrack, "start">, overlap = 2): MusicTrack {
-  const lane = music.filter((m) => m.lane === track.lane);
-  const end = lane.reduce((m, t) => Math.max(m, t.start + musicLength(t)), 0);
-  return { ...track, start: Math.max(0, end - (lane.length ? overlap : 0)) };
+/**
+ * Where a new track lands: after the last one on its lane, overlapping by `overlap` seconds for a crossfade. It must
+ * start inside the video (see clampMusicStart): a lane that is already full hands the track to the first lane with
+ * room, and when every lane is full it goes as late as the video allows on the lane asked for.
+ */
+export function appendMusic(music: MusicTrack[], track: Omit<MusicTrack, "start">, overlap = 2, timelineEnd = Infinity): MusicTrack {
+  const latest = timelineEnd === Infinity ? Infinity : clampMusicStart(Infinity, track, timelineEnd);
+  const startOn = (lane: number) => {
+    const on = music.filter((m) => m.lane === lane);
+    const end = on.reduce((m, t) => Math.max(m, t.start + musicLength(t)), 0);
+    return Math.max(0, end - (on.length ? overlap : 0));
+  };
+  const own = startOn(track.lane);
+  if (own <= latest) return { ...track, start: own };
+  for (const lane of [0, 1, 2]) {
+    const start = startOn(lane);
+    if (start <= latest) return { ...track, lane, start };
+  }
+  return { ...track, start: latest };
 }
 
 /* ---------------------------------------------------------- export plan */

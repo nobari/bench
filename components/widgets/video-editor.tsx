@@ -1,9 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { AlertTriangle, Camera, Check, ChevronDown, ChevronRight, ChevronUp, Sparkles, Circle, Clapperboard, Crop, Download, FolderOpen, Loader, Maximize2, Minimize2, Music, Pause, Play, Repeat, Save, Scissors, SkipBack, SkipForward, SlidersHorizontal, StepBack, StepForward, Trash2, Type, Upload, Volume2, VolumeX, Keyboard, Search } from "lucide-react";
-import { DEFAULT_CLIP_GAIN_DB, DEFAULT_EXPORT, NEUTRAL_GRADE, NEUTRAL_TRANSFORM, TITLE_ALIGNS, TITLE_FAMILIES, TITLE_FONTS, TITLE_POSITIONS, TITLE_SHADOWS, TITLE_WEIGHTS, TRANSITIONS, addTransitionAt, appendMusic, applyAudioTo, applyGradeTo, applyTransitionToAll, clipAt, crossfades, dbToGain, effectiveMusicEnd, estimateExport, exportRange, fmtTime, musicGainAt, musicLength, newId, newProject, newTitle, orderRecordings, parseTitlesImport, placeClips, planExport, removeRange, reorderMusic, setTransition, splitClip, timelineDuration, titleLanes, titlesTemplate, transitionAt, transitionWindows, CLIP_SPEEDS, canMergeWithNext, clipLength, clipSpeed, groupOf, sourceTimeAt, mergeWithNext, moveClip, unjoin, updateClip, visibleCuts, type Clip, type MediaRef, type MusicTrack, type Project, type ProxyHeight, type Title, type TitleFont, isFileLutKind, type FileLutKind, type LutKind, type MathLutKind, type TitleAlign, type TitlePosition, type TitleShadow, type Transition, type TransitionKind, type ExportTags, type IntroSettings, reorderClip, parseTime, type SteadyLights, STEADY_FRAMES } from "@/lib/tools/video/project";
+import { DEFAULT_CLIP_GAIN_DB, DEFAULT_EXPORT, NEUTRAL_GRADE, NEUTRAL_TRANSFORM, TITLE_ALIGNS, TITLE_FAMILIES, TITLE_FONTS, TITLE_POSITIONS, TITLE_SHADOWS, TITLE_WEIGHTS, TRANSITIONS, addTransitionAt, appendMusic, applyAudioTo, applyGradeTo, applyTransitionToAll, clipAt, crossfades, dbToGain, effectiveMusicEnd, estimateExport, exportRange, fmtTime, musicGainAt, musicLength, newId, newProject, newTitle, orderRecordings, parseTitlesImport, placeClips, planExport, removeRange, reorderMusic, setTransition, splitClip, timelineDuration, titleLanes, titlesTemplate, transitionAt, transitionWindows, CLIP_SPEEDS, canMergeWithNext, clipLength, clipSpeed, groupOf, sourceTimeAt, mergeWithNext, moveClip, unjoin, updateClip, visibleCuts, type Clip, type MediaRef, type MusicTrack, type Project, type ProxyHeight, type Title, type TitleFont, isFileLutKind, type FileLutKind, type LutKind, type MathLutKind, type TitleAlign, type TitlePosition, type TitleShadow, type Transition, type TransitionKind, type ExportTags, type IntroSettings, reorderClip, parseTime, type SteadyLights, STEADY_FRAMES, clampMusicStart, musicUnused } from "@/lib/tools/video/project";
 import { drawTransition } from "@/lib/tools/video/transitions";
 import { LUT_OPTIONS, buildDlogLut, deriveLut, fetchOfficialLut, lutToCube, parseCube, type Lut3D } from "@/lib/tools/video/lut";
 import { fmtBytes, fmtDelta, fmtDuration, fmtMs, type EstimateSource, type ExportProgress, type SpeedPriors, type StepProgress } from "@/lib/tools/video/progress";
@@ -869,7 +869,7 @@ export function VideoEditorWidget() {
       try {
         const info = await probe(f);
         const ref: MediaRef = { id, name: f.name, size: f.size, duration: info.duration, hasAudio: true, sampleRate: info.sampleRate };
-        setProject((p) => ({ ...p, media: { ...p.media, [id]: ref }, music: [...p.music, appendMusic(p.music, { id: newId(), media: id, lane: 0, in: 0, out: info.duration, gainDb: -12, muted: false, fadeIn: 2, fadeOut: 3, keyframes: [] })] }));
+        setProject((p) => ({ ...p, media: { ...p.media, [id]: ref }, music: [...p.music, appendMusic(p.music, { id: newId(), media: id, lane: 0, in: 0, out: info.duration, gainDb: -12, muted: false, fadeIn: 2, fadeOut: 3, keyframes: [] }, 2, timelineDuration(p))] }));
         await decodeMusic(id, f);
       } catch (e) {
         setError(`${f.name}: ${e instanceof Error ? e.message : "couldn't read the file."}`);
@@ -1435,6 +1435,8 @@ export function VideoEditorWidget() {
   useEffect(() => {
     pxRef.current = pxPerSec;
   }, [pxPerSec]);
+  /** Where the longest track ends: lanes draw out to here so an unused tail is visible, hatched, past the video. */
+  const musicFarEnd = project.music.reduce((a, m) => Math.max(a, m.start + musicLength(m)), 0);
   const underClipId = under?.clip.id ?? null;
   useEffect(() => {
     steadyRef.current?.reset();
@@ -2345,14 +2347,16 @@ export function VideoEditorWidget() {
                       </button>
                     </div>
                     {effectiveMusicEnd(currentMusic, duration) < currentMusic.start + musicLength(currentMusic) && (
-                      <p className="text-[12px] text-faint">
-                        Runs past the end of the video, so it is cut at {fmtTime(duration)} and fades out over {currentMusic.fadeOut || 1} s before that.
+                      <p className="text-[12px] text-warn" data-music-unused-note>
+                        {currentMusic.start >= duration
+                          ? "Starts after the video ends, so none of it is heard — move it earlier."
+                          : `Runs ${fmtTime(musicUnused(currentMusic, duration))} past the end of the video: that part is not used, and the track fades out over ${currentMusic.fadeOut || 1} s before ${fmtTime(duration)}.`}
                       </p>
                     )}
                     <div className="grid grid-cols-2 gap-2">
                       <label className="text-[12.5px] text-muted">
                         Starts at (s)
-                        <input type="number" step={0.1} value={currentMusic.start} onChange={(e) => updateMusic(currentMusic.id, { start: Math.max(0, Number(e.target.value)) })} className={cn(INPUT, "mt-1 font-mono")} />
+                        <input type="number" step={0.1} min={0} max={Math.max(0, duration - 1).toFixed(1)} value={currentMusic.start} onChange={(e) => updateMusic(currentMusic.id, { start: clampMusicStart(Number(e.target.value) || 0, currentMusic, duration) })} className={cn(INPUT, "mt-1 font-mono")} aria-label="Music starts at" title="Music must begin inside the video" />
                       </label>
                       <label className="text-[12.5px] text-muted">
                         Lane
@@ -2809,7 +2813,7 @@ export function VideoEditorWidget() {
             ))}
           </div>
         <div ref={timelineRef} className="relative min-w-0 flex-1 overflow-x-auto" onPointerDown={onTimelinePointerDown} onPointerMove={onTimelinePointerMove} onPointerUp={onTimelinePointerUp} onPointerCancel={onTimelinePointerUp} onPointerLeave={onTimelinePointerLeave} data-timeline-scroll>
-          <div className="relative" style={{ width: Math.max(100, duration * pxPerSec + 40), minHeight: 150 }}>
+          <div className="relative" style={{ width: Math.max(100, Math.max(duration, musicFarEnd) * pxPerSec + 40), minHeight: 150 }}>
             {/* ruler */}
             <div className="h-5 cursor-ew-resize border-b border-edge text-[10px] text-faint" data-ruler title="Click or drag to scrub; snaps to cuts (hold ⌥ to scrub freely)">
               {Array.from({ length: Math.ceil(duration / rulerStep(duration, zoom)) + 1 }, (_, i) => i * rulerStep(duration, zoom)).map((t) => (
@@ -2930,8 +2934,8 @@ export function VideoEditorWidget() {
               <div key={lane} className="relative mt-1 h-7">
                 {lane === 0 && !project.music.length && project.clips.length > 0 && <div className="pointer-events-none absolute inset-0 rounded-[3px] border border-dashed border-edge px-2 text-[10.5px] leading-7 text-faint">Drop music onto the preview, or add it from the Audio tab</div>}
                 {project.music.filter((m) => m.lane === lane).map((m) => (
+                  <Fragment key={m.id}>
                   <button
-                    key={m.id}
                     type="button"
                     onPointerDown={(e) => e.stopPropagation()}
                     onClick={() => {
@@ -2944,11 +2948,27 @@ export function VideoEditorWidget() {
                     title={project.media[m.media]?.name}
                   >
                     {project.media[m.media]?.name} {m.gainDb <= -60 ? "(off)" : `${m.gainDb} dB`}
-                    {effectiveMusicEnd(m, duration) < m.start + musicLength(m) ? " · cut at the end" : ""}
+                    {musicUnused(m, duration) > 0 && m.start < duration ? " · cut at the end" : ""}
                   </button>
+                  {musicUnused(m, duration) > 0 && (
+                    <div
+                      className="pointer-events-none absolute top-0 h-full truncate rounded-r-[3px] border border-l-0 border-dashed border-edge bg-[repeating-linear-gradient(135deg,rgba(128,128,128,0.28)_0_4px,transparent_4px_8px)] px-1.5 text-[10.5px] leading-7 text-faint"
+                      style={{ left: Math.max(m.start, effectiveMusicEnd(m, duration)) * pxPerSec, width: Math.max(4, musicUnused(m, duration) * pxPerSec) }}
+                      title={`${fmtTime(musicUnused(m, duration))} of ${project.media[m.media]?.name} runs past the end of the video and is not used`}
+                      data-music-unused={m.id}
+                    >
+                      {m.start >= duration ? "not used — starts after the video ends" : `not used · ${fmtTime(musicUnused(m, duration))} past the end`}
+                    </div>
+                  )}
+                  </Fragment>
                 ))}
               </div>
             ))}
+            {musicFarEnd > duration + 0.01 && (
+              <div className="pointer-events-none absolute top-5 bottom-0 border-l border-dashed border-edge bg-ink/[0.04]" style={{ left: duration * pxPerSec, width: (musicFarEnd - duration) * pxPerSec + 40 }} data-beyond-video>
+                <span className="absolute top-0.5 left-1.5 whitespace-nowrap text-[10px] text-faint">end of video — nothing past here is used</span>
+              </div>
+            )}
             {/* hover time, drop target, playhead */}
             <div ref={hoverLineRef} className="pointer-events-none absolute top-0 bottom-0 z-10 w-px bg-ink/30" style={{ display: "none" }} data-hover-line>
               <span ref={hoverLabelRef} className="absolute top-0 left-1 rounded-[3px] bg-black/75 px-1 font-mono text-[10px] leading-4 text-white tabular" />
