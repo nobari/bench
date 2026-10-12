@@ -30,6 +30,7 @@ import { drawTransition } from "./transitions";
 import { drawIntroFx, introFrameAt, introStyle, styledGrade, type IntroFrame, type Moment } from "./intro";
 import { ProgressTracker, defaultSpeeds, planSteps, type ExportProgress, type SpeedPriors, type StepProgress } from "./progress";
 import pkg from "@/package.json";
+import type { MotionTrace } from "./stops";
 
 export interface Probe {
   duration: number;
@@ -997,3 +998,53 @@ export async function encoderSupport(width: number, height: number): Promise<{ h
 
 export type { ExportSpan, Clip, MediaRef, Title };
 export { EncodedPacketSink, EncodedVideoPacketSource };
+
+/**
+ * How much the picture changes through a recording: the mean absolute luma difference between 64×36 frames taken every
+ * `step` seconds, 0–1. Every frame is decoded (the sink runs in order), so proxies make this many times faster than 8K.
+ */
+export async function scanMotion(file: File, opts: { step?: number; signal?: AbortSignal; onProgress?: (seconds: number, total: number) => void } = {}): Promise<MotionTrace> {
+  const step = opts.step ?? 0.25;
+  const input = new Input({ source: new BlobSource(file), formats: ALL_FORMATS });
+  const track = await input.getPrimaryVideoTrack();
+  if (!track) throw new Error("No video track in this file.");
+  const total = await input.computeDuration();
+  const W = 64, H = 36;
+  const canvas = new OffscreenCanvas(W, H);
+  const ctx = canvas.getContext("2d", { willReadFrequently: true })!;
+  const luma = (img: CanvasImageSource) => {
+    ctx.drawImage(img, 0, 0, W, H);
+    const d = ctx.getImageData(0, 0, W, H).data;
+    const out = new Float32Array(W * H);
+    for (let i = 0; i < W * H; i++) out[i] = 0.299 * d[i * 4] + 0.587 * d[i * 4 + 1] + 0.114 * d[i * 4 + 2];
+    return out;
+  };
+  const sink = new VideoSampleSink(track);
+  const scores: number[] = [];
+  let prev: Float32Array | null = null;
+  let next = 0, lastReport = -1;
+  for await (const sample of sink.samples()) {
+    if (opts.signal?.aborted) {
+      sample.close();
+      throw new DOMException("Cancelled", "AbortError");
+    }
+    const t = sample.timestamp;
+    if (t + 1e-6 >= next) {
+      const l = luma(sample.toCanvasImageSource());
+      if (prev) {
+        let d = 0;
+        for (let i = 0; i < l.length; i++) d += Math.abs(l[i] - prev[i]);
+        scores.push(d / l.length / 255);
+      }
+      prev = l;
+      next = Math.floor(t / step + 1e-6) * step + step;
+      if (t - lastReport >= 1) {
+        lastReport = t;
+        opts.onProgress?.(t, total);
+      }
+    }
+    sample.close();
+  }
+  opts.onProgress?.(total, total);
+  return { step, scores };
+}

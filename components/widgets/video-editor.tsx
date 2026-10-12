@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { AlertTriangle, Camera, Check, ChevronDown, ChevronRight, ChevronUp, Sparkles, Circle, Clapperboard, Crop, Download, FolderOpen, Loader, Maximize2, Minimize2, Music, Pause, Play, Repeat, Save, Scissors, SkipBack, SkipForward, SlidersHorizontal, StepBack, StepForward, Trash2, Type, Upload, Volume2, VolumeX, Keyboard } from "lucide-react";
+import { AlertTriangle, Camera, Check, ChevronDown, ChevronRight, ChevronUp, Sparkles, Circle, Clapperboard, Crop, Download, FolderOpen, Loader, Maximize2, Minimize2, Music, Pause, Play, Repeat, Save, Scissors, SkipBack, SkipForward, SlidersHorizontal, StepBack, StepForward, Trash2, Type, Upload, Volume2, VolumeX, Keyboard, Search } from "lucide-react";
 import {
   DEFAULT_CLIP_GAIN_DB,
   DEFAULT_EXPORT,
@@ -75,10 +75,11 @@ import {
 import { drawTransition } from "@/lib/tools/video/transitions";
 import { LUT_OPTIONS, buildDlogLut, deriveLut, fetchOfficialLut, lutToCube, parseCube, type Lut3D } from "@/lib/tools/video/lut";
 import { fmtBytes, fmtDelta, fmtDuration, fmtMs, type EstimateSource, type ExportProgress, type SpeedPriors, type StepProgress } from "@/lib/tools/video/progress";
-import { Grader, MAX_AUDIBLE_SPEED, MIN_AUDIBLE_SPEED, buildProxy, drawOverlays, encoderSupport, exportProject, probe, renderFrame, renderSceneThumbs, scanMoments } from "@/lib/tools/video/engine";
+import { buildProxy, drawOverlays, encoderSupport, exportProject, Grader, MAX_AUDIBLE_SPEED, MIN_AUDIBLE_SPEED, probe, renderFrame, renderSceneThumbs, scanMoments, scanMotion } from "@/lib/tools/video/engine";
 import { INTRO_STYLES, addSceneAt, buildIntro, describeIntro, drawIntroFx, hasIntro, introCandidates, introFrameAt, introLength, introRegion, introStyle, mainClips, moveScene, pickMoments, removeIntro, removeScene, restyleIntro, sceneSecondsFor, scoreMoments, setSceneSeconds, shiftAfterIntro, styledGrade } from "@/lib/tools/video/intro";
 import { ProjectStore, hasFileSystemAccess, AUTOSAVE_FILE, FRAMES_DIR, PROJECT_FILE, PROXY_DIR } from "@/lib/tools/video/store";
 import { cn } from "@/lib/utils";
+import { DEFAULT_STOPS, cutOutStops, stillRuns, stillThreshold, stopKey, stopsOnTimeline, stopsTotal, type Still, type StopScan } from "@/lib/tools/video/stops";
 import { useUnsavedWork } from "@/lib/unsaved-work";
 
 const SEL = "h-8 rounded-[var(--radius-sm)] border border-edge bg-base px-2 pr-7 text-[13px] text-ink outline-none focus:border-accent";
@@ -103,7 +104,7 @@ const TABS: [Tab, string, typeof Scissors][] = [
 ];
 
 interface Job {
-  kind: "proxy" | "export" | "frame" | "intro";
+  kind: "proxy" | "export" | "frame" | "intro" | "stops";
   label: string;
   fraction: number;
   message?: string;
@@ -169,6 +170,7 @@ const JOB_WORK: Record<Job["kind"], string> = {
   proxy: "Proxies are still rendering in the video editor; leaving now would abandon them.",
   frame: "A frame is still being saved in the video editor.",
   intro: "The intro is still being made in the video editor; leaving now would abandon it.",
+  stops: "The scan for stops is still running in the video editor; leaving now would abandon it.",
 };
 /** Holding Space this long (or the first key repeat) switches the preview to double speed instead of toggling play. */
 const HOLD_MS = 250;
@@ -333,6 +335,9 @@ export function VideoEditorWidget() {
   // Clear-project dialog: forgetting is always in the browser only; deleting our own files from the folder is opt-in.
   const [clearOpen, setClearOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  // Stops: the scan lives on the project; which ones the user unticked lives here, keyed to that scan.
+  const [stopDefaults, setStopDefaults] = useState({ minSeconds: DEFAULT_STOPS.minSeconds, margin: DEFAULT_STOPS.margin });
+  const [skippedStops, setSkippedStops] = useState<{ scannedAt: number; keys: string[] }>({ scannedAt: 0, keys: [] });
   const [clearFiles, setClearFiles] = useState(false);
   const [clearProxies, setClearProxies] = useState(false);
   const keepButtonRef = useRef<HTMLButtonElement>(null);
@@ -1226,6 +1231,67 @@ export function VideoEditorWidget() {
     const delta = introLength(clips) - introLength(project.clips);
     setProject(shiftAfterIntro({ ...next, clips }, delta));
   };
+  const stopMin = project.stops?.minSeconds ?? stopDefaults.minSeconds;
+  const stopMargin = project.stops?.margin ?? stopDefaults.margin;
+  const setStopSettings = (patch: Partial<{ minSeconds: number; margin: number }>) => {
+    if (project.stops) setProject((p) => (p.stops ? { ...p, stops: { ...p.stops, ...patch } } : p));
+    else setStopDefaults((d) => ({ ...d, ...patch }));
+  };
+  const stops = useMemo(() => (project.stops ? stopsOnTimeline(project.clips, project.stops) : []), [project.clips, project.stops]);
+  const isSkipped = (key: string) => skippedStops.scannedAt === project.stops?.scannedAt && skippedStops.keys.includes(key);
+  const activeStops = stops.filter((st) => !isSkipped(stopKey(st)));
+  const toggleStop = (key: string) => {
+    const at = project.stops?.scannedAt ?? 0;
+    setSkippedStops((k) => {
+      const keys = k.scannedAt === at ? k.keys : [];
+      return { scannedAt: at, keys: keys.includes(key) ? keys.filter((x) => x !== key) : [...keys, key] };
+    });
+  };
+  /** Scan every recording on the timeline for stretches where the picture stands still; proxies when there are any. */
+  const scanStops = async () => {
+    if (job) return;
+    const ids = [...new Set(placed.filter((c) => !c.introRole).map((c) => c.media))];
+    if (!ids.length) return setError("Add recordings first — stops are found in them.");
+    const abort = new AbortController();
+    const totals = ids.map((id) => project.media[id]?.duration ?? 0);
+    const grand = totals.reduce((a, b) => a + b, 0) || 1;
+    setJob({ kind: "stops", label: "Finding stops", message: "", fraction: 0, abort });
+    const runs: Record<string, Still[]> = {}, thresholds: Record<string, number> = {};
+    try {
+      let before = 0;
+      for (let k = 0; k < ids.length; k++) {
+        const id = ids[k];
+        const f = await fileForIntro(id);
+        if (!f) continue;
+        const name = project.media[id]?.name ?? id;
+        const proxy = !!projectRef.current?.proxies[id]?.ready;
+        const trace = await scanMotion(f, {
+          step: DEFAULT_STOPS.step,
+          signal: abort.signal,
+          onProgress: (sec, total) => setJob((j) => (j ? { ...j, message: `${name}${proxy ? " (proxy)" : ""} · ${fmtTime(sec)} of ${fmtTime(total)}`, fraction: Math.min(1, (before + sec) / grand) } : j)),
+        });
+        thresholds[id] = stillThreshold(trace.scores);
+        runs[id] = stillRuns(trace, thresholds[id]);
+        before += totals[k];
+      }
+      const scan: StopScan = { step: DEFAULT_STOPS.step, runs, thresholds, minSeconds: stopMin, margin: stopMargin, scannedAt: Date.now() };
+      const found = stopsOnTimeline(project.clips, scan);
+      setProject((p) => ({ ...p, stops: scan }));
+      setStatus(found.length ? `${found.length} stop${found.length === 1 ? "" : "s"} of ${stopMin} s or more, ${fmtTime(stopsTotal(found))} to cut — tick or untick them in Trim, then Cut out` : `No stops of ${stopMin} s or more found`);
+    } catch (e) {
+      if ((e as DOMException).name !== "AbortError") setError(`Couldn't scan for stops: ${(e as Error).message}`);
+    } finally {
+      setJob(null);
+    }
+  };
+  const cutStops = () => {
+    if (!activeStops.length) return;
+    const total = stopsTotal(activeStops);
+    setProject((p) => ({ ...p, clips: cutOutStops(p.clips, activeStops) }));
+    setSelected(null);
+    setSelectedTransition(null);
+    setStatus(`Cut out ${activeStops.length} stop${activeStops.length === 1 ? "" : "s"}, ${fmtTime(total)} shorter`);
+  };
   const makeIntro = async () => {
     const main = mainClips(placed);
     if (!main.length) return setError("Add recordings first — the intro is cut from them.");
@@ -1754,6 +1820,53 @@ export function VideoEditorWidget() {
                   </p>
                 )}
                 <RangeCut duration={duration} onCut={(a, b) => setProject((p) => ({ ...p, clips: removeRange(p.clips, a, b) }))} />
+                <div className="space-y-2 rounded-[var(--radius-sm)] border border-edge p-2" data-stops>
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-medium text-ink">Stops</span>
+                    <span className="text-[12px] text-faint" data-stops-summary>
+                      {project.stops ? (stops.length ? `${stops.length} found · ${fmtTime(stopsTotal(activeStops))} to cut` : "none found") : "not scanned yet"}
+                    </span>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[12.5px] text-muted">
+                    Stood still for at least
+                    <input type="number" min={0.5} step={0.5} value={stopMin} onChange={(e) => setStopSettings({ minSeconds: Math.max(0.5, Number(e.target.value) || 0.5) })} className={cn(INPUT, "w-16 font-mono")} aria-label="Minimum stop in seconds" />
+                    s · keep
+                    <input type="number" min={0} step={0.25} value={stopMargin} onChange={(e) => setStopSettings({ margin: Math.max(0, Number(e.target.value) || 0) })} className={cn(INPUT, "w-16 font-mono")} aria-label="Seconds kept at each end" />
+                    s at each end
+                  </div>
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <button type="button" onClick={() => void scanStops()} disabled={!placed.length || !!job} className={GHOST} data-scan-stops>
+                      <Search size={13} /> {project.stops ? "Scan again" : "Scan for stops"}
+                    </button>
+                    <button type="button" onClick={cutStops} disabled={!activeStops.length || !!job} className={cn(PRIMARY, "h-8 px-3 text-[13px]")} data-cut-stops>
+                      <Scissors size={13} /> Cut out {activeStops.length || ""} {activeStops.length === 1 ? "stop" : "stops"}
+                      {activeStops.length ? ` · −${fmtTime(stopsTotal(activeStops))}` : ""}
+                    </button>
+                    {project.stops && (
+                      <button type="button" onClick={() => setProject((p) => ({ ...p, stops: null }))} disabled={!!job} className={GHOST} title="Drop the scan results">
+                        Forget
+                      </button>
+                    )}
+                  </div>
+                  {stops.length > 0 && (
+                    <ul className="max-h-44 space-y-0.5 overflow-y-auto text-[12.5px]" data-stop-list>
+                      {stops.map((st, i) => {
+                        const key = stopKey(st), skipped = isSkipped(key);
+                        return (
+                          <li key={key} className={cn("flex items-center gap-2", skipped && "opacity-50")} data-stop data-stop-from={st.stillFrom.toFixed(2)} data-stop-to={st.stillTo.toFixed(2)}>
+                            <input type="checkbox" checked={!skipped} onChange={() => toggleStop(key)} aria-label={`Cut stop ${i + 1}`} className="accent-[var(--accent)]" />
+                            <button type="button" onClick={() => stepTo(st.stillFrom)} className="font-mono text-ink tabular hover:text-accent" title="Jump to this stop">
+                              {fmtTime(st.stillFrom)} → {fmtTime(st.stillTo)}
+                            </button>
+                            <span className="text-muted">{st.seconds.toFixed(1)} s still</span>
+                            <span className="ml-auto font-mono text-faint tabular">−{(st.to - st.from).toFixed(1)} s</span>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  )}
+                  <p className="text-[12px] text-faint">Red lights, queues, crossings: while the car stands the picture barely changes, so every stretch stiller than the drive&apos;s own baseline counts. Scanning decodes the proxies when there are any and is many times faster with them; 8K originals take a while. The margin keeps the car halting and pulling away on either side of each cut.</p>
+                </div>
                 <div className={cn("space-y-2 rounded-[var(--radius-sm)] border p-2", selectedWindow ? "border-accent" : "border-edge")} data-transition-box>
                   <div className="flex items-center justify-between text-[12.5px]">
                     <span className="font-medium text-ink">{selectedWindow ? `Transition at ${fmtTime(selectedWindow.cut)}` : "Transitions"}</span>
@@ -2603,6 +2716,22 @@ export function VideoEditorWidget() {
                 >
                   ⋈
                 </button>
+              ))}
+              {activeStops.map((st) => (
+                <button
+                  key={stopKey(st)}
+                  type="button"
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onClick={() => {
+                    setTab("trim");
+                    stepTo(st.stillFrom);
+                  }}
+                  className="absolute top-0 h-full border-x border-[#e5484d]/70 bg-[repeating-linear-gradient(135deg,rgba(229,72,77,0.35)_0_4px,transparent_4px_8px)] hover:bg-[#e5484d]/25"
+                  style={{ left: st.from * pxPerSec, width: Math.max(3, (st.to - st.from) * pxPerSec) }}
+                  title={`Stop: still for ${st.seconds.toFixed(1)} s — Cut out in Trim removes this part`}
+                  aria-label={`Stop at ${fmtTime(st.stillFrom)}`}
+                  data-stop-band
+                />
               ))}
             </div>
             {/* title lanes: overlapping titles stack */}

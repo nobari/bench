@@ -4,6 +4,7 @@
  * keyframes, the smart-copy export plan, and serialisation for autosave.
  * Nothing here touches the DOM, files or codecs — see engine.ts for that.
  */
+import type { StopScan } from "./stops";
 
 /** Built-in conversions, plus the project's own .cube (DJI's official file, say). */
 export type LutKind = "none" | "dji-official" | "dlogm" | "dji-official-study" | "dlogm-study" | "dlogm-natural" | "dlogm-vivid" | "dlog" | "custom";
@@ -631,6 +632,8 @@ export interface Project {
   customLut?: { name: string; cube: string } | null;
   /** Proxy state per media id: whether a proxy exists (and which file). */
   proxies: Record<string, { ready: boolean; file?: string }>;
+  /** Where the car stood still, from the last scan (see stops.ts); null until one has run. */
+  stops?: StopScan | null;
 }
 
 export const DEFAULT_EXPORT: ExportSettings = { codec: "hevc", bitrateMbps: 100, preset: "balanced", audioBitrateKbps: 256, resolution: "source", smartCopy: true, range: null, tags: { ...DEFAULT_TAGS } };
@@ -650,7 +653,7 @@ export const newId = () => Math.random().toString(36).slice(2, 10);
 
 export function newProject(name = "Untitled drive"): Project {
   const now = Date.now();
-  return { version: 1, id: newId(), name, createdAt: now, updatedAt: now, media: {}, clips: [], music: [], titles: [], watermark: { media: null, corner: "br", size: 0.08, opacity: 0.85, margin: 0.03 }, export: { ...DEFAULT_EXPORT }, preview: { ...DEFAULT_PREVIEW }, transition: { ...DEFAULT_TRANSITION }, intro: { ...DEFAULT_INTRO, card: { ...DEFAULT_INTRO.card } }, proxies: {} };
+  return { version: 1, id: newId(), name, createdAt: now, updatedAt: now, media: {}, clips: [], music: [], titles: [], watermark: { media: null, corner: "br", size: 0.08, opacity: 0.85, margin: 0.03 }, export: { ...DEFAULT_EXPORT }, preview: { ...DEFAULT_PREVIEW }, transition: { ...DEFAULT_TRANSITION }, intro: { ...DEFAULT_INTRO, card: { ...DEFAULT_INTRO.card } }, proxies: {}, stops: null };
 }
 
 /* ---------------------------------------------------------- timeline */
@@ -977,8 +980,9 @@ export function deserialize(json: string): Project | null {
       return { ...base, ...(rest.speed !== undefined ? { speed: clipSpeed(rest) } : {}), ...(introRole && INTRO_ROLES.includes(introRole) ? { introRole } : {}), ...(typeof introSeconds === "number" && introSeconds > 0 ? { introSeconds } : {}) };
     });
     const intro: IntroSettings = { ...DEFAULT_INTRO, ...(p.intro ?? {}), card: { ...DEFAULT_INTRO.card, ...(p.intro?.card ?? {}) } };
+    const stops: StopScan | null = p.stops && typeof p.stops === "object" && p.stops.runs && typeof p.stops.runs === "object" ? { ...p.stops, minSeconds: p.stops.minSeconds > 0 ? p.stops.minSeconds : 2, margin: p.stops.margin >= 0 ? p.stops.margin : 0.5 } : null;
     if (typeof intro.sceneSeconds !== "number" || !(intro.sceneSeconds > 0)) intro.sceneSeconds = null;
-    return { ...newProject(), ...p, clips, export: { ...DEFAULT_EXPORT, ...p.export, tags: { ...DEFAULT_TAGS, ...(p.export?.tags ?? {}) } }, preview: { ...DEFAULT_PREVIEW, ...(p.preview ?? (Object.values(p.proxies ?? {}).some((x) => x?.ready) ? { proxyHeight: 1080 } : {})) }, transition, intro, titles: (p.titles ?? []).map((t) => normalizeTitle(t)) };
+    return { ...newProject(), ...p, clips, export: { ...DEFAULT_EXPORT, ...p.export, tags: { ...DEFAULT_TAGS, ...(p.export?.tags ?? {}) } }, preview: { ...DEFAULT_PREVIEW, ...(p.preview ?? (Object.values(p.proxies ?? {}).some((x) => x?.ready) ? { proxyHeight: 1080 } : {})) }, transition, intro, stops, titles: (p.titles ?? []).map((t) => normalizeTitle(t)) };
   } catch {
     return null;
   }
