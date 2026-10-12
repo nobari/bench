@@ -3,7 +3,7 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { AlertTriangle, Camera, Check, ChevronDown, ChevronRight, ChevronUp, Sparkles, Circle, Clapperboard, Crop, Download, FolderOpen, Loader, Maximize2, Minimize2, Music, Pause, Play, Repeat, Save, Scissors, SkipBack, SkipForward, SlidersHorizontal, StepBack, StepForward, Trash2, Type, Upload, Volume2, VolumeX, Keyboard, Search } from "lucide-react";
-import { DEFAULT_CLIP_GAIN_DB, DEFAULT_EXPORT, NEUTRAL_GRADE, NEUTRAL_TRANSFORM, TITLE_ALIGNS, TITLE_FAMILIES, TITLE_FONTS, TITLE_POSITIONS, TITLE_SHADOWS, TITLE_WEIGHTS, TRANSITIONS, addTransitionAt, appendMusic, applyAudioTo, applyGradeTo, applyTransitionToAll, clipAt, crossfades, dbToGain, effectiveMusicEnd, estimateExport, exportRange, fmtTime, musicGainAt, musicLength, newId, newProject, newTitle, orderRecordings, parseTitlesImport, placeClips, planExport, removeRange, reorderMusic, setTransition, splitClip, timelineDuration, titleLanes, titlesTemplate, transitionAt, transitionWindows, CLIP_SPEEDS, canMergeWithNext, clipLength, clipSpeed, groupOf, sourceTimeAt, mergeWithNext, moveClip, unjoin, updateClip, visibleCuts, type Clip, type MediaRef, type MusicTrack, type Project, type ProxyHeight, type Title, type TitleFont, isFileLutKind, type FileLutKind, type LutKind, type MathLutKind, type TitleAlign, type TitlePosition, type TitleShadow, type Transition, type TransitionKind, type ExportTags, type IntroSettings, reorderClip, parseTime, type SteadyLights, STEADY_FRAMES, clampMusicStart, musicUnused } from "@/lib/tools/video/project";
+import { DEFAULT_CLIP_GAIN_DB, DEFAULT_EXPORT, NEUTRAL_GRADE, NEUTRAL_TRANSFORM, TITLE_ALIGNS, TITLE_FAMILIES, TITLE_FONTS, TITLE_POSITIONS, TITLE_SHADOWS, TITLE_WEIGHTS, TRANSITIONS, addTransitionAt, appendMusic, applyAudioTo, applyGradeTo, applyTransitionToAll, clipAt, crossfades, dbToGain, effectiveMusicEnd, estimateExport, exportRange, fmtTime, musicGainAt, musicLength, newId, newProject, newTitle, orderRecordings, placeClips, planExport, removeRange, reorderMusic, setTransition, splitClip, timelineDuration, titleLanes, transitionAt, transitionWindows, CLIP_SPEEDS, canMergeWithNext, clipLength, clipSpeed, groupOf, sourceTimeAt, mergeWithNext, moveClip, unjoin, updateClip, visibleCuts, type Clip, type MediaRef, type MusicTrack, type Project, type ProxyHeight, type Title, type TitleFont, isFileLutKind, type FileLutKind, type LutKind, type MathLutKind, type TitleAlign, type TitlePosition, type TitleShadow, type Transition, type TransitionKind, type ExportTags, type IntroSettings, reorderClip, parseTime, type SteadyLights, STEADY_FRAMES, clampMusicStart, musicUnused } from "@/lib/tools/video/project";
 import { drawTransition } from "@/lib/tools/video/transitions";
 import { LUT_OPTIONS, buildDlogLut, deriveLut, fetchOfficialLut, lutToCube, parseCube, type Lut3D } from "@/lib/tools/video/lut";
 import { fmtBytes, fmtDelta, fmtDuration, fmtMs, type EstimateSource, type ExportProgress, type SpeedPriors, type StepProgress } from "@/lib/tools/video/progress";
@@ -12,6 +12,7 @@ import { INTRO_STYLES, addSceneAt, buildIntro, describeIntro, drawIntroFx, hasIn
 import { ProjectStore, hasFileSystemAccess, AUTOSAVE_FILE, FRAMES_DIR, PROJECT_FILE, PROXY_DIR } from "@/lib/tools/video/store";
 import { cn } from "@/lib/utils";
 import { DEFAULT_STOPS, cutOutStops, stillRuns, stillThreshold, stopKey, stopsOnTimeline, stopsTotal, type Still, type StopScan } from "@/lib/tools/video/stops";
+import { parseTemplateImport, videoTemplate } from "@/lib/tools/video/template";
 import { useUnsavedWork } from "@/lib/unsaved-work";
 
 const SEL = "h-8 rounded-[var(--radius-sm)] border border-edge bg-base px-2 pr-7 text-[13px] text-ink outline-none focus:border-accent";
@@ -1159,22 +1160,49 @@ export function VideoEditorWidget() {
     setProject((p) => ({ ...p, titles: [...p.titles, t] }));
     focusTitle(t);
   };
-  const titlesJsonInput = useRef<HTMLInputElement>(null);
+  const templateJsonInput = useRef<HTMLInputElement>(null);
   const [importReplace, setImportReplace] = useState(false);
-  const downloadTitlesTemplate = () => {
-    const blob = new Blob([JSON.stringify(titlesTemplate(project), null, 2)], { type: "application/json" });
+  const downloadTemplate = () => {
+    const blob = new Blob([JSON.stringify(videoTemplate(project), null, 2)], { type: "application/json" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
-    a.download = `${project.name.replace(/[^\w-]+/g, "-") || "titles"}-titles.json`;
+    a.download = `${project.name.replace(/[^\w-]+/g, "-") || "video"}-template.json`;
     a.click();
     setTimeout(() => URL.revokeObjectURL(a.href), 5000);
   };
-  const importTitlesJson = async (file: File) => {
+  /** A filled template: titles replace or join the current ones, and the intro section (if any) is applied too. */
+  const importTemplateJson = async (file: File) => {
     try {
-      const { titles, warnings } = parseTitlesImport(await file.text(), project);
-      setProject((p) => ({ ...p, titles: importReplace ? titles : [...p.titles, ...titles] }));
-      setSelectedTitle(titles[0]?.id ?? null);
-      setStatus(`Imported ${titles.length} title${titles.length === 1 ? "" : "s"} from ${file.name}${warnings.length ? ` with ${warnings.length} note${warnings.length === 1 ? "" : "s"}` : ""}`);
+      const { titles, intro, warnings } = parseTemplateImport(await file.text(), project);
+      let next: Project = titles.length ? { ...project, titles: importReplace ? titles : [...project.titles, ...titles] } : project;
+      const notes: string[] = [];
+      if (titles.length) notes.push(`${titles.length} title${titles.length === 1 ? "" : "s"}`);
+      let makeScenes = 0;
+      if (intro) {
+        if (!intro.enabled) {
+          if (hasIntro(next.clips)) notes.push("intro removed");
+          next = { ...next, clips: removeIntro(next.clips) };
+        } else {
+          next = { ...next, intro: intro.settings };
+          if (intro.moments.length) {
+            next = { ...next, clips: buildIntro(next, intro.moments, sceneSecondsFor(next)) };
+            notes.push(`intro from ${intro.moments.length} named moment${intro.moments.length === 1 ? "" : "s"}`);
+          } else if (hasIntro(next.clips)) {
+            next = { ...next, clips: restyleIntro(next) };
+            notes.push(`intro restyled (${introStyle(next.intro.style).name})`);
+          } else makeScenes = intro.scenes;
+        }
+      }
+      const delta = introLength(next.clips) - introLength(project.clips);
+      setProject(shiftAfterIntro(next, delta));
+      if (titles[0]) setSelectedTitle(titles[0].id);
+      if (makeScenes) {
+        setIntroCount(makeScenes);
+        notes.push(`intro of ${makeScenes} scenes being made`);
+        void makeIntro(makeScenes, next);
+      }
+      if (intro && !titles.length) setTab("intro");
+      setStatus(`Imported ${notes.join(", ") || "nothing new"} from ${file.name}${warnings.length ? ` with ${warnings.length} note${warnings.length === 1 ? "" : "s"}` : ""}`);
       if (warnings.length) setError(`Import notes: ${warnings.join(" · ")}`);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -1287,19 +1315,19 @@ export function VideoEditorWidget() {
     setSelectedTransition(null);
     setStatus(`Cut out ${activeStops.length} stop${activeStops.length === 1 ? "" : "s"}, ${fmtTime(total)} shorter`);
   };
-  const makeIntro = async () => {
-    const main = mainClips(placed);
+  const makeIntro = async (count = introCount, base: Project = project) => {
+    const main = mainClips(placeClips(base.clips));
     if (!main.length) return setError("Add recordings first — the intro is cut from them.");
     if (job) return;
-    const seconds = sceneSecondsFor(project);
-    const need = seconds * introStyle(project.intro.style).speed;
+    const seconds = sceneSecondsFor(base);
+    const need = seconds * introStyle(base.intro.style).speed;
     const perWindow = introScan ? (scanPlan?.perWindow ?? 1) : 1;
-    let windows = introCandidates(main, introCount, perWindow, need);
+    let windows = introCandidates(main, count, perWindow, need);
     if (perWindow > 1) {
       const abort = new AbortController();
       setJob({ kind: "intro", label: "Looking for lively moments", message: `${windows.flat().length} candidates`, fraction: 0, abort });
       try {
-        const stats = await scanMoments(fileForIntro, project, windows, { signal: abort.signal, onProgress: (d, n) => setJob((j) => (j ? { ...j, fraction: d / n } : j)) });
+        const stats = await scanMoments(fileForIntro, base, windows, { signal: abort.signal, onProgress: (d, n) => setJob((j) => (j ? { ...j, fraction: d / n } : j)) });
         windows = scoreMoments(windows, stats);
       } catch (e) {
         if ((e as DOMException).name === "AbortError") {
@@ -1312,15 +1340,15 @@ export function VideoEditorWidget() {
       }
     }
     const moments = pickMoments(windows);
-    const clips = buildIntro(project, moments, seconds);
-    const delta = introLength(clips) - introLength(project.clips);
+    const clips = buildIntro(base, moments, seconds);
+    const delta = introLength(clips) - introLength(base.clips);
     setProject((p) => shiftAfterIntro({ ...p, clips }, delta));
     setSelected(null);
     setSelectedTransition(null);
     setPlayhead(0);
     setSeekToken((x) => x + 1);
     setTab("intro");
-    setStatus(`Intro: ${moments.length} scenes ${perWindow > 1 ? "picked for motion and contrast" : "spaced evenly across the drive"}, ${introStyle(project.intro.style).name} look — swap, reorder or retime them below.`);
+    setStatus(`Intro: ${moments.length} scenes ${perWindow > 1 ? "picked for motion and contrast" : "spaced evenly across the drive"}, ${introStyle(base.intro.style).name} look — swap, reorder or retime them below.`);
   };
   const previewIntro = () => {
     if (!introReg) return;
@@ -1583,6 +1611,7 @@ export function VideoEditorWidget() {
   return (
     <div className="space-y-3">
       {/* project bar */}
+      <input ref={templateJsonInput} type="file" accept=".json,application/json" hidden onChange={(e) => e.target.files?.[0] && void importTemplateJson(e.target.files[0])} data-template-input />
       <div className="panel flex flex-wrap items-center gap-2 p-2">
         <button type="button" onClick={chooseFolder} className={cn(GHOST, "h-9")} disabled={!hasFileSystemAccess()}>
           <FolderOpen size={14} /> {folder ? folder : "Choose project folder"}
@@ -2087,6 +2116,14 @@ export function VideoEditorWidget() {
             {tab === "intro" && (
               <>
                 <div className="sticky top-0 z-10 -mx-3 -mt-3 flex flex-wrap items-center gap-1.5 bg-surface px-3 pt-3 pb-2">
+                  <span className="order-last ml-auto flex items-center gap-1.5">
+                    <button type="button" onClick={downloadTemplate} className={GHOST} title="One JSON for the intro and the titles, ready to hand to an LLM to fill in" data-template-download>
+                      <Download size={12} /> Template JSON
+                    </button>
+                    <button type="button" onClick={() => templateJsonInput.current?.click()} className={GHOST} title="Load a filled template back in: intro and titles" data-template-import>
+                      <Upload size={12} /> Import JSON
+                    </button>
+                  </span>
                   <button type="button" onClick={() => void makeIntro()} disabled={!placed.length || !!job} className={PRIMARY} data-make-intro>
                     <Sparkles size={14} /> {introReg ? "Make it again" : "Make an intro from this drive"}
                   </button>
@@ -2423,11 +2460,10 @@ export function VideoEditorWidget() {
                     {logo ? "Replace logo" : "+ Logo watermark"}
                   </button>
                   <span className="ml-auto flex flex-wrap items-center gap-1.5">
-                    <button type="button" onClick={downloadTitlesTemplate} className={GHOST} title="A JSON with this timeline and every title property, ready to hand to ChatGPT or another LLM to fill in">
+                    <button type="button" onClick={downloadTemplate} className={GHOST} title="One JSON for the intro and the titles, with this timeline and every property, ready to hand to ChatGPT or another LLM to fill in" data-template-download>
                       <Download size={12} /> Template JSON
                     </button>
-                    <input ref={titlesJsonInput} type="file" accept=".json,application/json" hidden onChange={(e) => e.target.files?.[0] && void importTitlesJson(e.target.files[0])} />
-                    <button type="button" onClick={() => titlesJsonInput.current?.click()} className={GHOST} title="Load a filled template back in">
+                    <button type="button" onClick={() => templateJsonInput.current?.click()} className={GHOST} title="Load a filled template back in: titles and intro" data-template-import>
                       <Upload size={12} /> Import JSON
                     </button>
                     {project.titles.length > 0 && (
@@ -2437,7 +2473,7 @@ export function VideoEditorWidget() {
                     )}
                   </span>
                 </div>
-                <p className="text-[12px] text-faint">Download the template, give it to an LLM with your route notes (places, roads, dates), then import the JSON it returns: every title with its timing, position, colours, font and size arrives populated.</p>
+                <p className="text-[12px] text-faint">Download the template (one file for the intro and the titles), give it to an LLM with your route notes (places, roads, dates), then import the JSON it returns: every title with its timing, position, colours, font and size arrives populated.</p>
                 {project.titles.length > 0 && <p className="text-[12px] text-faint">In time order. Open one to edit it; titles that overlap in time are all drawn, so give them different positions.</p>}
                 {[...project.titles]
                   .sort((a, b) => a.start - b.start)
