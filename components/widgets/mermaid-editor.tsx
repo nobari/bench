@@ -100,9 +100,9 @@ function download(blob: Blob | string, name: string, type = "text/plain") {
 function selectionRing(a: Annotation | undefined, box: { width: number; height: number }): string {
   if (!a) return "";
   const u = annotationUnit(box.width, box.height);
-  if (a.kind === "highlight") return `<rect x="${a.x * box.width - u * 0.3}" y="${a.y * box.height - u * 0.3}" width="${a.w * box.width + u * 0.6}" height="${a.h * box.height + u * 0.6}" fill="none" stroke="#3f7414" stroke-width="${u * 0.1}" stroke-dasharray="${u * 0.4} ${u * 0.3}" pointer-events="none"/>`;
+  if (a.kind === "highlight") return `<rect x="${a.x * box.width - u * 0.3}" y="${a.y * box.height - u * 0.3}" width="${a.w * box.width + u * 0.6}" height="${a.h * box.height + u * 0.6}" fill="none" stroke="#2f2f36" stroke-width="${u * 0.1}" stroke-dasharray="${u * 0.4} ${u * 0.3}" pointer-events="none"/>`;
   const cx = a.kind === "arrow" ? a.x * box.width : a.x * box.width + (a.kind === "number" ? 0 : u * 2), cy = a.kind === "arrow" ? a.y * box.height : a.y * box.height + (a.kind === "number" ? 0 : u);
-  return `<circle cx="${cx}" cy="${cy}" r="${u * 1.6}" fill="none" stroke="#3f7414" stroke-width="${u * 0.1}" stroke-dasharray="${u * 0.4} ${u * 0.3}" pointer-events="none"/>`;
+  return `<circle cx="${cx}" cy="${cy}" r="${u * 1.6}" fill="none" stroke="#2f2f36" stroke-width="${u * 0.1}" stroke-dasharray="${u * 0.4} ${u * 0.3}" pointer-events="none"/>`;
 }
 
 type Render = { kind: "idle" } | { kind: "ok"; svg: string; type: string } | { kind: "error"; message: string; line: number | null };

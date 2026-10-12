@@ -397,7 +397,7 @@ export const CHEATSHEET: { title: string; rows: [string, string][] }[] = [
       ["A -- text --> B  or  A -->|text| B", "labelled arrow"],
       ["A -.-> B   A ==> B", "dotted, thick"],
       ["subgraph Name … end", "group nodes"],
-      ["style A fill:#e4eed3,stroke:#3f7414", "colour a node"],
+      ["style A fill:#e8e8ec,stroke:#2f2f36", "colour a node"],
     ],
   },
   {
