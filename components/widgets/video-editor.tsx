@@ -2141,7 +2141,7 @@ export function VideoEditorWidget() {
                   </div>
                   <p className="text-[12px] text-faint">
                     Written into the MP4 as the iTunes-style atoms ffmpeg writes from <span className="font-mono">-metadata</span> — title, artist, album, genre, year, comment, encoder — and, for a music video, the media kind ffmpeg sets with <span className="font-mono">media_type=6</span>. YouTube takes the title from the file; the Music category and the song credits are set on the upload page, and that is what YouTube Music lists by. To tag a file you already have, use the{" "}
-                    <Link href="/image/mp4-tags" className="text-accent underline-offset-2 hover:underline">
+                    <Link href="/media/mp4-tags" className="text-accent underline-offset-2 hover:underline">
                       MP4 tag editor
                     </Link>
                     .

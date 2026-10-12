@@ -14,6 +14,8 @@ const eslintConfig = defineConfig([
     "next-env.d.ts",
     // Vendored third-party binaries/bundles copied on postinstall.
     "public/vendor/**",
+    // Git worktrees of Claude Code agent sessions (each has its own node_modules and build output).
+    ".claude/worktrees/**",
   ]),
 ]);
 
