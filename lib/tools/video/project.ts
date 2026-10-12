@@ -429,7 +429,8 @@ export interface Transition {
 }
 /** The project's choice for new transitions (the last one used). */
 export type TransitionSettings = Transition;
-export const DEFAULT_TRANSITION: Transition = { kind: "dissolve", duration: 1 };
+/** What a new cut gets: a 2 s cross dissolve, centred on the cut. */
+export const DEFAULT_TRANSITION: Transition = { kind: "dissolve", duration: 2 };
 /** Transitions that suit road footage, in the order the menu shows them. */
 export const TRANSITIONS: { kind: TransitionKind; name: string; hint: string }[] = [
   { kind: "dissolve", name: "Cross dissolve", hint: "A soft blend — the classic for continuous driving." },
