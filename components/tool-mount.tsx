@@ -79,6 +79,7 @@ const WIDGETS: Record<WidgetKey, React.ComponentType<Record<string, unknown>>> =
     { ssr: false, loading: Skeleton },
   ),
   "video-editor": dynamic(() => import("@/components/widgets/video-editor").then((m) => m.VideoEditorWidget), { ssr: false, loading: Skeleton }),
+  "mp4-tags": dynamic(() => import("@/components/widgets/mp4-tags").then((m) => m.Mp4TagsWidget), { ssr: false, loading: Skeleton }),
   "slow-mo": dynamic(
     () => import("@/components/widgets/slow-mo").then((m) => m.SlowMoWidget),
     { ssr: false, loading: Skeleton },
