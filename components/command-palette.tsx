@@ -11,7 +11,7 @@ import { useRouter } from "next/navigation";
 import { Command } from "cmdk";
 import { Lightbulb, Search } from "lucide-react";
 import { CATEGORIES, getCategory } from "@/lib/tools/categories";
-import { TOOLS } from "@/lib/tools/registry";
+import { TOOLS, getCategoryTree } from "@/lib/tools/registry";
 import { searchTools } from "@/lib/tools/search";
 import { toolShortTitle, type ToolDef } from "@/lib/tools/types";
 
@@ -137,16 +137,15 @@ function CommandMenu({ open, setOpen }: { open: boolean; setOpen: (v: boolean) =
               ))}
             </Command.Group>
           ) : (
-            CATEGORIES.map((cat) => {
-              const tools = TOOLS.filter((t) => t.category === cat.slug);
-              if (!tools.length) return null;
-              return (
-                <Command.Group key={cat.slug} heading={cat.name} className={GROUP}>
+            CATEGORIES.flatMap((cat) => {
+              const tree = getCategoryTree(cat.slug);
+              return tree.map(({ group, tools }) => (
+                <Command.Group key={`${cat.slug}/${group.id}`} heading={tree.length > 1 ? `${cat.name} · ${group.name}` : cat.name} className={GROUP}>
                   {tools.map((t) => (
                     <ToolItem key={`${t.category}/${t.slug}`} t={t} onSelect={() => go(`/${t.category}/${t.slug}`)} />
                   ))}
                 </Command.Group>
-              );
+              ));
             })
           )}
 

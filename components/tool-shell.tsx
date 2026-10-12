@@ -2,7 +2,7 @@ import Link from "next/link";
 import { ChevronRight } from "lucide-react";
 import type { ToolDef } from "@/lib/tools/types";
 import { getCategory } from "@/lib/tools/categories";
-import { getRelatedTools } from "@/lib/tools/registry";
+import { getCategoryTree, getRelatedTools } from "@/lib/tools/registry";
 import { ToolMount } from "@/components/tool-mount";
 import { ToolCard } from "@/components/tool-card";
 import { ShareButton } from "@/components/share-button";
@@ -10,6 +10,7 @@ import { breadcrumbJsonLd, faqJsonLd, jsonLdScript, softwareAppJsonLd } from "@/
 
 export function ToolShell({ tool }: { tool: ToolDef }) {
   const cat = getCategory(tool.category);
+  const group = cat && getCategoryTree(cat.slug).length > 1 ? cat.groups.find((g) => g.id === tool.group) : undefined;
   const related = getRelatedTools(tool);
   const base = `/${tool.category}/${tool.slug}`;
   const Icon = tool.icon;
@@ -42,6 +43,14 @@ export function ToolShell({ tool }: { tool: ToolDef }) {
             <Link href={`/${tool.category}`} className="hover:text-ink">
               {cat?.name}
             </Link>
+            {group && (
+              <>
+                <ChevronRight size={12} className="text-faint" />
+                <Link href={`/${tool.category}#${group.id}`} className="hover:text-ink">
+                  {group.name}
+                </Link>
+              </>
+            )}
           </nav>
           <div className="mt-2 flex items-center gap-3">
             <span

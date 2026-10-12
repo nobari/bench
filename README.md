@@ -29,24 +29,26 @@ Bench is the kind of small tools you reach for a dozen times a day — encode so
 - 🔗 **Shareable by URL** — inputs and settings live in the address bar (or a compressed hash for large payloads), so any result is one copy-paste away. Share links longer than 2,000 characters are shortened automatically.
 - ⌘ **Minimum-action access** — a global **⌘K** command palette searches and jumps to any tool from anywhere.
 - 🔎 **SEO / GEO / LLM-ready** — static generation, per-tool metadata, JSON-LD (`SoftwareApplication`, `BreadcrumbList`, `FAQPage`), `sitemap.xml`, `robots.txt`, and machine-readable [`/llms.txt`](https://llmstxt.org) + `/llms-full.txt`.
-- 🧩 **Registry-driven** — one typed array generates routes, navigation, command palette, sitemap, OG images, and AI-discovery files.
+- 🧩 **Registry-driven** — one typed array generates routes, the category → group → tool navigation tree, command palette, sitemap, OG images, redirects for moved tools, and AI-discovery files.
 - 🧰 **Built like a tool, not a landing page** — every tool is one click away in a persistent index, each page has a single primary Share action, and the light/dark palette follows your system.
 
 ## Tools
 
-> 57 tools across 11 categories — and counting.
+> 58 tools across 11 categories, each split into groups — and counting.
 
 | Category | Tools |
 | --- | --- |
-| **Text & Encoding** | Text Transformer (45+ transforms) · Base64 · URL · HTML Entities · Case Converter · EIP-55 Checksum · Full-width ↔ Half-width · Katakana ↔ Hiragana · ASCII Table & Codes · Finglish → Farsi · Romaji ↔ Hiragana / Katakana · Markdown Editor |
-| **JSON & Data** | JSON Viewer & Formatter (tree, search, validate, convert) · JSON Schema Validator & Designer |
-| **Image & Media** | GIF Maker · Image Converter (PNG/JPG/WebP + resize) · Base64 Image · 8K Drive Video Editor (join, trim, D-Log grade, music, HEVC export) · Content Credentials (C2PA) & SynthID Inspector · Slow-mo → Normal Speed Video |
-| **Crypto & Hashing** | Hash Generator (MD5 · SHA-1/256/384/512 · SHA-3 · Keccak) · ECDSA Sign & Verify · Wallet Generator (BIP39 / BIP44) |
-| **Generators** | UUID & NanoID · QR Code (styled) · Password Generator · Random Generator · Lucky Draw |
-| **Time & Date** | Unix Timestamp · Date Converter (12 calendars + timezones) · Day Calculator · Cron Parser & Builder · Earth, Sun & Moon Simulator (day/night globe, seasons, moon phases) · Sun, Earth & Moon to Scale (true sizes, distances, rotations) |
-| **Color & Design** | Color Converter (HEX/RGB/HSL/OKLCH/CMYK · picker · gradients · contrast) · Color Palette Generator (OKLCH harmonies, scales, from image) |
-| **Math & Units** | Loan & Mortgage Simulator · Number Base Converter · Unit Converter |
-| **Web & Dev** | Regex Tester · Mermaid Diagram Editor (live preview, print, SVG/PNG export) · Diff Checker (line/word/char, side by side, patches) · JWT Decoder, Verifier & Encoder · URL Shortener (server-backed, best-effort) |
+| **Text & Encoding** (`/text`) | *Encoding:* Text Transformer · Base64 · URL Encode & Decode · HTML Entities · Gzip / Deflate — *Case & characters:* Case Converter · ASCII Table — *Scripts & languages:* Full-width ↔ Half-width · Katakana ↔ Hiragana · Finglish → Farsi · Romaji ↔ Kana |
+| **JSON & Data** (`/json`) | JSON Viewer · JSON Schema |
+| **Images & Video** (`/media`) | *Images:* Image Converter · Base64 image · Content Credentials (C2PA) — *GIFs & stickers:* GIF Maker · TGS Stickers — *Video:* Video editor · MP4 tags · Slow-mo to normal speed — *QR codes:* QR & barcode scanner · QR Code Generator |
+| **Audio & Music** (`/audio`) | *Audio files:* Audio converter · Audio bitrate & size — *Music math:* Note ↔ frequency · BPM ↔ ms · Transpose chords · Decibels · Semitones ↔ cents |
+| **Files & Archives** (`/files`) | *Archives:* Archive Extractor · Archive Creator — *Readers:* Comic Reader |
+| **Crypto & Hashing** (`/crypto`) | *Hashing & signatures:* Hash Generator · ECDSA Sign & Verify — *Ethereum:* EIP-55 Checksum · Wallet Generator |
+| **Generators** (`/generators`) | *Identifiers & passwords:* UUID & NanoID · Password Generator — *Randomness:* Random Generator · Lucky Draw |
+| **Time & Date** (`/time`) | *Dates & timestamps:* Unix Timestamp · Date Converter · Day Calculator — *Schedules:* Cron — *Sky & astronomy:* Earth, Sun & Moon · Sun–Earth–Moon scale |
+| **Color & Design** (`/color`) | Color Converter · Palette Generator |
+| **Math & Units** (`/math`) | *Converters:* Number Base Converter · Unit Converter — *Calculators:* Loan Simulator |
+| **Web & Dev** (`/web`) | *Editors:* Markdown Editor · Mermaid editor — *Developer tools:* Diff · Regex · JWT · URL shortener |
 
 Adding a tool is a one-file change — see the add-tool skill in `.claude/skills`.
 

@@ -54,7 +54,8 @@ import {
   Wallet,
   Workflow,
 } from "lucide-react";
-import type { CategorySlug, ToolDef } from "./types";
+import { toolId, type CategorySlug, type ToolDef, type ToolGroup } from "./types";
+import { getCategory } from "./categories";
 
 /**
  * THE REGISTRY — single source of truth for every tool.
@@ -68,6 +69,7 @@ export const TOOLS: ToolDef[] = [
   {
     slug: "transform",
     category: "text",
+    group: "encoding",
     title: "Text Transformer",
     tagline: "45+ encoders, case converters and text utilities in one place",
     description:
@@ -93,6 +95,7 @@ export const TOOLS: ToolDef[] = [
   {
     slug: "base64",
     category: "text",
+    group: "encoding",
     title: "Base64 Encode & Decode",
     short: "Base64",
     tagline: "Convert text and data to and from Base64 (and Base64URL)",
@@ -117,12 +120,13 @@ export const TOOLS: ToolDef[] = [
       { label: "Encode “Hello, world”", query: "t=base64-encode&i=Hello%2C+world" },
       { label: "Decode “aGVsbG8=”", query: "t=base64-decode&i=aGVsbG8%3D" },
     ],
-    related: ["text/url-encode", "text/html-entities", "crypto", "text/transform"],
+    related: ["text/url-encode", "text/html-entities", "text/transform"],
     aliases: ["b64"],
   },
   {
     slug: "url-encode",
     category: "text",
+    group: "encoding",
     title: "URL Encode & Decode",
     short: "URL Encode & Decode",
     tagline: "Percent-encode and decode text for safe use in URLs",
@@ -148,6 +152,7 @@ export const TOOLS: ToolDef[] = [
   {
     slug: "html-entities",
     category: "text",
+    group: "encoding",
     title: "HTML Entity Encode & Decode",
     short: "HTML Entities",
     tagline: "Escape and unescape HTML special characters",
@@ -173,6 +178,7 @@ export const TOOLS: ToolDef[] = [
   {
     slug: "case-converter",
     category: "text",
+    group: "characters",
     title: "Case Converter",
     tagline: "camelCase, snake_case, kebab-case, Title Case and more",
     description:
@@ -199,7 +205,8 @@ export const TOOLS: ToolDef[] = [
   },
   {
     slug: "eip55-checksum",
-    category: "text",
+    category: "crypto",
+    group: "ethereum",
     title: "Ethereum Address Checksum (EIP-55)",
     short: "EIP-55 Checksum",
     tagline: "Apply the EIP-55 mixed-case checksum to an Ethereum address",
@@ -223,12 +230,13 @@ export const TOOLS: ToolDef[] = [
     examples: [
       { label: "Checksum a sample address", query: "t=eip55-checksum&i=0x5aaeb6053f3e94c9b9a09f33669435e7ef1beaed" },
     ],
-    related: ["text/transform", "crypto"],
+    related: ["text/transform"],
     aliases: ["ethereum checksum", "web3 address"],
   },
   {
     slug: "full-width",
     category: "text",
+    group: "scripts",
     title: "Full-width ↔ Half-width Converter (Zenkaku / Hankaku)",
     short: "Full-width ↔ Half-width",
     tagline: "Convert between full-width (全角) and half-width (半角) Japanese & Latin characters",
@@ -277,6 +285,7 @@ export const TOOLS: ToolDef[] = [
   {
     slug: "kana-converter",
     category: "text",
+    group: "scripts",
     title: "Katakana ↔ Hiragana Converter",
     short: "Katakana ↔ Hiragana",
     tagline: "Convert Japanese kana between katakana (カタカナ) and hiragana (ひらがな)",
@@ -323,6 +332,7 @@ export const TOOLS: ToolDef[] = [
   {
     slug: "finglish",
     category: "text",
+    group: "scripts",
     title: "Finglish to Farsi Converter",
     short: "Finglish → Farsi",
     tagline: "Type Persian with Latin letters (Pinglish) and get Persian script — tap any word to fix its spelling",
@@ -366,6 +376,7 @@ export const TOOLS: ToolDef[] = [
   {
     slug: "romaji",
     category: "text",
+    group: "scripts",
     title: "Romaji to Hiragana & Katakana Converter",
     short: "Romaji ↔ Kana",
     tagline: "Convert romaji to hiragana or katakana — and kana back to Hepburn romaji",
@@ -410,6 +421,7 @@ export const TOOLS: ToolDef[] = [
   {
     slug: "gzip",
     category: "text",
+    group: "encoding",
     title: "Gzip / Deflate Compressor",
     short: "Gzip / Deflate",
     tagline: "Compress and decompress text with gzip, zlib and raw deflate",
@@ -452,7 +464,8 @@ export const TOOLS: ToolDef[] = [
 
   {
     slug: "markdown",
-    category: "text",
+    category: "web",
+    group: "editors",
     title: "Markdown Editor & Previewer",
     short: "Markdown Editor",
     tagline: "Write Markdown with a live GitHub-flavoured preview, a formatting toolbar, and export to HTML or PDF",
@@ -495,6 +508,7 @@ export const TOOLS: ToolDef[] = [
   {
     slug: "viewer",
     category: "json",
+    group: "json",
     title: "JSON Viewer & Formatter",
     short: "JSON Viewer",
     tagline: "Inspect, format, validate and query JSON — fast",
@@ -521,6 +535,7 @@ export const TOOLS: ToolDef[] = [
   {
     slug: "schema",
     category: "json",
+    group: "json",
     title: "JSON Schema Validator & Designer",
     short: "JSON Schema",
     tagline: "Validate JSON against a schema, infer a schema from sample data, and design one visually",
@@ -564,7 +579,8 @@ export const TOOLS: ToolDef[] = [
   /* ============================= IMAGE & MEDIA ============================= */
   {
     slug: "gif-maker",
-    category: "image",
+    category: "media",
+    group: "animation",
     title: "GIF Maker",
     tagline: "Turn a set of images into an animated GIF — in your browser",
     description:
@@ -581,12 +597,13 @@ export const TOOLS: ToolDef[] = [
       { q: "Why is my GIF large?", a: "GIFs grow with dimensions, frame count and color count. Reduce the output size, lower the maximum colors, or remove frames to shrink the file. The tool shows an estimated size as you adjust settings." },
     ],
     examples: [],
-    related: ["json/viewer", "image/converter", "text/transform"],
+    related: ["json/viewer", "media/converter", "text/transform"],
     aliases: ["make a gif", "image sequence to gif"],
   },
   {
     slug: "converter",
-    category: "image",
+    category: "media",
+    group: "images",
     title: "Image Converter",
     tagline: "Convert and resize images between PNG, JPG and WebP",
     description:
@@ -603,12 +620,13 @@ export const TOOLS: ToolDef[] = [
       { q: "How do I make a smaller file?", a: "Choose WebP or JPG and lower the quality, and/or set a maximum width to downscale. The converted size is shown for each image." },
     ],
     examples: [],
-    related: ["image/gif-maker", "color/converter"],
+    related: ["media/gif-maker", "color/converter"],
     aliases: ["png to jpg", "convert to webp", "image format converter"],
   },
   {
     slug: "base64",
-    category: "image",
+    category: "media",
+    group: "images",
     title: "Base64 Image Encoder & Decoder",
     short: "Base64 image",
     tagline: "Turn an image into a data URI — or a data URI back into an image",
@@ -642,12 +660,13 @@ export const TOOLS: ToolDef[] = [
       { label: "Decode a 1×1 PNG", query: "m=decode&b=iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg%3D%3D" },
       { label: "Encode as WebP at 80%", query: "fmt=webp&q=80" },
     ],
-    related: ["text/base64", "image/converter", "image/qr-code"],
+    related: ["text/base64", "media/converter", "media/qr-code"],
     aliases: ["image to data uri", "data uri converter", "base64 png", "embed image in css"],
   },
   {
     slug: "content-credentials",
-    category: "image",
+    category: "media",
+    group: "images",
     title: "C2PA Content Credentials & SynthID Inspector",
     short: "Content Credentials (C2PA)",
     tagline: "Verify a file's Content Credentials, read every AI-provenance signal, and see why SynthID is different",
@@ -685,12 +704,13 @@ export const TOOLS: ToolDef[] = [
       { label: "Two generations of edits", query: "s=chain&t=credentials" },
       { label: "C2PA vs SynthID", query: "t=compare" },
     ],
-    related: ["image/base64", "image/converter", "web/jwt", "crypto/hash"],
+    related: ["media/base64", "media/converter", "web/jwt", "crypto/hash"],
     aliases: ["c2pa", "content credentials", "synthid", "ai provenance", "verify ai image", "content authenticity", "cr icon"],
   },
   {
     slug: "editor",
-    category: "image",
+    category: "media",
+    group: "video",
     title: "8K Drive Video Editor",
     short: "Video editor",
     tagline: "Join, trim, straighten, grade and score hours of 8K dash-cam footage, then export for YouTube — all on your Mac, in the browser",
@@ -711,12 +731,13 @@ export const TOOLS: ToolDef[] = [
       { q: "Is anything uploaded?", a: "No. Footage never leaves your Mac; everything runs locally in the browser." },
     ],
     examples: [],
-    related: ["image/mp4-tags", "image/slow-mo", "image/converter", "audio/converter"],
+    related: ["media/mp4-tags", "media/slow-mo", "media/converter", "audio/converter"],
     aliases: ["video editor", "dashcam editor", "d-log converter", "join clips", "8k export"],
   },
   {
     slug: "mp4-tags",
-    category: "image",
+    category: "media",
+    group: "video",
     title: "MP4 Tag Editor",
     short: "MP4 tags",
     tagline: "Add a title, artist, album, genre, year, comment and the music-video kind to an MP4 or MOV — written into the file itself, nothing re-encoded",
@@ -737,13 +758,14 @@ export const TOOLS: ToolDef[] = [
       { q: "What about fragmented MP4s?", a: "A fragmented file (moof boxes, as produced by streaming encoders) has its index at the front and its media cannot be moved, so the tags are written in place when they fit the existing room and the tool refuses otherwise, rather than writing a broken file." },
     ],
     examples: [],
-    related: ["image/editor", "image/converter", "audio/converter"],
+    related: ["media/editor", "media/converter", "audio/converter"],
     aliases: ["mp4 metadata", "video tags", "music video tags", "mov tags", "media_type", "stik", "tag an mp4", "id3 for mp4", "mp4 title artist"],
     added: "2026-10-12",
   },
   {
     slug: "slow-mo",
-    category: "image",
+    category: "media",
+    group: "video",
     title: "Slow-Motion to Normal Speed Video Converter",
     short: "Slow-mo to normal speed",
     tagline: "Restore real time to a slow-motion clip — evenly retimed so no judder is introduced, with optional shake reduction — in your browser",
@@ -776,13 +798,14 @@ export const TOOLS: ToolDef[] = [
       { q: "What happens to the audio?", a: "It is removed. Slow-motion clips usually have no usable sound, and speeding audio up 4–8× only produces noise." },
     ],
     examples: [],
-    related: ["image/converter", "image/gif-maker", "image/qr-scanner"],
+    related: ["media/converter", "media/gif-maker", "media/qr-scanner"],
     aliases: ["slow motion converter", "unslow", "video speed", "speed up video", "stabilize video", "deshake"],
     added: "2026-09-16",
   },
   {
     slug: "qr-scanner",
-    category: "image",
+    category: "media",
+    group: "qr",
     title: "QR Code & Barcode Scanner",
     short: "QR & barcode scanner",
     tagline: "Scan QR codes and barcodes — camera or image, every code at once",
@@ -818,13 +841,14 @@ export const TOOLS: ToolDef[] = [
       { q: "Can I read a QR code from a screenshot?", a: "Yes — click Image to browse, drag and drop a file onto the tool, or paste an image from your clipboard with Ctrl/Cmd+V." },
     ],
     examples: [],
-    related: ["generators/qr-code", "image/converter"],
+    related: ["media/qr-code", "media/converter"],
     aliases: ["qr reader", "barcode reader", "read qr code", "decode qr", "qr code decoder", "wifi qr reader", "ean reader", "multi qr scanner"],
     added: "2026-08-06",
   },
   {
     slug: "comic-reader",
-    category: "image",
+    category: "files",
+    group: "readers",
     title: "CBR / CBZ Comic Reader",
     short: "Comic Reader",
     tagline: "Open and read comic book archives right in your browser",
@@ -860,13 +884,14 @@ export const TOOLS: ToolDef[] = [
       { q: "What's the difference between CBR and CBZ?", a: "Both are ordinary archives of images renamed with a comic extension: CBZ is a ZIP file, CBR is a RAR file (CB7 is 7-Zip, CBT is TAR). This reader opens all of them the same way." },
     ],
     examples: [],
-    related: ["image/converter", "image/gif-maker", "image/qr-scanner"],
+    related: ["media/converter", "media/gif-maker", "media/qr-scanner"],
     aliases: ["comic reader", "cbr", "cbz", "comic viewer", "read comics", "manga viewer", "comic book archive"],
     added: "2026-08-20",
   },
   {
     slug: "hash",
     category: "crypto",
+    group: "hashing",
     title: "Hash Generator",
     tagline: "MD5, SHA-1, SHA-256/512, SHA-3 and Keccak-256 — instantly",
     description:
@@ -885,12 +910,13 @@ export const TOOLS: ToolDef[] = [
     examples: [
       { label: "Hash “hello”", query: "i=hello" },
     ],
-    related: ["text/eip55-checksum", "generators/uuid"],
+    related: ["crypto/eip55-checksum", "generators/uuid"],
     aliases: ["md5 generator", "sha256 generator", "checksum tool"],
   },
   {
     slug: "uuid",
     category: "generators",
+    group: "ids",
     title: "UUID & NanoID Generator",
     short: "UUID & NanoID",
     tagline: "Generate UUID v4, UUID v7 and NanoID in bulk",
@@ -911,12 +937,13 @@ export const TOOLS: ToolDef[] = [
       { label: "10 UUID v7s", query: "kind=uuid-v7&n=10" },
       { label: "5 NanoIDs", query: "kind=nanoid&n=5" },
     ],
-    related: ["crypto/hash", "generators/qr-code"],
+    related: ["crypto/hash", "media/qr-code"],
     aliases: ["guid", "id generator", "random id"],
   },
   {
     slug: "timestamp",
     category: "time",
+    group: "dates",
     title: "Unix Timestamp Converter",
     short: "Unix Timestamp",
     tagline: "Convert Unix epoch time to dates and back",
@@ -942,6 +969,7 @@ export const TOOLS: ToolDef[] = [
   {
     slug: "converter",
     category: "color",
+    group: "color",
     title: "Color Converter",
     tagline: "Convert between HEX, RGB, HSL and OKLCH with contrast",
     description:
@@ -961,12 +989,13 @@ export const TOOLS: ToolDef[] = [
       { label: "Convert tomato", query: "c=tomato" },
       { label: "Convert #c8f135", query: "c=%23c8f135" },
     ],
-    related: ["image/converter", "text/transform"],
+    related: ["media/converter", "text/transform"],
     aliases: ["hex rgb hsl", "css color converter"],
   },
   {
     slug: "palette",
     category: "color",
+    group: "color",
     title: "Color Palette Generator",
     short: "Palette Generator",
     tagline: "Build palettes in OKLCH — harmonies, tint & shade scales, random palettes with locks, or colours pulled from an image — and export as CSS, Tailwind, SCSS or JSON",
@@ -1004,13 +1033,14 @@ export const TOOLS: ToolDef[] = [
       { label: "Tints and shades of a blue", query: "m=scale&base=%231f4fd6" },
       { label: "A saved random palette", query: "m=random&c=%23e07a5f%2C%233d405b%2C%2381b29a%2C%23f2cc8f%2C%23f4f1de" },
     ],
-    related: ["color/converter", "image/converter", "text/transform"],
+    related: ["color/converter", "media/converter", "text/transform"],
     aliases: ["colour palette", "color scheme", "swatches", "tailwind colors", "coolors alternative"],
     added: "2026-09-16",
   },
   {
     slug: "diff",
     category: "web",
+    group: "dev",
     title: "Diff Checker",
     short: "Diff",
     tagline: "Compare text by line, word or character — unified or side by side — and export or apply patches",
@@ -1053,7 +1083,8 @@ export const TOOLS: ToolDef[] = [
   },
   {
     slug: "qr-code",
-    category: "generators",
+    category: "media",
+    group: "qr",
     title: "QR Code Generator",
     tagline: "Create QR codes from URLs and text, download PNG or SVG",
     description:
@@ -1072,13 +1103,14 @@ export const TOOLS: ToolDef[] = [
     examples: [
       { label: "QR for a URL", query: "i=https%3A%2F%2Fbench.bozmoz.com&ec=M" },
     ],
-    related: ["image/qr-scanner", "generators/uuid", "text/url-encode"],
+    related: ["media/qr-scanner", "generators/uuid", "text/url-encode"],
     aliases: ["qr generator", "make qr code"],
   },
 
   {
     slug: "tgs",
-    category: "image",
+    category: "media",
+    group: "animation",
     title: "TGS Sticker Viewer & Editor",
     short: "TGS Stickers",
     tagline: "Preview, recolor and convert Telegram stickers — right in your browser",
@@ -1116,7 +1148,7 @@ export const TOOLS: ToolDef[] = [
       { q: "Does it play regular Lottie files too?", a: "Yes — plain Lottie .json and .lottie (dotLottie) files open the same way, so it doubles as a local Lottie previewer and Lottie-to-GIF converter." },
     ],
     examples: [],
-    related: ["image/gif-maker", "image/converter", "text/gzip", "files/unzip"],
+    related: ["media/gif-maker", "media/converter", "text/gzip", "files/unzip"],
     aliases: ["tgs", "telegram sticker", "lottie", "sticker viewer", "sticker converter", "animated sticker", "bodymovin viewer", "tgs player"],
     added: "2026-08-20",
   },
@@ -1125,6 +1157,7 @@ export const TOOLS: ToolDef[] = [
   {
     slug: "unzip",
     category: "files",
+    group: "archives",
     title: "Archive Extractor",
     tagline: "Unzip ZIP, RAR, 7z, TAR and GZ archives in your browser",
     description:
@@ -1158,13 +1191,14 @@ export const TOOLS: ToolDef[] = [
       { q: "Is there a size limit?", a: "No fixed limit, but everything happens in your browser's memory — very large archives (multiple GB) may be slow or fail depending on your device." },
     ],
     examples: [],
-    related: ["files/zip", "text/gzip", "image/comic-reader"],
+    related: ["files/zip", "text/gzip", "files/comic-reader"],
     aliases: ["unzip", "unrar", "un7z", "extract archive", "open zip", "zip extractor", "rar extractor", "tar extractor", "iso extractor", "decompress file"],
     added: "2026-08-20",
   },
   {
     slug: "zip",
     category: "files",
+    group: "archives",
     title: "Archive Creator",
     tagline: "Make ZIP or TAR.GZ archives from your files — no uploads",
     description:
@@ -1194,7 +1228,7 @@ export const TOOLS: ToolDef[] = [
       { q: "Is there a size limit?", a: "ZIP output is capped at the format's 4 GB (non-ZIP64) limit; in practice browser memory is the real constraint for multi-gigabyte inputs." },
     ],
     examples: [{ label: "Create a TAR.GZ", query: "fmt=tgz" }],
-    related: ["files/unzip", "text/gzip", "image/converter"],
+    related: ["files/unzip", "text/gzip", "media/converter"],
     aliases: ["zip", "make archive", "tar creator", "tgz", "compress to zip", "file archiver", "bundle files"],
     added: "2026-08-20",
   },
@@ -1203,6 +1237,7 @@ export const TOOLS: ToolDef[] = [
   {
     slug: "date-converter",
     category: "time",
+    group: "dates",
     title: "Date Converter — Formats, Calendars & Timezones",
     short: "Date Converter",
     tagline: "Convert dates across formats, world calendars and timezones",
@@ -1241,6 +1276,7 @@ export const TOOLS: ToolDef[] = [
   {
     slug: "day-calculator",
     category: "time",
+    group: "dates",
     title: "Day Calculator",
     tagline: "Days between dates, date math and age",
     description:
@@ -1265,6 +1301,7 @@ export const TOOLS: ToolDef[] = [
   {
     slug: "cron",
     category: "time",
+    group: "schedules",
     title: "Cron Expression Parser & Builder",
     short: "Cron",
     tagline: "Explain any cron schedule and build one by clicking",
@@ -1307,6 +1344,7 @@ export const TOOLS: ToolDef[] = [
   {
     slug: "earth-sun-moon",
     category: "time",
+    group: "sky",
     title: "Earth, Sun & Moon Simulator",
     short: "Earth, Sun & Moon",
     tagline: "Turn the globe and the calendar to see day and night, the seasons, and where the Sun and Moon are for any place",
@@ -1352,6 +1390,7 @@ export const TOOLS: ToolDef[] = [
   {
     slug: "sun-earth-moon-scale",
     category: "time",
+    group: "sky",
     title: "Sun, Earth & Moon to Scale",
     short: "Sun–Earth–Moon scale",
     tagline: "See the real sizes, distances and spins of the Sun, Earth and Moon — zoom from the whole orbit down to a single turning globe",
@@ -1395,6 +1434,7 @@ export const TOOLS: ToolDef[] = [
   {
     slug: "password",
     category: "generators",
+    group: "ids",
     title: "Password Generator",
     tagline: "Strong random passwords and passphrases",
     description:
@@ -1419,6 +1459,7 @@ export const TOOLS: ToolDef[] = [
   {
     slug: "random",
     category: "generators",
+    group: "random",
     title: "Random Generator",
     tagline: "Random numbers, strings, bytes, dice and coins",
     description:
@@ -1443,6 +1484,7 @@ export const TOOLS: ToolDef[] = [
   {
     slug: "lucky-draw",
     category: "generators",
+    group: "random",
     title: "Lucky Draw / Random Picker",
     short: "Lucky Draw",
     tagline: "Pick random winners from a list",
@@ -1467,6 +1509,7 @@ export const TOOLS: ToolDef[] = [
   {
     slug: "converter",
     category: "audio",
+    group: "files",
     title: "Audio Converter",
     short: "Audio converter",
     tagline: "Convert MP3, WAV, FLAC, AAC and Opus in your browser — with bitrate, trim, normalise and tag options",
@@ -1490,12 +1533,13 @@ export const TOOLS: ToolDef[] = [
       { label: "WAV, 24-bit, 48 kHz", query: "fmt=wav&bd=pcm-s24&sr=48000" },
       { label: "Opus for the web", query: "fmt=ogg&br=96" },
     ],
-    related: ["audio/bitrate", "image/converter", "image/slow-mo"],
+    related: ["audio/bitrate", "media/converter", "media/slow-mo"],
     aliases: ["mp3 to wav", "wav to flac", "m4a converter", "ogg to mp3", "webm to mp3", "music converter"],
   },
   {
     slug: "note-frequency",
     category: "audio",
+    group: "music",
     title: "Note ↔ Frequency ↔ MIDI Converter",
     short: "Note ↔ frequency",
     tagline: "Any note, frequency or MIDI number to the other two — with cents, tuning and a piano table",
@@ -1523,6 +1567,7 @@ export const TOOLS: ToolDef[] = [
   {
     slug: "bpm",
     category: "audio",
+    group: "music",
     title: "BPM to Milliseconds & Delay Time Calculator",
     short: "BPM ↔ ms",
     tagline: "Delay and LFO times for every note value, tap tempo, bars ↔ seconds and tempo-change math",
@@ -1549,6 +1594,7 @@ export const TOOLS: ToolDef[] = [
   {
     slug: "transpose",
     category: "audio",
+    group: "music",
     title: "Chord & Key Transposer",
     short: "Transpose chords",
     tagline: "Move a chord sheet to any key, pick sharps or flats, add a capo, and see the scale and diatonic chords",
@@ -1576,6 +1622,7 @@ export const TOOLS: ToolDef[] = [
   {
     slug: "decibel",
     category: "audio",
+    group: "music",
     title: "Decibel Converter",
     short: "Decibels",
     tagline: "dB to amplitude and power ratios, dBu/dBV/volts, bit-depth dynamic range and SPL over distance",
@@ -1603,6 +1650,7 @@ export const TOOLS: ToolDef[] = [
   {
     slug: "pitch-ratio",
     category: "audio",
+    group: "music",
     title: "Semitones, Cents & Pitch Ratio Converter",
     short: "Semitones ↔ cents",
     tagline: "Semitones ↔ cents ↔ frequency ratio ↔ playback speed, interval names and sample-rate pitch shifts",
@@ -1631,6 +1679,7 @@ export const TOOLS: ToolDef[] = [
   {
     slug: "bitrate",
     category: "audio",
+    group: "files",
     title: "Audio Bitrate & File Size Calculator",
     short: "Audio bitrate & size",
     tagline: "PCM bitrate from sample rate, bit depth and channels; file size from bitrate and duration; and back",
@@ -1662,6 +1711,7 @@ export const TOOLS: ToolDef[] = [
   {
     slug: "ecdsa",
     category: "crypto",
+    group: "hashing",
     title: "ECDSA Sign & Verify",
     tagline: "Generate keys, sign messages and verify signatures",
     description:
@@ -1678,12 +1728,13 @@ export const TOOLS: ToolDef[] = [
       { q: "Which curves are supported?", a: "P-256 (default), P-384 and P-521, paired with SHA-256/384/512 hashing." },
     ],
     examples: [],
-    related: ["crypto/hash", "text/eip55-checksum"],
+    related: ["crypto/hash", "crypto/eip55-checksum"],
     aliases: ["digital signature", "sign and verify", "elliptic curve signature"],
   },
   {
     slug: "wallet",
     category: "crypto",
+    group: "ethereum",
     title: "Crypto Wallet Generator",
     short: "Wallet Generator",
     tagline: "Ethereum HD wallets, BIP39 mnemonics and addresses",
@@ -1702,7 +1753,7 @@ export const TOOLS: ToolDef[] = [
       { q: "Can I import an existing seed phrase?", a: "Yes — paste a valid BIP39 mnemonic into the phrase field to view its derived addresses. It stays in your browser." },
     ],
     examples: [],
-    related: ["crypto/ecdsa", "text/eip55-checksum", "crypto/hash"],
+    related: ["crypto/ecdsa", "crypto/eip55-checksum", "crypto/hash"],
     aliases: ["seed phrase generator", "eth wallet", "mnemonic generator"],
   },
 
@@ -1710,6 +1761,7 @@ export const TOOLS: ToolDef[] = [
   {
     slug: "loan-simulator",
     category: "math",
+    group: "calculators",
     title: "Loan & Mortgage Simulator",
     short: "Loan Simulator",
     tagline: "Payments, interest, repayment types and amortization schedule",
@@ -1736,6 +1788,7 @@ export const TOOLS: ToolDef[] = [
   {
     slug: "base-converter",
     category: "math",
+    group: "converters",
     title: "Number Base Converter",
     short: "Number Base Converter",
     tagline: "Convert between binary, octal, decimal, hex and any base",
@@ -1761,6 +1814,7 @@ export const TOOLS: ToolDef[] = [
   {
     slug: "unit-converter",
     category: "math",
+    group: "converters",
     title: "Unit Converter",
     tagline: "Length, mass, temperature, volume, speed and more",
     description:
@@ -1787,6 +1841,7 @@ export const TOOLS: ToolDef[] = [
   {
     slug: "ascii-generator",
     category: "text",
+    group: "characters",
     title: "ASCII Table & Character Codes",
     short: "ASCII Table",
     tagline: "ASCII reference plus text ⇄ codes in many formats",
@@ -1812,6 +1867,7 @@ export const TOOLS: ToolDef[] = [
   {
     slug: "mermaid",
     category: "web",
+    group: "editors",
     title: "Mermaid Diagram Editor",
     short: "Mermaid editor",
     tagline: "Write Mermaid, see the diagram as you type, then print it or export SVG, PNG and Markdown",
@@ -1835,12 +1891,13 @@ export const TOOLS: ToolDef[] = [
       { label: "Hand-drawn forest theme", query: "theme=forest&look=hand" },
       { label: "Preview only", query: "v=preview" },
     ],
-    related: ["text/markdown", "web/diff", "json/viewer"],
+    related: ["web/markdown", "web/diff", "json/viewer"],
     aliases: ["mermaid live", "mermaid chart", "diagram editor", "flowchart online", "uml online"],
   },
   {
     slug: "regex",
     category: "web",
+    group: "dev",
     title: "Regex Tester",
     short: "Regex",
     tagline: "Test JavaScript regular expressions live — highlighted matches, capture groups, replace preview and a cheat sheet",
@@ -1884,6 +1941,7 @@ export const TOOLS: ToolDef[] = [
   {
     slug: "jwt",
     category: "web",
+    group: "dev",
     title: "JWT Decoder, Verifier & Encoder",
     short: "JWT",
     tagline: "Decode a JSON Web Token, check its expiry, verify the signature with a secret or public key, or sign a new one",
@@ -1927,6 +1985,7 @@ export const TOOLS: ToolDef[] = [
   {
     slug: "short-url",
     category: "web",
+    group: "dev",
     title: "URL Shortener",
     short: "URL shortener",
     tagline: "Turn a URL of up to 10,000 characters into a short link — best-effort, made for handing off, not forever",
@@ -1960,7 +2019,7 @@ export const TOOLS: ToolDef[] = [
     examples: [
       { label: "Shorten a Bench deep link", query: "i=https%3A%2F%2Fbench.bozmoz.com%2Ftext%2Ftransform%3Ft%3Dbase64-encode%26i%3DHello%252C%2Bworld" },
     ],
-    related: ["generators/qr-code", "text/url-encode", "text/gzip"],
+    related: ["media/qr-code", "text/url-encode", "text/gzip"],
     aliases: ["link shortener", "shorten link", "short url", "tinyurl", "bitly alternative"],
     added: "2026-09-16",
   },
@@ -1978,9 +2037,32 @@ export function getToolById(id: string): ToolDef | undefined {
   return BY_ID.get(id);
 }
 
+/** The tools of a category in tree order: by the category's group order, then registry order. */
 export function getToolsByCategory(category: CategorySlug): ToolDef[] {
-  return TOOLS.filter((t) => t.category === category);
+  return getCategoryTree(category).flatMap((g) => g.tools);
 }
+
+/** The second level of the tree: each non-empty group of a category with its tools. */
+export function getCategoryTree(category: CategorySlug): { group: ToolGroup; tools: ToolDef[] }[] {
+  const cat = getCategory(category);
+  if (!cat) return [];
+  return cat.groups.map((group) => ({ group, tools: TOOLS.filter((t) => t.category === category && t.group === group.id) })).filter((g) => g.tools.length > 0);
+}
+
+/** The tree is data, so a slip (unknown group, duplicate id, stale related id) must fail the build, not render a hole. */
+function assertRegistry() {
+  const ids = new Set<string>();
+  for (const t of TOOLS) {
+    const id = toolId(t);
+    if (ids.has(id)) throw new Error(`registry: duplicate tool id ${id}`);
+    ids.add(id);
+    const cat = getCategory(t.category);
+    if (!cat) throw new Error(`registry: ${id} names unknown category ${t.category}`);
+    if (!cat.groups.some((g) => g.id === t.group)) throw new Error(`registry: ${id} names unknown group ${t.group} in ${t.category}`);
+  }
+  for (const t of TOOLS) for (const r of t.related ?? []) if (!ids.has(r)) throw new Error(`registry: ${toolId(t)} relates to unknown tool ${r}`);
+}
+assertRegistry();
 
 /** All `{ category, slug }` pairs for `generateStaticParams`. */
 export function allToolParams(): { category: string; tool: string }[] {

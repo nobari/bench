@@ -53,7 +53,7 @@ function indexOf(tools: ToolDef[]): Index[] {
     const aliases = (tool.aliases ?? []).map(norm);
     const keywords = tool.keywords.map(norm);
     const tagline = norm(tool.tagline);
-    return { tool, title, short, slug: norm(tool.slug), aliases, keywords, tagline, haystack: [title, short, norm(tool.slug), ...aliases, ...keywords, tagline, norm(tool.category)].join(" | ") };
+    return { tool, title, short, slug: norm(tool.slug), aliases, keywords, tagline, haystack: [title, short, norm(tool.slug), ...aliases, ...keywords, tagline, norm(tool.category), norm(tool.group)].join(" | ") };
   });
   cache = { tools, index };
   return index;

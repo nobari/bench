@@ -1,6 +1,6 @@
 import { SITE, absoluteUrl } from "@/lib/site";
 import { CATEGORIES } from "@/lib/tools/categories";
-import { getToolsByCategory } from "@/lib/tools/registry";
+import { getCategoryTree } from "@/lib/tools/registry";
 
 /**
  * llms.txt — a concise, machine-readable index for AI answer engines.
@@ -18,16 +18,22 @@ export function GET() {
   lines.push("");
 
   for (const cat of CATEGORIES) {
-    const tools = getToolsByCategory(cat.slug);
-    if (!tools.length) continue;
+    const tree = getCategoryTree(cat.slug);
+    if (!tree.length) continue;
     lines.push(`## ${cat.name}`);
     lines.push("");
-    for (const t of tools) {
-      lines.push(
-        `- [${t.title}](${absoluteUrl(`/${t.category}/${t.slug}`)}): ${t.description}`,
-      );
+    for (const { group, tools } of tree) {
+      if (tree.length > 1) {
+        lines.push(`### ${group.name}`);
+        lines.push("");
+      }
+      for (const t of tools) {
+        lines.push(
+          `- [${t.title}](${absoluteUrl(`/${t.category}/${t.slug}`)}): ${t.description}`,
+        );
+      }
+      lines.push("");
     }
-    lines.push("");
   }
 
   lines.push("## More");

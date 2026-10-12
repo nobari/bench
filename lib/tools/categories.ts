@@ -2,7 +2,7 @@ import {
   Music,
   Binary,
   Braces,
-  Image as ImageIcon,
+  Clapperboard,
   KeyRound,
   Sparkles,
   Clock,
@@ -17,6 +17,7 @@ import type { Category, CategorySlug } from "./types";
 export const CATEGORIES: Category[] = [
   {
     slug: "text",
+    groups: [{ id: "encoding", name: "Encoding" }, { id: "characters", name: "Case & characters" }, { id: "scripts", name: "Scripts & languages" }],
     name: "Text & Encoding",
     tagline: "Encode, decode, convert and reshape text",
     description:
@@ -26,6 +27,7 @@ export const CATEGORIES: Category[] = [
   },
   {
     slug: "json",
+    groups: [{ id: "json", name: "JSON" }],
     name: "JSON & Data",
     tagline: "Inspect, format and convert structured data",
     description:
@@ -34,16 +36,18 @@ export const CATEGORIES: Category[] = [
     accentVar: "--cat-json",
   },
   {
-    slug: "image",
-    name: "Image & Media",
-    tagline: "Build GIFs and convert images, locally",
+    slug: "media",
+    groups: [{ id: "images", name: "Images" }, { id: "animation", name: "GIFs & stickers" }, { id: "video", name: "Video" }, { id: "qr", name: "QR codes" }],
+    name: "Images & Video",
+    tagline: "Convert images, build GIFs and stickers, edit and tag video, make and scan QR codes — locally",
     description:
-      "Turn image sequences into optimized GIFs, convert between formats and resize — all processed in your browser with no uploads.",
-    icon: ImageIcon,
-    accentVar: "--cat-image",
+      "Convert and resize images, turn them into data URIs or GIFs, check Content Credentials, edit Telegram stickers, cut and grade 8K video, tag MP4s, fix slow-motion clips, and make or scan QR codes — all processed in your browser with no uploads.",
+    icon: Clapperboard,
+    accentVar: "--cat-media",
   },
   {
     slug: "audio",
+    groups: [{ id: "files", name: "Audio files" }, { id: "music", name: "Music math" }],
     name: "Audio & Music",
     tagline: "Convert audio files and do the music math, locally",
     description:
@@ -53,6 +57,7 @@ export const CATEGORIES: Category[] = [
   },
   {
     slug: "files",
+    groups: [{ id: "archives", name: "Archives" }, { id: "readers", name: "Readers" }],
     name: "Files & Archives",
     tagline: "Pack, unpack and read archives",
     description:
@@ -62,6 +67,7 @@ export const CATEGORIES: Category[] = [
   },
   {
     slug: "crypto",
+    groups: [{ id: "hashing", name: "Hashing & signatures" }, { id: "ethereum", name: "Ethereum" }],
     name: "Crypto & Hashing",
     tagline: "Hashes, checksums and tokens",
     description:
@@ -71,6 +77,7 @@ export const CATEGORIES: Category[] = [
   },
   {
     slug: "generators",
+    groups: [{ id: "ids", name: "Identifiers & passwords" }, { id: "random", name: "Randomness" }],
     name: "Generators",
     tagline: "UUIDs, IDs and mock data",
     description:
@@ -80,6 +87,7 @@ export const CATEGORIES: Category[] = [
   },
   {
     slug: "time",
+    groups: [{ id: "dates", name: "Dates & timestamps" }, { id: "schedules", name: "Schedules" }, { id: "sky", name: "Sky & astronomy" }],
     name: "Time & Date",
     tagline: "Timestamps, epochs and timezones",
     description:
@@ -89,6 +97,7 @@ export const CATEGORIES: Category[] = [
   },
   {
     slug: "color",
+    groups: [{ id: "color", name: "Color" }],
     name: "Color & Design",
     tagline: "Convert and inspect colors",
     description:
@@ -98,6 +107,7 @@ export const CATEGORIES: Category[] = [
   },
   {
     slug: "math",
+    groups: [{ id: "converters", name: "Converters" }, { id: "calculators", name: "Calculators" }],
     name: "Math & Units",
     tagline: "Convert numbers, units and run calculators",
     description:
@@ -107,6 +117,7 @@ export const CATEGORIES: Category[] = [
   },
   {
     slug: "web",
+    groups: [{ id: "editors", name: "Editors" }, { id: "dev", name: "Developer tools" }],
     name: "Web & Dev",
     tagline: "Everyday developer utilities",
     description:

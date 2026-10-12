@@ -160,7 +160,7 @@ export function ShortUrlWidget() {
                 <ExternalLink size={13} /> Open
               </a>
               <a
-                href={`/generators/qr-code?i=${encodeURIComponent(result.shortUrl)}`}
+                href={`/media/qr-code?i=${encodeURIComponent(result.shortUrl)}`}
                 className="inline-flex h-8 items-center gap-1.5 rounded-[var(--radius-sm)] border border-edge px-2.5 font-mono text-xs text-muted transition-colors hover:border-accent hover:text-accent"
               >
                 <QrCode size={13} /> QR

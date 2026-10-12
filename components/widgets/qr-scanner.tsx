@@ -375,7 +375,7 @@ export function QrScannerWidget() {
                       </a>
                     )}
                     <Link
-                      href={`/generators/qr-code?i=${encodeURIComponent(it.text)}`}
+                      href={`/media/qr-code?i=${encodeURIComponent(it.text)}`}
                       className="inline-flex h-9 flex-1 items-center justify-center gap-1.5 rounded-[var(--radius-sm)] border border-edge px-3 font-mono text-xs text-ink transition-colors hover:border-accent hover:text-accent"
                     >
                       <QrCode size={13} /> Make a QR of this

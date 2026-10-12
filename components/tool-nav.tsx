@@ -4,59 +4,121 @@ import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Menu, PanelLeftClose, PanelLeftOpen, X } from "lucide-react";
+import { ChevronRight, Menu, PanelLeftClose, PanelLeftOpen, X } from "lucide-react";
 import { CATEGORIES } from "@/lib/tools/categories";
-import { TOOLS } from "@/lib/tools/registry";
+import { getCategoryTree } from "@/lib/tools/registry";
 import { toolShortTitle } from "@/lib/tools/types";
 import { Wordmark } from "@/components/logo";
 import { cn } from "@/lib/utils";
 
-/** Every category and every tool — the index that stays in view on desktop. */
+const NAV_KEY = "bench:nav-collapsed";
+const CLOSED_KEY = "bench:nav-closed";
+
+function readClosed(): string[] {
+  try {
+    const v = JSON.parse(localStorage.getItem(CLOSED_KEY) ?? "[]");
+    return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+/** The whole tree — category → group → tool — with each category folding; the category you are in stays open. */
 function NavList({ pathname, onNavigate }: { pathname: string; onNavigate?: () => void }) {
+  const [closed, setClosed] = useState<string[]>([]);
+  const current = pathname.split("/")[1] ?? "";
+
+  useEffect(() => {
+    const remembered = readClosed();
+    if (remembered.length) queueMicrotask(() => setClosed(remembered));
+  }, []);
+
+  const toggle = (slug: string) => {
+    setClosed((c) => {
+      const next = c.includes(slug) ? c.filter((x) => x !== slug) : [...c, slug];
+      try {
+        localStorage.setItem(CLOSED_KEY, JSON.stringify(next));
+      } catch {
+        /* storage unavailable */
+      }
+      return next;
+    });
+  };
+
   return (
     <nav aria-label="All tools" className="px-2 py-3">
       {CATEGORIES.map((cat) => {
-        const tools = TOOLS.filter((t) => t.category === cat.slug);
-        if (!tools.length) return null;
+        const tree = getCategoryTree(cat.slug);
+        if (!tree.length) return null;
         const Icon = cat.icon;
+        const count = tree.reduce((n, g) => n + g.tools.length, 0);
+        const here = current === cat.slug;
         const catActive = pathname === `/${cat.slug}`;
+        const open = here || !closed.includes(cat.slug);
+        const grouped = tree.length > 1;
         return (
-          <div key={cat.slug} className="mb-3">
-            <Link
-              href={`/${cat.slug}`}
-              onClick={onNavigate}
-              aria-current={catActive ? "page" : undefined}
-              className={cn(
-                "flex items-center gap-2 rounded-[var(--radius-sm)] px-2 py-1.5 text-[12px] font-semibold",
-                catActive ? "bg-raised text-ink" : "text-muted hover:text-ink",
-              )}
-            >
-              <Icon size={13} style={{ color: `var(${cat.accentVar})` }} />
-              <span className="truncate">{cat.name}</span>
-            </Link>
-            <ul>
-              {tools.map((t) => {
-                const href = `/${t.category}/${t.slug}`;
-                const active = pathname === href;
-                return (
-                  <li key={t.slug}>
-                    <Link
-                      href={href}
-                      onClick={onNavigate}
-                      aria-current={active ? "page" : undefined}
-                      className={cn(
-                        "block truncate rounded-[var(--radius-sm)] py-[5px] pl-7 pr-2 text-[13px]",
-                        active
-                          ? "bg-accent-soft font-medium text-accent"
-                          : "text-muted hover:bg-raised hover:text-ink",
-                      )}
-                    >
-                      {toolShortTitle(t)}
-                    </Link>
-                  </li>
-                );
-              })}
-            </ul>
+          <div key={cat.slug} className="mb-1" data-nav-category={cat.slug} data-open={open ? "true" : "false"}>
+            <div className={cn("flex items-center rounded-[var(--radius-sm)]", catActive ? "bg-raised" : "hover:bg-raised")}>
+              <button
+                type="button"
+                onClick={() => toggle(cat.slug)}
+                disabled={here}
+                aria-expanded={open}
+                aria-label={`${open ? "Collapse" : "Expand"} ${cat.name}`}
+                title={here ? undefined : open ? "Collapse" : "Expand"}
+                className="flex h-8 w-6 shrink-0 items-center justify-center text-faint hover:text-ink disabled:hover:text-faint"
+              >
+                <ChevronRight size={12} className={cn("transition-transform duration-150", open && "rotate-90")} />
+              </button>
+              <Link
+                href={`/${cat.slug}`}
+                onClick={onNavigate}
+                aria-current={catActive ? "page" : undefined}
+                className={cn("flex min-w-0 flex-1 items-center gap-2 py-1.5 pr-2 text-[12px] font-semibold", catActive ? "text-ink" : "text-muted hover:text-ink")}
+              >
+                <Icon size={13} style={{ color: `var(${cat.accentVar})` }} />
+                <span className="truncate">{cat.name}</span>
+                <span className="ml-auto pl-2 text-[11px] font-normal tabular text-faint">{count}</span>
+              </Link>
+            </div>
+            {open && (
+              <div className="mb-2 ml-[11px] border-l border-edge pl-1.5">
+                {tree.map(({ group, tools }) => (
+                  <div key={group.id} data-nav-group={group.id}>
+                    {grouped && (
+                      <Link
+                        href={`/${cat.slug}#${group.id}`}
+                        onClick={onNavigate}
+                        className="readout block truncate px-2 pb-0.5 pt-2 text-[10px] text-faint hover:text-muted"
+                      >
+                        {group.name}
+                      </Link>
+                    )}
+                    <ul>
+                      {tools.map((t) => {
+                        const href = `/${t.category}/${t.slug}`;
+                        const active = pathname === href;
+                        return (
+                          <li key={t.slug}>
+                            <Link
+                              href={href}
+                              onClick={onNavigate}
+                              aria-current={active ? "page" : undefined}
+                              className={cn(
+                                "block truncate rounded-[var(--radius-sm)] py-[5px] pl-2 pr-2 text-[13px]",
+                                active ? "bg-accent-soft font-medium text-accent" : "text-muted hover:bg-raised hover:text-ink",
+                              )}
+                            >
+                              {toolShortTitle(t)}
+                            </Link>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         );
       })}
@@ -64,14 +126,12 @@ function NavList({ pathname, onNavigate }: { pathname: string; onNavigate?: () =
   );
 }
 
-const NAV_KEY = "bench:nav-collapsed";
-
 /** Icon-only rail shown while the sidebar is collapsed: one link per category. */
 function NavRail({ pathname }: { pathname: string }) {
   return (
     <nav aria-label="Tool categories" className="flex flex-col items-center gap-1 px-1.5 py-2">
       {CATEGORIES.map((cat) => {
-        if (!TOOLS.some((t) => t.category === cat.slug)) return null;
+        if (!getCategoryTree(cat.slug).length) return null;
         const Icon = cat.icon;
         const active = pathname === `/${cat.slug}` || pathname.startsWith(`/${cat.slug}/`);
         return (
@@ -91,7 +151,7 @@ function NavRail({ pathname }: { pathname: string }) {
   );
 }
 
-/** Desktop sidebar: the full index, collapsible to an icon rail (remembered per browser). */
+/** Desktop sidebar: the full tree, collapsible to an icon rail (remembered per browser). */
 export function ToolNav({ className }: { className?: string }) {
   const pathname = usePathname();
   const [collapsed, setCollapsed] = useState(false);

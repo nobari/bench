@@ -28,7 +28,9 @@ all metadata. Adding a tool is mostly **data entry plus one client component**.
 5. **Register the tool**: append a `ToolDef` to `lib/tools/registry.ts`.
 
 Then `pnpm lint && pnpm build`, and verify in the browser. Routes, palette,
-sitemap, llms.txt, JSON-LD and related-tool links update automatically.
+sitemap, llms.txt, JSON-LD and related-tool links update automatically. The
+registry asserts at load that every tool names a known group and every `related`
+id exists, so a slip fails the build.
 
 If your tool is just another **text transform**, you may not need steps 2–4 at
 all — see [Shortcut: a new text transform](#shortcut-a-new-text-transform).
@@ -39,11 +41,14 @@ all — see [Shortcut: a new text transform](#shortcut-a-new-text-transform).
 
 Categories live in `lib/tools/categories.ts` as a `Category[]` (slug, name,
 tagline, description, `icon`, `accentVar`). The slug is the first URL segment
-(`/<category>/<slug>`). Current slugs: `text`, `json`, `image`, `crypto`,
-`generators`, `time`, `color`, `web`.
+(`/<category>/<slug>`). Current slugs: `text`, `json`, `media`, `audio`, `files`,
+`crypto`, `generators`, `time`, `color`, `math`, `web`. Each category also declares
+ordered `groups` (`{ id, name }`), the second level of the tool tree: every tool
+names one with `group`, and the sidebar, category pages, ⌘K palette, breadcrumbs
+and llms.txt render category → group → tool from that.
 
 **To add a new category:**
-1. Add a `Category` object (pick a `lucide-react` icon).
+1. Add a `Category` object (pick a `lucide-react` icon) with at least one group.
 2. Choose an `accentVar` like `--cat-foo` and define it in `app/globals.css`
    under `:root` (a hex color). This drives the per-category accent.
 3. The category landing page, footer and nav pick it up automatically.
@@ -184,6 +189,7 @@ Append a `ToolDef`. This is the SEO/GEO surface — write it well:
 {
   slug: "my-tool",                 // unique within its category; the URL segment
   category: "web",
+  group: "dev",                    // one of the category's groups (lib/tools/categories.ts)
   title: "My Tool",                // H1 + <title>
   tagline: "One-line pitch shown on cards and under the H1",
   description: "~150-char meta description / GEO answer opener.",
@@ -245,9 +251,17 @@ Manual checks:
 - For correctness-critical tools (hashes, checksums, conversions), verify
   against a known value.
 
+## Moving or renaming a tool or category
+
+URLs are the registry's `category/slug`, and they get indexed and shared. If a
+tool changes category or a category slug changes, add the old → new path to
+`lib/tools/moved.ts`: `next.config.ts` turns that list into permanent redirects
+(query strings pass through), so old links keep working. Update `related` ids and
+any `href` in widgets that point at the moved tool.
+
 ## Gotchas
 
-- **Slug uniqueness** is per category. `image/converter` and `color/converter`
+- **Slug uniqueness** is per category. `media/converter` and `color/converter`
   coexist fine; two tools in the same category can't share a slug.
 - **Unknown routes 404** — `dynamicParams = false` on the `[category]` and
   `[category]/[tool]` routes; only registered tools render.

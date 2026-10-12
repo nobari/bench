@@ -59,7 +59,7 @@
   /* Category hues (icon tints). */
   --cat-text: #c2410c;
   --cat-json: #b45309;
-  --cat-image: #be185d;
+  --cat-media: #be185d;
   --cat-audio: #a21caf;
   --cat-files: #0e7490;
   --cat-crypto: #0f766e;
@@ -120,7 +120,7 @@ html[data-nav="collapsed"] .tool-nav {
 
     --cat-text: #fb923c;
     --cat-json: #fbbf24;
-    --cat-image: #f472b6;
+    --cat-media: #f472b6;
     --cat-audio: #e879f9;
     --cat-files: #22d3ee;
     --cat-crypto: #2dd4bf;

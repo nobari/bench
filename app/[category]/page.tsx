@@ -3,7 +3,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ChevronRight } from "lucide-react";
 import { CATEGORIES, getCategory } from "@/lib/tools/categories";
-import { getToolsByCategory } from "@/lib/tools/registry";
+import { getCategoryTree } from "@/lib/tools/registry";
 import { ToolCard } from "@/components/tool-card";
 import { SITE, absoluteUrl } from "@/lib/site";
 import { breadcrumbJsonLd, jsonLdScript, toolItemListJsonLd } from "@/lib/seo";
@@ -39,7 +39,9 @@ export default async function CategoryPage({ params }: { params: Promise<Params>
   const cat = getCategory(category);
   if (!cat) notFound();
 
-  const tools = getToolsByCategory(cat.slug);
+  const tree = getCategoryTree(cat.slug);
+  const tools = tree.flatMap((g) => g.tools);
+  const grouped = tree.length > 1;
   const Icon = cat.icon;
 
   return (
@@ -78,13 +80,25 @@ export default async function CategoryPage({ params }: { params: Promise<Params>
       <p className="mt-1.5 max-w-2xl text-[14px] text-muted">{cat.description}</p>
 
       {tools.length ? (
-        <ul className="-mx-2.5 mt-5 max-w-3xl">
-          {tools.map((t) => (
-            <li key={t.slug}>
-              <ToolCard tool={t} />
-            </li>
+        <div className="mt-5 max-w-3xl space-y-5">
+          {tree.map(({ group, tools: members }) => (
+            <section key={group.id} id={group.id} className="scroll-mt-16" data-group={group.id}>
+              {grouped && (
+                <h2 className="readout flex items-center gap-2 border-b border-edge pb-1.5">
+                  {group.name}
+                  <span className="tabular text-faint">{members.length}</span>
+                </h2>
+              )}
+              <ul className="-mx-2.5 mt-1">
+                {members.map((t) => (
+                  <li key={t.slug}>
+                    <ToolCard tool={t} />
+                  </li>
+                ))}
+              </ul>
+            </section>
           ))}
-        </ul>
+        </div>
       ) : (
         <p className="mt-6 text-[13px] text-muted">
           Nothing here yet.{" "}

@@ -4,7 +4,7 @@ import type { LucideIcon } from "lucide-react";
 export type CategorySlug =
   | "text"
   | "json"
-  | "image"
+  | "media"
   | "audio"
   | "crypto"
   | "generators"
@@ -14,9 +14,18 @@ export type CategorySlug =
   | "files"
   | "web";
 
+/** A sub-heading inside a category: the second level of the tool tree. */
+export interface ToolGroup {
+  /** Stable id, also the anchor on the category page (/<category>#<id>). */
+  id: string;
+  name: string;
+}
+
 export interface Category {
   slug: CategorySlug;
   name: string;
+  /** Ordered groups; every tool in the category names one of them. */
+  groups: ToolGroup[];
   /** One-line summary shown on cards and category landing. */
   tagline: string;
   /** Longer description for the category page + SEO. */
@@ -101,6 +110,8 @@ export interface ToolDef {
   /** Unique within its category; second URL segment. */
   slug: string;
   category: CategorySlug;
+  /** The group inside the category this tool is listed under (a `groups[].id` of the category). */
+  group: string;
   /** Human title, used as H1 and <title>. */
   title: string;
   /** Short name for navigation and lists; defaults to the title without a parenthetical. */
