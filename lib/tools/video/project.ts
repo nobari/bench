@@ -963,11 +963,14 @@ export function deserialize(json: string): Project | null {
   try {
     const p = JSON.parse(json) as Project;
     if (p?.version !== 1 || !Array.isArray(p.clips) || !p.media) return null;
-    // Until 1.12.0 one transition setting applied to every cut; carry it onto the cuts it covered.
+    // Until 1.12.0 one transition setting applied to every cut; carry it onto the cuts it covered. Projects saved since
+    // carry the export range key (added in the same release) and their transition setting is only the default for new
+    // cuts — stamping it on every cut again would add transitions the user never placed, on every reload.
     const legacy = (p.transition ?? {}) as { kind?: string; duration?: number };
     const known = TRANSITIONS.some((t) => t.kind === legacy.kind);
     const transition: Transition = { kind: known ? (legacy.kind as TransitionKind) : DEFAULT_TRANSITION.kind, duration: legacy.duration ?? DEFAULT_TRANSITION.duration };
-    const migrated = known && !p.clips.some((c) => c.transitionIn) ? applyTransitionToAll(p.clips, transition) : p.clips;
+    const perCutEra = !!p.export && "range" in p.export;
+    const migrated = known && !perCutEra && !p.clips.some((c) => c.transitionIn) ? applyTransitionToAll(p.clips, transition) : p.clips;
     const clips = migrated.map((c) => {
       const { introRole, introSeconds, ...rest } = c;
       const base = LUT_KINDS.includes(rest.grade?.lut) ? rest : { ...rest, grade: { ...rest.grade, lut: "none" as LutKind } };

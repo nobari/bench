@@ -79,6 +79,7 @@ import { Grader, MAX_AUDIBLE_SPEED, MIN_AUDIBLE_SPEED, buildProxy, drawOverlays,
 import { INTRO_STYLES, addSceneAt, buildIntro, describeIntro, drawIntroFx, hasIntro, introCandidates, introFrameAt, introLength, introRegion, introStyle, mainClips, moveScene, pickMoments, removeIntro, removeScene, restyleIntro, sceneSecondsFor, scoreMoments, setSceneSeconds, shiftAfterIntro, styledGrade } from "@/lib/tools/video/intro";
 import { ProjectStore, hasFileSystemAccess, AUTOSAVE_FILE, FRAMES_DIR, PROJECT_FILE, PROXY_DIR } from "@/lib/tools/video/store";
 import { cn } from "@/lib/utils";
+import { useUnsavedWork } from "@/lib/unsaved-work";
 
 const SEL = "h-8 rounded-[var(--radius-sm)] border border-edge bg-base px-2 pr-7 text-[13px] text-ink outline-none focus:border-accent";
 const INPUT = "h-8 w-full rounded-[var(--radius-sm)] border border-edge bg-base px-2 text-[13px] text-ink outline-none focus:border-accent";
@@ -143,6 +144,15 @@ function savePriors(profile: string, measured: SpeedPriors) {
   }
 }
 
+/** Holding Control skims the cuts: this many seconds before and after each one. */
+const SKIM_S = 3;
+/** What a navigation would abandon while a job runs. */
+const JOB_WORK: Record<Job["kind"], string> = {
+  export: "An export is running in the video editor; leaving now would abandon it.",
+  proxy: "Proxies are still rendering in the video editor; leaving now would abandon them.",
+  frame: "A frame is still being saved in the video editor.",
+  intro: "The intro is still being made in the video editor; leaving now would abandon it.",
+};
 /** Holding Space this long (or the first key repeat) switches the preview to double speed instead of toggling play. */
 const HOLD_MS = 250;
 /** Browsers refuse playback rates above 16× on a video element, and silence the sound above 4×. */
@@ -186,6 +196,7 @@ export function VideoEditorWidget() {
   const [playing, setPlaying] = useState(false);
   const [zoom, setZoom] = useState(1);
   const [job, setJob] = useState<Job | null>(null);
+  useUnsavedWork(job ? JOB_WORK[job.kind] : null);
   const [support, setSupport] = useState<{ hevc: boolean; avc: boolean } | null>(null);
   const [logo, setLogo] = useState<ImageBitmap | null>(null);
   const [dragOver, setDragOver] = useState(false);
@@ -216,6 +227,16 @@ export function VideoEditorWidget() {
   const spaceRef = useRef<{ timer: ReturnType<typeof setTimeout> | null; boosted: boolean; startedPlayback: boolean } | null>(null);
   // A hold doubles the set speed, up to the 16× that browsers allow a video element.
   const rate = Math.min(MAX_PREVIEW_RATE, speed * (boost ? 2 : 1));
+  const rateRef = useRef(rate);
+  useEffect(() => {
+    rateRef.current = rate;
+  }, [rate]);
+  // Holding Control skims the cuts: the last seconds of each clip and the first of the next, skipping the middle.
+  const [skim, setSkim] = useState(false);
+  const skimRef = useRef<{ startedPlayback: boolean; skipped: string | null } | null>(null);
+  // The frame the video element last showed: at a speed the decoder cannot keep up with, the clock would run ahead of
+  // the picture and the clip would seem to jump to the next one, so the rate is eased down to what is being shown.
+  const shownRef = useRef<{ mediaTime: number; at: number } | null>(null);
   const [frameMenu, setFrameMenu] = useState(false);
   // Intro: styled scene thumbnails (object URLs by clip id), the picker's settings, and where "Preview intro" stops.
   const [thumbs, setThumbs] = useState<Map<string, string>>(() => new Map());
@@ -492,6 +513,21 @@ export function VideoEditorWidget() {
     [togglePlay],
   );
   useEffect(() => () => endHold(false), [endHold]);
+  /** Control, held: skim the cuts until released; held while paused, the preview plays for the hold and parks again. */
+  const beginSkim = useCallback(() => {
+    if (skimRef.current) return;
+    skimRef.current = { startedPlayback: !playingRef.current, skipped: null };
+    setSkim(true);
+    if (!playingRef.current) togglePlay();
+  }, [togglePlay]);
+  const endSkim = useCallback(() => {
+    const k = skimRef.current;
+    if (!k) return;
+    skimRef.current = null;
+    setSkim(false);
+    if (k.startedPlayback) setPlaying(false);
+  }, []);
+  useEffect(() => () => endSkim(), [endSkim]);
 
   // Preview URL for a media id: the proxy if there is one, else the original — created on first use.
   const previewUrlFor = useCallback(
@@ -588,6 +624,8 @@ export function VideoEditorWidget() {
         const id = selectedTransitionRef.current;
         setProject((p) => ({ ...p, clips: setTransition(p.clips, id, null) }));
         setSelectedTransition(null);
+      } else if (e.key === "Control" && !inField(e)) {
+        if (!e.repeat) beginSkim();
       } else if (e.key === " " && !inField(e)) {
         e.preventDefault();
         // A tap toggles play on release; a hold (a quarter second, or the first key repeat) doubles the speed until release.
@@ -613,9 +651,13 @@ export function VideoEditorWidget() {
     };
     const onKeyUp = (e: KeyboardEvent) => {
       if (e.key === " ") endHold(true);
+      else if (e.key === "Control") endSkim();
     };
-    // Losing the window mid-hold must not leave the preview stuck at double speed.
-    const onBlur = () => endHold(false);
+    // Losing the window mid-hold must not leave the preview stuck at double speed or skimming.
+    const onBlur = () => {
+      endHold(false);
+      endSkim();
+    };
     window.addEventListener("keydown", onKey);
     window.addEventListener("keyup", onKeyUp);
     window.addEventListener("blur", onBlur);
@@ -625,7 +667,7 @@ export function VideoEditorWidget() {
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("keyup", onKeyUp);
     };
-  }, [store, undo, project, setProject, togglePlay, stepTo, saveFrame, beginHold, endHold]);
+  }, [store, undo, project, setProject, togglePlay, stepTo, saveFrame, beginHold, endHold, beginSkim, endSkim]);
 
   /**
    * Find the files behind a project's media: remembered handles first (they
@@ -901,11 +943,35 @@ export function VideoEditorWidget() {
   useEffect(() => {
     if (!playing) return;
     let raf = 0;
+    // Track the frame actually on screen (Chrome, Safari, recent Firefox); without it the throttle below stays off.
+    const el = videoRef.current as (HTMLVideoElement & { requestVideoFrameCallback?: (cb: (now: number, meta: { mediaTime: number }) => void) => number; cancelVideoFrameCallback?: (h: number) => void }) | null;
+    let vfc = 0;
+    const onFrame = (now: number, meta: { mediaTime: number }) => {
+      shownRef.current = { mediaTime: meta.mediaTime, at: now };
+      vfc = el?.requestVideoFrameCallback?.(onFrame) ?? 0;
+    };
+    if (el?.requestVideoFrameCallback) vfc = el.requestVideoFrameCallback(onFrame);
     const tick = () => {
       const v = videoRef.current;
       if (v && under) {
         const t = under.clip.start + (v.currentTime - under.clip.in) / clipSpeed(under.clip);
         const loopTo = rangeRef.current ? rangeRef.current.from : 0, loopEnd = rangeRef.current ? rangeRef.current.to : duration;
+        // Skimming: once a clip has shown its first seconds, jump to its last ones; the next clip then shows its own start.
+        const k = skimRef.current, skipTo = under.clip.end - SKIM_S;
+        if (k && k.skipped !== under.clip.id && under.clip.end - under.clip.start > 2 * SKIM_S && t >= under.clip.start + SKIM_S && t < skipTo - 0.05) {
+          k.skipped = under.clip.id;
+          setPlayhead(skipTo);
+          setSeekToken((x) => x + 1);
+          raf = requestAnimationFrame(tick);
+          return;
+        }
+        // A speed the decoder cannot keep up with: ease the rate down to what is being shown, and back up when it catches up.
+        const shown = shownRef.current, target = Math.min(MAX_PREVIEW_RATE, rateRef.current * clipSpeed(under.clip));
+        if (shown && target > 1 && v.src) {
+          const lag = v.currentTime - shown.mediaTime;
+          if (lag > 0.35 && v.playbackRate > 1) v.playbackRate = Math.max(1, v.playbackRate * 0.85);
+          else if (lag < 0.15 && v.playbackRate < target) v.playbackRate = Math.min(target, v.playbackRate * 1.1);
+        }
         const restart = () => {
           setPlayhead(loopTo);
           setSeekToken((x) => x + 1);
@@ -925,7 +991,11 @@ export function VideoEditorWidget() {
       raf = requestAnimationFrame(tick);
     };
     raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
+    return () => {
+      cancelAnimationFrame(raf);
+      if (vfc) el?.cancelVideoFrameCallback?.(vfc);
+      shownRef.current = null;
+    };
   }, [playing, under, duration]);
   // Draw the graded frame + overlays each animation frame.
   useEffect(() => {
@@ -1397,6 +1467,7 @@ export function VideoEditorWidget() {
                 {under && <span className="truncate text-[12px] text-white/60">{project.media[under.clip.media]?.name}</span>}
                 <span className="text-[12px] text-white/60">
                   {rate}×{boost ? " held" : ""}
+                  {skim ? " · skimming the cuts" : ""}
                   {loop ? " · loop" : ""}
                   {previewMuted ? " · muted" : ""}
                 </span>
@@ -1491,6 +1562,11 @@ export function VideoEditorWidget() {
             {boost && (
               <span className="text-[12px] text-accent" data-boost>
                 {rate}× while held{speed * 2 > MAX_PREVIEW_RATE ? ` — ${MAX_PREVIEW_RATE}× is the browser's ceiling` : ""}
+              </span>
+            )}
+            {skim && (
+              <span className="text-[12px] text-accent" data-skim>
+                skimming the cuts: {SKIM_S} s either side of each one while Control is held
               </span>
             )}
             {!boost && speed > 4 && (
@@ -2529,7 +2605,7 @@ export function VideoEditorWidget() {
             <div className="pointer-events-none absolute bottom-0 top-0 w-px bg-[#e5484d]" style={{ left: playhead * pxPerSec }} />
           </div>
         </div>
-        <p className="mt-1 text-[11.5px] text-faint">Click the ruler to seek · space plays (hold it to double the speed) · ←/→ step a frame (⇧ for 1 s) · ↑/↓ jump between cuts · Home/End · Merge with next (Trim) rejoins a split or hides a cut · S saves a thumbnail of the frame (⇧S full-size JPEG, ⌥S PNG) · M mutes · ⌘Z undoes · ⌘S saves. Clips are shown in playback order; music lanes stack, and overlaps on one lane crossfade.</p>
+        <p className="mt-1 text-[11.5px] text-faint">Click the ruler to seek · space plays (hold it to double the speed) · hold Control to skim the cuts, 3 s either side of each · ←/→ step a frame (⇧ for 1 s) · ↑/↓ jump between cuts · Home/End · Merge with next (Trim) rejoins a split or hides a cut · S saves a thumbnail of the frame (⇧S full-size JPEG, ⌥S PNG) · M mutes · ⌘Z undoes · ⌘S saves. Clips are shown in playback order; music lanes stack, and overlaps on one lane crossfade.</p>
       </div>
       {clearOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-labelledby="clear-project-title">
