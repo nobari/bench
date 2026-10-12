@@ -8,7 +8,7 @@ import { drawTransition } from "@/lib/tools/video/transitions";
 import { LUT_OPTIONS, buildDlogLut, deriveLut, fetchOfficialLut, lutToCube, parseCube, type Lut3D } from "@/lib/tools/video/lut";
 import { fmtBytes, fmtDelta, fmtDuration, fmtMs, type EstimateSource, type ExportProgress, type SpeedPriors, type StepProgress } from "@/lib/tools/video/progress";
 import { buildProxy, drawOverlays, encoderSupport, exportProject, Grader, MAX_AUDIBLE_SPEED, MIN_AUDIBLE_SPEED, probe, renderFrame, renderSceneThumbs, scanMoments, scanMotion, Steadier } from "@/lib/tools/video/engine";
-import { INTRO_STYLES, addSceneAt, buildIntro, describeIntro, drawIntroFx, hasIntro, introCandidates, introFrameAt, introLength, introRegion, introStyle, mainClips, moveScene, pickMoments, removeIntro, removeScene, restyleIntro, sceneSecondsFor, scoreMoments, setSceneSeconds, shiftAfterIntro, styledGrade } from "@/lib/tools/video/intro";
+import { INTRO_STYLES, addSceneAt, buildIntro, describeIntro, drawIntroFx, hasIntro, introCandidates, introFrameAt, introLength, introRegion, introStyle, mainClips, moveScene, pickMoments, removeIntro, removeScene, restyleIntro, sceneSecondsFor, scoreMoments, setSceneSeconds, shiftAfterIntro, styledGrade, sceneFootage, minSceneSeconds } from "@/lib/tools/video/intro";
 import { ProjectStore, hasFileSystemAccess, AUTOSAVE_FILE, FRAMES_DIR, PROJECT_FILE, PROXY_DIR } from "@/lib/tools/video/store";
 import { cn } from "@/lib/utils";
 import { DEFAULT_STOPS, cutOutStops, stillRuns, stillThreshold, stopKey, stopsOnTimeline, stopsTotal, type Still, type StopScan } from "@/lib/tools/video/stops";
@@ -396,7 +396,7 @@ export function VideoEditorWidget() {
 
   const duration = timelineDuration(project);
   const placed = useMemo(() => placeClips(project.clips), [project.clips]);
-  const windows = useMemo(() => transitionWindows(placed), [placed]);
+  const windows = useMemo(() => transitionWindows(placed, project.media), [placed, project.media]);
   const selectedWindow = useMemo(() => windows.find((w) => w.incoming.id === selectedTransition) ?? null, [windows, selectedTransition]);
   const titleLaneOf = useMemo(() => titleLanes(project.titles), [project.titles]);
   const spans = useMemo(() => planExport(project), [project]);
@@ -1331,7 +1331,7 @@ export function VideoEditorWidget() {
     if (!main.length) return setError("Add recordings first — the intro is cut from them.");
     if (job) return;
     const seconds = sceneSecondsFor(base);
-    const need = seconds * introStyle(base.intro.style).speed;
+    const need = sceneFootage(introStyle(base.intro.style), seconds);
     const perWindow = introScan ? (scanPlan?.perWindow ?? 1) : 1;
     let windows = introCandidates(main, count, perWindow, need);
     if (perWindow > 1) {
@@ -2074,6 +2074,11 @@ export function VideoEditorWidget() {
                     ))}
                   </select>
                   <p className="text-[12px] text-faint">{TRANSITIONS.find((t) => t.kind === (selectedWindow?.kind ?? project.transition.kind))?.hint}</p>
+                  {selectedWindow?.note && (
+                    <p className={cn("text-[12px]", selectedWindow.fit === "none" ? "text-danger" : "text-warn")} data-transition-note={selectedWindow.fit}>
+                      {selectedWindow.note}
+                    </p>
+                  )}
                   <Slider label="Length" value={selectedWindow ? selectedWindow.incoming.transitionIn!.duration : project.transition.duration} min={0.25} max={3} step={0.25} onChange={(v) => changeTransition({ duration: v })} format={(v) => `${v} s, centred on the cut`} />
                   <div className="flex flex-wrap gap-1.5">
                     {selectedWindow ? (
@@ -2160,7 +2165,7 @@ export function VideoEditorWidget() {
                   </label>
                   <label>
                     Seconds per scene
-                    <input type="number" min={0.3} max={6} step={0.1} value={Number(sceneSecondsFor(project).toFixed(2))} onChange={(e) => setIntro({ sceneSeconds: Math.max(0.3, Math.min(6, Number(e.target.value) || 1)) })} className={cn(INPUT, "mt-0.5 font-mono")} aria-label="Seconds per scene" />
+                    <input type="number" min={minSceneSeconds(introStyle(project.intro.style))} max={6} step={0.1} value={Number(sceneSecondsFor(project).toFixed(2))} onChange={(e) => setIntro({ sceneSeconds: Math.max(minSceneSeconds(introStyle(project.intro.style)), Math.min(6, Number(e.target.value) || 1)) })} className={cn(INPUT, "mt-0.5 font-mono")} aria-label="Seconds per scene" />
                   </label>
                   <label className="col-span-2 flex items-start gap-1.5">
                     <input type="checkbox" checked={introScan} onChange={(e) => setIntroScan(e.target.checked)} className="mt-0.5 accent-[var(--accent)]" />
@@ -2949,7 +2954,7 @@ export function VideoEditorWidget() {
                   }}
                   className={cn("absolute top-0 flex h-full items-center justify-center border-x border-ink/60 bg-white/50 text-[11px] text-ink hover:bg-white/70", selectedTransition === w.incoming.id && "bg-accent-soft ring-2 ring-accent")}
                   style={{ left: w.start * pxPerSec, width: Math.max(8, (w.end - w.start) * pxPerSec) }}
-                  title={`${TRANSITIONS.find((t) => t.kind === w.kind)?.name} · ${(w.end - w.start).toFixed(2)} s — click to change or remove`}
+                  title={`${TRANSITIONS.find((t) => t.kind === w.kind)?.name} · ${(w.end - w.start).toFixed(2)} s${w.note ? ` — ${w.note}` : ""} — click to change or remove`}
                   aria-label={`Transition at ${fmtTime(w.cut)}`}
                   data-transition
                 >

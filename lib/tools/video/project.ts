@@ -449,21 +449,59 @@ export interface TransitionWindow {
   cut: number;
   start: number;
   end: number;
+  /** The seconds asked for, and how the window could be fitted to the footage around the cut. */
+  want: number;
+  fit: "full" | "shifted" | "shortened" | "none";
+  /** Why it is not simply centred, for the panel and the marker. */
+  note?: string;
 }
 
 /**
- * One window per cut that carries a transition, centred on the cut so no
- * timing shifts. A window never exceeds either clip's length, which also
- * keeps neighbouring windows apart.
+ * One window per cut that carries a transition. A dissolve centred on the cut shows the outgoing clip past its end
+ * and the incoming clip before its start, so each half needs spare footage beyond that clip's edge: where a side
+ * has none (a recording's first frame, a clip trimmed to its last) the window slides onto the other side, and when
+ * both are tight it shrinks — never a frozen frame. A window never covers more than half of either clip, which keeps
+ * neighbouring windows apart. Pass the project's media so the footage beyond each edge is known.
  */
-export function transitionWindows(placed: PlacedClip[]): TransitionWindow[] {
+/** Seconds at each end of a recording that transitions and intro scenes never use, on top of the footage they need. */
+export const HANDLE_MARGIN = 1;
+
+export function transitionWindows(placed: PlacedClip[], media?: Record<string, MediaRef>): TransitionWindow[] {
   const out: TransitionWindow[] = [];
   for (let i = 1; i < placed.length; i++) {
     const a = placed[i - 1], b = placed[i], tr = b.transitionIn;
     if (!tr || !(tr.duration > 0) || b.joinedToPrevious) continue;
-    const d = Math.min(tr.duration, a.end - a.start, b.end - b.start);
-    if (d < 0.2) continue;
-    out.push({ kind: tr.kind, outgoing: a, incoming: b, cut: b.start, start: b.start - d / 2, end: b.start + d / 2 });
+    const want = tr.duration;
+    const la = a.end - a.start, lb = b.end - b.start, sa = clipSpeed(a), sb = clipSpeed(b);
+    const ma = media?.[a.media]?.duration, mb = media?.[b.media]?.duration;
+    // After the cut the outgoing clip must supply footage past its end; before it the incoming clip, before its start.
+    // (A recording's first and last HANDLE_MARGIN seconds are kept clear as well.)
+    const roomAfter = Math.max(0, Math.min(lb / 2, ma !== undefined ? (ma - a.out - HANDLE_MARGIN) / sa : Infinity));
+    const roomBefore = Math.max(0, Math.min(la / 2, mb !== undefined ? (b.in - HANDLE_MARGIN) / sb : Infinity));
+    let before = Math.min(want / 2, roomBefore), after = Math.min(want / 2, roomAfter);
+    let rest = want - before - after;
+    if (rest > 1e-9) {
+      const more = Math.min(rest, roomBefore - before);
+      before += more;
+      rest -= more;
+      const moreAfter = Math.min(rest, roomAfter - after);
+      after += moreAfter;
+      rest -= moreAfter;
+    }
+    const d = before + after;
+    const name = TRANSITIONS.find((t) => t.kind === tr.kind)?.name.toLowerCase() ?? tr.kind;
+    if (d < 0.2) {
+      out.push({ kind: tr.kind, outgoing: a, incoming: b, cut: b.start, start: b.start, end: b.start, want, fit: "none", note: `No spare footage on either side of this cut, so the ${name} cannot run here: it plays as a plain cut. Each side needs its half of the transition plus a ${HANDLE_MARGIN} s margin inside the recording; trim the clips a little away from their recordings' ends to make room.` });
+      continue;
+    }
+    const fit = rest > 1e-6 ? "shortened" : Math.abs(before - after) > 1e-6 ? "shifted" : "full";
+    const note =
+      fit === "shortened"
+        ? `Only ${d.toFixed(1)} s of spare footage around this cut, so the ${name} is ${d.toFixed(1)} s here instead of ${want} s.`
+        : fit === "shifted"
+          ? `The ${name} runs ${after > before ? "mostly after" : "mostly before"} the cut, because the clip ${after > before ? "after it has too little footage before its start" : "before it has too little footage after its end"}; nothing freezes.`
+          : undefined;
+    out.push({ kind: tr.kind, outgoing: a, incoming: b, cut: b.start, start: b.start - before, end: b.start + after, want, fit, ...(note ? { note } : {}) });
   }
   return out;
 }
@@ -969,7 +1007,7 @@ const isNeutralTransform = (t: Transform) => t.rotate === 0 && t.straighten === 
 export function planExport(p: Project): ExportSpan[] {
   const spans: ExportSpan[] = [];
   const placed = placeClips(p.clips);
-  const windows = transitionWindows(placed);
+  const windows = transitionWindows(placed, p.media);
   const sameCodec = (m: MediaRef | undefined) => !!m?.codec && m.codec.startsWith(p.export.codec);
   for (const c of placed) {
     const reasons: string[] = [];

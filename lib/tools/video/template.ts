@@ -3,8 +3,8 @@
  * current values as worked examples. An LLM fills it in; the import applies both parts at once. A bare titles
  * array or the older titles-only template still import (titles only).
  */
-import { INTRO_STYLES, introRegion, type Moment } from "./intro";
-import { clipSpeed, parseTitlesImport, placeClips, titlesTemplate, type IntroSettings, type Project, type Title } from "./project";
+import { INTRO_STYLES, introRegion, introStyle, minSceneSeconds, sceneHandle, sceneSecondsFor, type Moment } from "./intro";
+import { HANDLE_MARGIN, clipSpeed, parseTitlesImport, placeClips, titlesTemplate, type IntroSettings, type Project, type Title } from "./project";
 
 export const TEMPLATE_FORMAT = "bench-video-template/2";
 
@@ -24,12 +24,26 @@ export function videoTemplate(p: Project): Record<string, unknown> {
   const reg = introRegion(placed);
   // A scene is cut so its moment sits 30 % in (see sceneClip), so the moment is recovered from the scene's own bounds.
   const moments = reg ? reg.scenes.map((s) => ({ file: p.media[s.media]?.name ?? s.media, at: +(s.in + 0.3 * (s.out - s.in)).toFixed(3) })) : [];
+  // Where a scene may be centred in each recording so its transitions never run out of footage: the handle (half the
+  // style's transition plus the margin) stays inside the recording on both sides of the scene.
+  const style = introStyle(p.intro.style);
+  const need = Math.max(sceneSecondsFor(p), minSceneSeconds(style)) * style.speed, lead = need * 0.3, h = sceneHandle(style);
+  const mainClipsInfo = placed
+    .filter((c) => !c.introRole)
+    .map((c) => {
+      const media = p.media[c.media];
+      const lo = Math.max(0, c.in) + h + lead, hi = Math.min(media?.duration ?? c.out, c.out) - h - (need - lead);
+      return { file: media?.name ?? c.media, start: +c.start.toFixed(3), end: +c.end.toFixed(3), recordingFrom: +c.in.toFixed(3), recordingTo: +c.out.toFixed(3), momentRange: hi > lo ? [+lo.toFixed(3), +hi.toFixed(3)] : null };
+    });
+  const project = { ...(base.project as Record<string, unknown>), clips: mainClipsInfo, transitionSeconds: p.transition.duration, handleMarginSeconds: HANDLE_MARGIN };
   return {
     ...base,
     format: TEMPLATE_FORMAT,
+    project,
     instructions: [
       "This one file describes both the intro and the titles of a driving video. Fill it in, save it, and import it in the Intro or Titles tab of the Bench video editor (Import JSON): both parts are applied at once.",
-      "intro: set enabled to false for no intro. style is the id of one of options.introStyles (each lists its name and look). scenes is how many short moments are lifted from the drive when moments is empty — the editor then picks lively ones itself. sceneSeconds is seconds per scene (null = the style's own). card ends the intro: text (empty = the project name), subtitle, and seconds (0 = no card). keepAudio keeps the scenes' own sound instead of playing them quiet under the music. moments, optional, names the exact moments to use, in order: file is one of project.clips files and at is seconds into that recording.",
+      "intro: set enabled to false for no intro. style is the id of one of options.introStyles (each lists its name and look). scenes is how many short moments are lifted from the drive when moments is empty — the editor then picks lively ones itself. sceneSeconds is seconds per scene (null = the style's own; never shorter than the style's transition plus 0.3 s). card ends the intro: text (empty = the project name), subtitle, and seconds (0 = no card). keepAudio keeps the scenes' own sound instead of playing them quiet under the music. moments, optional, names the exact moments to use, in order: file is one of project.clips files and at is seconds into that recording.",
+      "Avoid jumps: a cross dissolve shows the outgoing clip past its end and the incoming clip before its start, so each side of a cut needs its half of the transition plus a margin of handleMarginSeconds inside the recording. Pick every moment's at inside that clip's momentRange (recording seconds): it already leaves the handles and the margin on both sides of the scene; outside it the scene is moved or shortened, and a scene with no room would freeze. Likewise keep a title's start and end at least transitionSeconds / 2 + handleMarginSeconds away from a cut between clips (clips lists start and end on the timeline) unless the title spans the cut entirely.",
       ...base.instructions.slice(1),
     ],
     options: {

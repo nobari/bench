@@ -748,7 +748,7 @@ async function exportWithPulse(opts: ExportOptions, pulse: { emit: (() => void) 
   // A partial export starts its file at zero: timeline times shift back by the range start.
   const offset = exportRange(project)?.from ?? 0;
   const placedAll = placeClips(project.clips);
-  const windows = transitionWindows(placedAll);
+  const windows = transitionWindows(placedAll, project.media);
   const neighbour = new NeighbourFrames((id) => openInput(id));
   let tmpA: OffscreenCanvas | null = null, tmpB: OffscreenCanvas | null = null, scratch: OffscreenCanvas | null = null;
   let fxScratch: { a: OffscreenCanvas; b: OffscreenCanvas } | null = null;
@@ -986,7 +986,7 @@ export async function renderFrame(opts: FrameOptions): Promise<RenderedFrame> {
   const media = project.media[under.clip.media];
   const srcW = media?.width ?? main.displayWidth, srcH = media?.height ?? main.displayHeight;
   const placedAll = placeClips(project.clips);
-  const tr = transitionAt(transitionWindows(placedAll), t);
+  const tr = transitionAt(transitionWindows(placedAll, project.media), t);
   const intro = introFrameAt(project, placedAll, t);
   const gradeFor = (c: Clip) => (c.introRole && intro ? styledGrade(c.grade, intro.style) : c.grade);
   let composed = false;

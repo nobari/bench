@@ -8,7 +8,7 @@
  * over the finished frame (zoom, bars, vignette, grain, flash, glitch, the title card).
  */
 
-import { clipLength, clipSpeed, fontFamilyCss, newId, placeClips, type Clip, type Grade, type PlacedClip, type Project, type Transition } from "./project";
+import { clipLength, clipSpeed, fontFamilyCss, newId, placeClips, type Clip, type Grade, type PlacedClip, type Project, type Transition, HANDLE_MARGIN } from "./project";
 
 export type IntroStyleId = "teaser" | "cinematic" | "punch" | "mono" | "pop" | "retro" | "glitch" | "spotlight" | "hyper" | "clean";
 
@@ -402,11 +402,23 @@ const strip = (c: PlacedClip | Clip): Clip => {
 };
 
 /** A scene clip lifted from `source` around `sourceTime`, `seconds` long on the timeline at the style's speed. */
+/** Source seconds kept beyond each edge of a scene: half the style's transition at the scene's speed, plus the margin. */
+export const sceneHandle = (style: IntroStyle) => ((style.transition?.duration ?? 0) / 2) * style.speed + HANDLE_MARGIN;
+
+/** The shortest a scene may be for its style: longer than the transition between scenes, with a steady part left. */
+export const minSceneSeconds = (style: IntroStyle) => Math.max(0.3, (style.transition?.duration ?? 0) + 0.3);
+
+/** Source seconds a candidate moment must have around it: the scene itself plus the handles its transitions use. */
+export const sceneFootage = (style: IntroStyle, seconds: number) => Math.max(seconds, minSceneSeconds(style)) * style.speed + 2 * sceneHandle(style);
+
 function sceneClip(project: Project, source: Clip, sourceTime: number, seconds: number, style: IntroStyle): Clip {
   const media = project.media[source.media];
-  const need = seconds * style.speed;
+  const need = Math.max(seconds, minSceneSeconds(style)) * style.speed;
   const lead = need * 0.3;
-  const lo = Math.max(0, source.in), hi = Math.min(media?.duration ?? source.out, source.out);
+  // Keep the transition's handles inside the footage, unless the clip is too short for that.
+  const h = sceneHandle(style);
+  const lo0 = Math.max(0, source.in), hi0 = Math.min(media?.duration ?? source.out, source.out);
+  const lo = hi0 - lo0 >= need + 2 * h ? lo0 + h : lo0, hi = hi0 - lo0 >= need + 2 * h ? hi0 - h : hi0;
   let start = sourceTime - lead;
   if (start + need > hi) start = hi - need;
   if (start < lo) start = lo;
@@ -435,12 +447,15 @@ function stampStyle(scenes: Clip[], main: Clip[], project: Project, cardId?: str
   const restyled = scenes
     .filter((c) => c.introRole === "scene")
     .map((c, i) => {
-      // The scene keeps its intended timeline length at the style's speed; when the footage runs out it slides back (and is shorter).
-      const need = (c.introSeconds ?? clipLength(c)) * style.speed;
-      const hi = project.media[c.media]?.duration ?? c.out;
-      let start = c.in;
-      if (start + need > hi) start = Math.max(0, hi - need);
-      const next: Clip = { ...c, in: start, out: Math.min(hi, start + need), muted: !project.intro.keepAudio };
+      // The scene keeps its intended timeline length at the style's speed — never shorter than the style's transition
+      // allows — and keeps the transition's handles inside the footage; when the footage runs out it slides back.
+      const need = Math.max(c.introSeconds ?? clipLength(c), minSceneSeconds(style)) * style.speed;
+      const h = sceneHandle(style);
+      const hi0 = project.media[c.media]?.duration ?? c.out;
+      const hi = hi0 >= need + 2 * h ? hi0 - h : hi0, lo = hi0 >= need + 2 * h ? h : 0;
+      let start = Math.max(lo, c.in);
+      if (start + need > hi) start = Math.max(lo, hi - need);
+      const next: Clip = { ...c, in: start, out: Math.min(hi0, start + need), muted: !project.intro.keepAudio };
       delete next.speed;
       if (style.speed !== 1) next.speed = style.speed;
       delete next.transitionIn;
