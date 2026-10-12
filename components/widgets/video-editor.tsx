@@ -2,7 +2,7 @@
 
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { AlertTriangle, Camera, Check, ChevronDown, ChevronRight, ChevronUp, Sparkles, Circle, Clapperboard, Crop, Download, FolderOpen, Loader, Maximize2, Minimize2, Music, Pause, Play, Repeat, Save, Scissors, SkipBack, SkipForward, SlidersHorizontal, StepBack, StepForward, Trash2, Type, Upload, Volume2, VolumeX, Keyboard, Search, Shuffle } from "lucide-react";
+import { AlertTriangle, Camera, Check, ChevronDown, ChevronRight, ChevronUp, Sparkles, Circle, Clapperboard, Crop, Download, FolderOpen, Loader, Maximize2, Minimize2, Music, Pause, Play, Repeat, Save, Scissors, SkipBack, SkipForward, SlidersHorizontal, StepBack, StepForward, Trash2, Type, Upload, Volume2, VolumeX, Keyboard, Search, Shuffle, X } from "lucide-react";
 import { DEFAULT_CLIP_GAIN_DB, DEFAULT_EXPORT, NEUTRAL_GRADE, NEUTRAL_TRANSFORM, TITLE_ALIGNS, TITLE_FAMILIES, TITLE_FONTS, TITLE_POSITIONS, TITLE_SHADOWS, TITLE_WEIGHTS, TRANSITIONS, addTransitionAt, appendMusic, applyAudioTo, applyGradeTo, applyTransitionToAll, clipAt, crossfades, dbToGain, effectiveMusicEnd, estimateExport, exportRange, fmtTime, musicGainAt, musicLength, newId, newProject, newTitle, orderRecordings, placeClips, planExport, removeRange, reorderMusic, setTransition, splitClip, timelineDuration, titleLanes, transitionAt, transitionWindows, CLIP_SPEEDS, canMergeWithNext, clipLength, clipSpeed, groupOf, sourceTimeAt, mergeWithNext, moveClip, unjoin, updateClip, visibleCuts, type Clip, type MediaRef, type MusicTrack, type Project, type ProxyHeight, type Title, type TitleFont, isFileLutKind, type FileLutKind, type LutKind, type MathLutKind, type TitleAlign, type TitlePosition, type TitleShadow, type Transition, type TransitionKind, type ExportTags, type IntroSettings, reorderClip, parseTime, type SteadyLights, STEADY_FRAMES, clampMusicStart, musicUnused, shuffleFillMusic } from "@/lib/tools/video/project";
 import { drawTransition } from "@/lib/tools/video/transitions";
 import { LUT_OPTIONS, buildDlogLut, deriveLut, fetchOfficialLut, lutToCube, parseCube, type Lut3D } from "@/lib/tools/video/lut";
@@ -323,6 +323,13 @@ export function VideoEditorWidget() {
   const [stopDefaults, setStopDefaults] = useState({ minSeconds: DEFAULT_STOPS.minSeconds, margin: DEFAULT_STOPS.margin });
   // Fill the video with music: the crossfade between shuffled songs.
   const [fillOverlap, setFillOverlap] = useState(2);
+  // Rendered preview: the real export at a small size on a chosen stretch, played in the preview box.
+  const [previewOpts, setPreviewOpts] = useState<{ height: number; scope: "all" | "range" | "intro" | "around"; proxies: boolean }>({ height: 360, scope: "around", proxies: true });
+  const [rendered, setRendered] = useState<{ url: string; width: number; height: number; from: number; to: number; proxies: boolean; bytes: number; ms: number } | null>(null);
+  const renderedVideoRef = useRef<HTMLVideoElement>(null);
+  useEffect(() => () => {
+    if (rendered) URL.revokeObjectURL(rendered.url);
+  }, [rendered]);
   const [skippedStops, setSkippedStops] = useState<{ scannedAt: number; keys: string[] }>({ scannedAt: 0, keys: [] });
   const [clearFiles, setClearFiles] = useState(false);
   const [clearProxies, setClearProxies] = useState(false);
@@ -1470,6 +1477,69 @@ export function VideoEditorWidget() {
     }
   };
 
+  /** The stretch a rendered preview covers for the chosen scope, or null for the whole timeline. */
+  const previewScope = (scope: typeof previewOpts.scope): { from: number; to: number } | null => {
+    if (scope === "range") return range;
+    if (scope === "intro") return introReg ? { from: 0, to: introReg.end } : null;
+    if (scope === "around") return { from: Math.max(0, playhead - 15), to: Math.min(duration, playhead + 15) };
+    return null;
+  };
+  /**
+   * Run the real export — same spans, grades, transitions, intro effects, titles, steady lights — at a small size on a
+   * stretch of the timeline into private browser storage, then play it in the preview box.
+   */
+  const renderPreview = async (opts = previewOpts) => {
+    if (job || !placed.length) return;
+    const scope = previewScope(opts.scope);
+    if (scope && scope.to - scope.from < 0.1) return setError("Nothing to render in that stretch.");
+    const abort = new AbortController();
+    pauseRef.current = { paused: false, waiters: [] };
+    const outH = Math.min(opts.height, first?.height ?? opts.height);
+    const outW = first?.width && first.height ? Math.round((first.width * (outH / first.height)) / 2) * 2 : Math.round((outH * 16) / 9);
+    const bitrateMbps = Math.max(1, Math.round(outH / 90));
+    const seconds = scope ? scope.to - scope.from : duration;
+    const preview: Project = { ...project, export: { ...project.export, resolution: outH, codec: "avc", bitrateMbps, preset: "fast", smartCopy: false, range: scope } };
+    const name = `preview-${outH}p.mp4`;
+    setJob({ kind: "export", label: "Rendering preview", fraction: 0, abort, output: { name, codec: "AVC", width: outW, height: outH, bitrateMbps, preset: "fast", estimatedBytes: (bitrateMbps * 1e6 * seconds) / 8 }, paused: false });
+    try {
+      const root = await navigator.storage.getDirectory();
+      const dir = await root.getDirectoryHandle("bench-preview-renders", { create: true });
+      const fh = await dir.getFileHandle(name, { create: true });
+      const writable = await fh.createWritable();
+      const result = await exportProject({
+        project: preview,
+        getFile: opts.proxies ? fileForIntro : (id) => store.getFile(id),
+        logo,
+        writable: writable as unknown as WritableStream<import("mediabunny").StreamTargetChunk>,
+        signal: abort.signal,
+        whilePaused: () => (pauseRef.current.paused ? new Promise<void>((r) => pauseRef.current.waiters.push(r)) : undefined),
+        onProgress: (progress) => {
+          setJob((j) => (j ? { ...j, fraction: progress.fraction, progress } : j));
+          document.title = `${(progress.fraction * 100).toFixed(1)}% · Rendering preview · Bench`;
+        },
+      });
+      const file = await fh.getFile();
+      const url = URL.createObjectURL(file), ms = result.activeMs;
+      setPlaying(false);
+      // The previous render's URL is revoked by the effect that watches `rendered`.
+      const usedProxies = opts.proxies && placed.some((c) => !!projectRef.current?.proxies[c.media]?.ready);
+      setRendered({ url, width: outW, height: outH, from: scope?.from ?? 0, to: scope?.to ?? duration, proxies: usedProxies, bytes: file.size, ms });
+      setStatus(`Rendered preview: ${outW}×${outH}, ${fmtTime(scope?.from ?? 0)}–${fmtTime(scope?.to ?? duration)}, ${fmtBytes(file.size)} in ${fmtDuration(ms)} — playing in the preview; Back to live preview to leave it`);
+    } catch (e) {
+      if ((e as DOMException).name !== "AbortError") setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      document.title = pageTitleRef.current;
+      setJob(null);
+    }
+  };
+  // Scrubbing the timeline while a rendered preview shows seeks it; playing it moves the playhead.
+  useEffect(() => {
+    const v = renderedVideoRef.current;
+    if (!rendered || !v || !v.paused) return;
+    const want = Math.max(0, Math.min(rendered.to - rendered.from, playheadRef.current - rendered.from));
+    if (Math.abs(v.currentTime - want) > 0.05) v.currentTime = want;
+  }, [seekToken, rendered]);
+
   const pxPerSec = (timelineWidth / Math.max(10, duration)) * zoom;
   useEffect(() => {
     pxRef.current = pxPerSec;
@@ -1721,6 +1791,32 @@ export function VideoEditorWidget() {
                 {fullscreen ? <Minimize2 size={15} /> : <Maximize2 size={15} />}
               </button>
             )}
+            {rendered && (
+              <div className="absolute inset-0 z-20 flex flex-col bg-black" data-rendered-preview>
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 bg-black/70 px-3 py-1.5 text-[12px] text-white">
+                  <span className="font-medium">Rendered preview</span>
+                  <span className="text-white/70">
+                    {rendered.width}×{rendered.height} · {fmtTime(rendered.from)}–{fmtTime(rendered.to)} · {rendered.proxies ? "from proxies" : "from the originals"} · {fmtBytes(rendered.bytes)} · {fmtDuration(rendered.ms)}
+                  </span>
+                  <span className="text-white/60">This is the export itself, small: transitions, looks, titles and steady lights as they will come out.</span>
+                  <button type="button" onClick={() => setRendered(null)} className="ml-auto flex h-7 items-center gap-1 rounded-[var(--radius-sm)] bg-white/15 px-2.5 text-[12px] hover:bg-white/25" data-rendered-close>
+                    <X size={12} /> Back to live preview
+                  </button>
+                </div>
+                <video
+                  ref={renderedVideoRef}
+                  src={rendered.url}
+                  controls
+                  autoPlay
+                  playsInline
+                  className="min-h-0 flex-1 bg-black object-contain"
+                  onTimeUpdate={(e) => {
+                    if (!e.currentTarget.paused) setPlayhead(Math.min(duration, rendered.from + e.currentTarget.currentTime));
+                  }}
+                  data-rendered-video
+                />
+              </div>
+            )}
             {(boost || skim || speed > 4) && (
               <div className="pointer-events-none absolute top-2 left-2 flex max-w-[calc(100%-4rem)] items-center gap-1.5 rounded-[var(--radius-sm)] bg-black/60 px-2 py-1 text-[12px] text-white backdrop-blur-sm" data-preview-badge>
                 {boost && <span data-boost>{rate}× while held{speed * 2 > MAX_PREVIEW_RATE ? ` · ${MAX_PREVIEW_RATE}× is the browser's ceiling` : ""}</span>}
@@ -1912,6 +2008,9 @@ export function VideoEditorWidget() {
               </span>
             )}
             {!under && <span className="min-w-0 flex-1 truncate text-[12px] text-faint max-sm:basis-full">{project.clips.length ? "Between clips" : "No recordings yet"}</span>}
+            <button type="button" onClick={() => void renderPreview()} disabled={!placed.length || !!job} className={cn(GHOST, "h-7 px-2 text-[12px]")} title="Render the real export at a small size for 30 s around the playhead and play it here (settings in the Export tab)" data-render-preview>
+              <Clapperboard size={12} /> Render preview
+            </button>
             <label className="flex items-center gap-1.5 text-[12px] text-muted" title="Smaller proxies render faster and scrub more smoothly; larger ones show the grade in more detail. Export always uses the originals.">
               Proxy
               <select
@@ -2743,7 +2842,7 @@ export function VideoEditorWidget() {
                   </label>
                   <label className="text-[12.5px] text-muted">
                     Resolution
-                    <select value={String(project.export.resolution)} onChange={(e) => setProject((p) => ({ ...p, export: { ...p.export, resolution: e.target.value === "source" ? "source" : (Number(e.target.value) as 2160 | 1440 | 1080) } }))} className={cn(SEL, "mt-1 w-full")}>
+                    <select value={String(project.export.resolution)} onChange={(e) => setProject((p) => ({ ...p, export: { ...p.export, resolution: e.target.value === "source" ? "source" : Number(e.target.value) } }))} className={cn(SEL, "mt-1 w-full")}>
                       <option value="source">Source ({first?.width ?? "—"} × {first?.height ?? "—"})</option>
                       <option value="2160">4K (2160p)</option>
                       <option value="1440">1440p</option>
@@ -2782,6 +2881,40 @@ export function VideoEditorWidget() {
                     <option value="strong">Steady lights — hold each light over 3 frames</option>
                   </select>
                 </label>
+                <div className="space-y-1.5 rounded-[var(--radius-sm)] border border-edge p-2" data-preview-render>
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                    <span className="font-medium text-ink">Rendered preview</span>
+                    <span className="text-[12px] text-faint">the export itself, small, played in the preview box</span>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-[12.5px] text-muted">
+                    <label className="flex items-center gap-1.5">
+                      Size
+                      <select value={previewOpts.height} onChange={(e) => setPreviewOpts((o) => ({ ...o, height: Number(e.target.value) }))} className={SEL} aria-label="Rendered preview size">
+                        {[180, 240, 360, 540, 720].map((h) => (
+                          <option key={h} value={h}>
+                            {h}p
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="flex items-center gap-1.5">
+                      Stretch
+                      <select value={previewOpts.scope} onChange={(e) => setPreviewOpts((o) => ({ ...o, scope: e.target.value as typeof previewOpts.scope }))} className={SEL} aria-label="Rendered preview stretch">
+                        <option value="around">30 s around the playhead</option>
+                        <option value="intro" disabled={!introReg}>The intro</option>
+                        <option value="range" disabled={!range}>The export range</option>
+                        <option value="all">The whole timeline</option>
+                      </select>
+                    </label>
+                    <label className="flex items-center gap-1.5" title="Proxies decode many times faster; the originals show the true detail">
+                      <input type="checkbox" checked={previewOpts.proxies} onChange={(e) => setPreviewOpts((o) => ({ ...o, proxies: e.target.checked }))} className="accent-[var(--accent)]" /> from proxies when there are any
+                    </label>
+                  </div>
+                  <button type="button" onClick={() => void renderPreview()} disabled={!placed.length || !!job} className={GHOST} data-preview-render-button>
+                    <Clapperboard size={13} /> Render preview
+                  </button>
+                  <p className="text-[12px] text-faint">Runs the real export — the same spans, grades, transitions, intro effects, titles and steady lights — at {previewOpts.height}p into the browser&apos;s private storage, then plays it in the preview box so you can check cuts frame by frame before the full export. The live preview is close, but this is exact.</p>
+                </div>
                 <p className="text-[12px] text-faint">Traffic lights, brake lights and LED signs pulse faster than the shutter and blink on camera. Steady lights keeps every bright or strongly coloured light at its brightest over the last two or three frames, so a light that drops out for a frame or two stays lit; the preview shows it while playing. Fast-moving lights at night can leave a short trail — prefer the 2-frame setting if they do.</p>
                 <div className="rounded-[var(--radius-sm)] bg-base p-2 text-[12.5px]">
                   <div className="flex flex-wrap gap-x-4 gap-y-1">
@@ -3193,7 +3326,7 @@ function ExportPanel({ job, onPause, onResume, onCancel }: { job: Job; onPause: 
         {job.paused ? <Pause size={18} className="text-warn" /> : <Loader size={18} className="animate-spin text-accent" />}
         <div className="min-w-0 flex-1">
           <div className="text-[15px] font-semibold text-ink">
-            {job.paused ? "Export paused" : "Exporting"} · {out?.name}
+            {job.paused ? `${job.label} — paused` : job.label} · {out?.name}
           </div>
           <div className="text-[12.5px] text-muted">
             {phaseLabel}

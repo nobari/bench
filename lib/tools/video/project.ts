@@ -370,7 +370,7 @@ export interface ExportSettings {
   preset: "quality" | "balanced" | "fast";
   audioBitrateKbps: number;
   /** "source" keeps the first clip's resolution; otherwise a height to scale to. */
-  resolution: "source" | 2160 | 1440 | 1080;
+  resolution: "source" | number;
   /** Whether untouched spans may be stream-copied. */
   smartCopy: boolean;
   /** Export only this part of the timeline (seconds); null means all of it. */
