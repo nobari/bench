@@ -25,7 +25,7 @@ import {
   type VideoCodec,
 } from "mediabunny";
 import { GRADE_FRAGMENT_SHADER, buildDlogLut, deriveLut, fetchOfficialLut, lutTexture, parseCube, type Lut3D } from "./lut";
-import { clipAt, clipSpeed, sourceTimeAt, dbToGain, exportTags, fontFamilyCss, exportRange, isFileLutKind, musicGainAt, placeClips, planExport, transitionAt, transitionWindows, type Clip, type ExportSpan, type Grade, type LutKind, type MediaRef, type PlacedClip, type Project, type Title, type Transform, type TransitionWindow } from "./project";
+import { clipAt, clipSpeed, sourceTimeAt, dbToGain, exportTags, fontFamilyCss, exportRange, isFileLutKind, musicGainAt, placeClips, planExport, transitionAt, transitionWindows, type Clip, type ExportSpan, type Grade, type LutKind, type MediaRef, type PlacedClip, type Project, type Title, type Transform, type TransitionWindow, STEADY_FRAMES } from "./project";
 import { drawTransition } from "./transitions";
 import { drawIntroFx, introFrameAt, introStyle, styledGrade, type IntroFrame, type Moment } from "./intro";
 import { ProgressTracker, defaultSpeeds, planSteps, type ExportProgress, type SpeedPriors, type StepProgress } from "./progress";
@@ -247,6 +247,124 @@ void main() { vUv = aUv; vec3 p = uTransform * vec3(aPos, 1.0); gl_Position = ve
     const m = [sx * cos * (quarter ? 1 / aspectDst : 1) * (quarter ? ar : 1), sx * sin * (quarter ? 1 : aspectDst), 0, -sy * sin * (quarter ? 1 / aspectDst : 1), sy * cos, 0, -cx * sx, -cy * sy, 1];
     gl.uniformMatrix3fv(this.uniforms.uTransform, false, new Float32Array(m));
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+  }
+}
+
+/* --------------------------------------------------------- steady lights */
+
+const STEADY_VS = `#version 300 es
+in vec2 aPos;
+out vec2 vUv;
+void main() {
+  vUv = aPos * 0.5 + 0.5;
+  gl_Position = vec4(aPos, 0.0, 1.0);
+}`;
+const STEADY_FS = `#version 300 es
+precision highp float;
+in vec2 vUv;
+out vec4 o;
+uniform sampler2D uCur;
+uniform sampler2D uP1;
+uniform sampler2D uP2;
+uniform int uFrames;
+uniform int uHave;
+// How much a pixel reads as a light: bright, or strongly coloured and reasonably bright (a red lamp is dim in luma).
+float glow(vec3 c) {
+  float v = max(c.r, max(c.g, c.b));
+  float mn = min(c.r, min(c.g, c.b));
+  float s = v > 1e-4 ? (v - mn) / v : 0.0;
+  return v * (0.45 + 0.55 * s);
+}
+void main() {
+  vec3 c = texture(uCur, vUv).rgb;
+  if (uHave < 1) {
+    o = vec4(c, 1.0);
+    return;
+  }
+  vec3 p = texture(uP1, vUv).rgb;
+  if (uFrames > 2 && uHave > 1) p = max(p, texture(uP2, vUv).rgb);
+  // Only where this or an earlier frame holds a light: lift the pixel to the brightest of them; never darken anything.
+  float w = smoothstep(0.42, 0.6, max(glow(c), glow(p)));
+  o = vec4(mix(c, max(c, p), w), 1.0);
+}`;
+
+/**
+ * Holds LED lights steady: traffic lights, brake lights and signs pulse faster than the shutter and blink on camera,
+ * so each pixel that reads as a light is kept at its brightest over the last two or three frames. Feed it the raw
+ * composed frames in order; it keeps its own history (never its own output, so trails stop when the light does).
+ */
+export class Steadier {
+  readonly canvas: OffscreenCanvas;
+  private gl: WebGL2RenderingContext;
+  private tex: WebGLTexture[] = [];
+  private i = 0;
+  private have = 0;
+  private uniforms: Record<string, WebGLUniformLocation | null> = {};
+
+  constructor(width: number, height: number, readonly frames: 2 | 3) {
+    this.canvas = new OffscreenCanvas(width, height);
+    const gl = this.canvas.getContext("webgl2", { premultipliedAlpha: false, preserveDrawingBuffer: true });
+    if (!gl) throw new Error("WebGL2 is not available");
+    this.gl = gl;
+    const compile = (type: number, src: string) => {
+      const sh = gl.createShader(type)!;
+      gl.shaderSource(sh, src);
+      gl.compileShader(sh);
+      if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(sh) ?? "shader");
+      return sh;
+    };
+    const program = gl.createProgram()!;
+    gl.attachShader(program, compile(gl.VERTEX_SHADER, STEADY_VS));
+    gl.attachShader(program, compile(gl.FRAGMENT_SHADER, STEADY_FS));
+    gl.linkProgram(program);
+    if (!gl.getProgramParameter(program, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(program) ?? "program");
+    gl.useProgram(program);
+    const buf = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
+    const aPos = gl.getAttribLocation(program, "aPos");
+    gl.enableVertexAttribArray(aPos);
+    gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+    for (const name of ["uCur", "uP1", "uP2", "uFrames", "uHave"]) this.uniforms[name] = gl.getUniformLocation(program, name);
+    for (let k = 0; k < 3; k++) {
+      const t = gl.createTexture()!;
+      gl.activeTexture(gl.TEXTURE0 + k);
+      gl.bindTexture(gl.TEXTURE_2D, t);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, width, height, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+      this.tex.push(t);
+    }
+    gl.uniform1i(this.uniforms.uFrames, frames);
+  }
+
+  /** Forget the history: at a cut, a seek, or the start of a span, so no light carries over from other footage. */
+  reset() {
+    this.have = 0;
+  }
+
+  /** Run one raw frame through; the result is in this.canvas. */
+  apply(src: CanvasImageSource) {
+    const gl = this.gl;
+    const cur = this.i, p1 = (this.i + 2) % 3, p2 = (this.i + 1) % 3;
+    gl.viewport(0, 0, this.canvas.width, this.canvas.height);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, this.tex[cur]);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, src as TexImageSource);
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, this.tex[p1]);
+    gl.activeTexture(gl.TEXTURE2);
+    gl.bindTexture(gl.TEXTURE_2D, this.tex[p2]);
+    gl.uniform1i(this.uniforms.uCur, 0);
+    gl.uniform1i(this.uniforms.uP1, 1);
+    gl.uniform1i(this.uniforms.uP2, 2);
+    gl.uniform1i(this.uniforms.uHave, this.have);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    this.i = (this.i + 1) % 3;
+    this.have = Math.min(2, this.have + 1);
   }
 }
 
@@ -643,6 +761,8 @@ async function exportWithPulse(opts: ExportOptions, pulse: { emit: (() => void) 
   const canvas = new OffscreenCanvas(outW, outH);
   const ctx2d = canvas.getContext("2d")!;
   const grader = new Grader(outW, outH);
+  const steadyFrames = STEADY_FRAMES[project.export.steadyLights ?? "off"];
+  const steady = steadyFrames ? new Steadier(outW, outH, steadyFrames) : null;
   if (project.customLut) {
     try {
       grader.setCustomLut(parseCube(project.customLut.cube));
@@ -731,7 +851,13 @@ async function exportWithPulse(opts: ExportOptions, pulse: { emit: (() => void) 
         drawIntroFx(ctx2d, outW, outH, intro, project, fxScratch);
       }
       drawOverlays(ctx2d, outW, outH, timelineT, project, logo);
+      if (steady) {
+        steady.apply(canvas);
+        ctx2d.drawImage(steady.canvas, 0, 0, outW, outH);
+      }
     };
+    // Lights are held over frames of this span only: nothing from the footage before a cut bleeds into it.
+    steady?.reset();
     for await (const sample of sink.samples(span.sourceIn, span.sourceOut)) {
       if (signal?.aborted) {
         sample.close();

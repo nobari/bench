@@ -377,7 +377,13 @@ export interface ExportSettings {
   range: { from: number; to: number } | null;
   /** What the file says about itself: the iTunes-style tags written into the MP4. */
   tags: ExportTags;
+  /** Hold LED lights (traffic lights, brake lights, signs) at their brightest over the last 2 or 3 frames so they stop blinking. */
+  steadyLights: SteadyLights;
 }
+
+export type SteadyLights = "off" | "light" | "strong";
+/** How many frames each setting looks back over (the current one included). */
+export const STEADY_FRAMES: Record<SteadyLights, 0 | 2 | 3> = { off: 0, light: 2, strong: 3 };
 
 /**
  * Tags written into the MP4's metadata (the `ilst` atoms players, libraries
@@ -649,7 +655,7 @@ export interface Project {
   stops?: StopScan | null;
 }
 
-export const DEFAULT_EXPORT: ExportSettings = { codec: "hevc", bitrateMbps: 100, preset: "balanced", audioBitrateKbps: 256, resolution: "source", smartCopy: true, range: null, tags: { ...DEFAULT_TAGS } };
+export const DEFAULT_EXPORT: ExportSettings = { codec: "hevc", bitrateMbps: 100, preset: "balanced", audioBitrateKbps: 256, resolution: "source", smartCopy: true, range: null, tags: { ...DEFAULT_TAGS }, steadyLights: "off" };
 
 /** The part of the timeline an export covers: the chosen range clamped to the timeline, or null for all of it (also when the range is empty or backwards). */
 export function exportRange(p: Project): { from: number; to: number } | null {

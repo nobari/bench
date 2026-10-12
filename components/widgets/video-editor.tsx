@@ -3,11 +3,11 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { AlertTriangle, Camera, Check, ChevronDown, ChevronRight, ChevronUp, Sparkles, Circle, Clapperboard, Crop, Download, FolderOpen, Loader, Maximize2, Minimize2, Music, Pause, Play, Repeat, Save, Scissors, SkipBack, SkipForward, SlidersHorizontal, StepBack, StepForward, Trash2, Type, Upload, Volume2, VolumeX, Keyboard, Search } from "lucide-react";
-import { DEFAULT_CLIP_GAIN_DB, DEFAULT_EXPORT, NEUTRAL_GRADE, NEUTRAL_TRANSFORM, TITLE_ALIGNS, TITLE_FAMILIES, TITLE_FONTS, TITLE_POSITIONS, TITLE_SHADOWS, TITLE_WEIGHTS, TRANSITIONS, addTransitionAt, appendMusic, applyAudioTo, applyGradeTo, applyTransitionToAll, clipAt, crossfades, dbToGain, effectiveMusicEnd, estimateExport, exportRange, fmtTime, musicGainAt, musicLength, newId, newProject, newTitle, orderRecordings, parseTitlesImport, placeClips, planExport, removeRange, reorderMusic, setTransition, splitClip, timelineDuration, titleLanes, titlesTemplate, transitionAt, transitionWindows, CLIP_SPEEDS, canMergeWithNext, clipLength, clipSpeed, groupOf, sourceTimeAt, mergeWithNext, moveClip, unjoin, updateClip, visibleCuts, type Clip, type MediaRef, type MusicTrack, type Project, type ProxyHeight, type Title, type TitleFont, isFileLutKind, type FileLutKind, type LutKind, type MathLutKind, type TitleAlign, type TitlePosition, type TitleShadow, type Transition, type TransitionKind, type ExportTags, type IntroSettings, reorderClip, parseTime } from "@/lib/tools/video/project";
+import { DEFAULT_CLIP_GAIN_DB, DEFAULT_EXPORT, NEUTRAL_GRADE, NEUTRAL_TRANSFORM, TITLE_ALIGNS, TITLE_FAMILIES, TITLE_FONTS, TITLE_POSITIONS, TITLE_SHADOWS, TITLE_WEIGHTS, TRANSITIONS, addTransitionAt, appendMusic, applyAudioTo, applyGradeTo, applyTransitionToAll, clipAt, crossfades, dbToGain, effectiveMusicEnd, estimateExport, exportRange, fmtTime, musicGainAt, musicLength, newId, newProject, newTitle, orderRecordings, parseTitlesImport, placeClips, planExport, removeRange, reorderMusic, setTransition, splitClip, timelineDuration, titleLanes, titlesTemplate, transitionAt, transitionWindows, CLIP_SPEEDS, canMergeWithNext, clipLength, clipSpeed, groupOf, sourceTimeAt, mergeWithNext, moveClip, unjoin, updateClip, visibleCuts, type Clip, type MediaRef, type MusicTrack, type Project, type ProxyHeight, type Title, type TitleFont, isFileLutKind, type FileLutKind, type LutKind, type MathLutKind, type TitleAlign, type TitlePosition, type TitleShadow, type Transition, type TransitionKind, type ExportTags, type IntroSettings, reorderClip, parseTime, type SteadyLights, STEADY_FRAMES } from "@/lib/tools/video/project";
 import { drawTransition } from "@/lib/tools/video/transitions";
 import { LUT_OPTIONS, buildDlogLut, deriveLut, fetchOfficialLut, lutToCube, parseCube, type Lut3D } from "@/lib/tools/video/lut";
 import { fmtBytes, fmtDelta, fmtDuration, fmtMs, type EstimateSource, type ExportProgress, type SpeedPriors, type StepProgress } from "@/lib/tools/video/progress";
-import { buildProxy, drawOverlays, encoderSupport, exportProject, Grader, MAX_AUDIBLE_SPEED, MIN_AUDIBLE_SPEED, probe, renderFrame, renderSceneThumbs, scanMoments, scanMotion } from "@/lib/tools/video/engine";
+import { buildProxy, drawOverlays, encoderSupport, exportProject, Grader, MAX_AUDIBLE_SPEED, MIN_AUDIBLE_SPEED, probe, renderFrame, renderSceneThumbs, scanMoments, scanMotion, Steadier } from "@/lib/tools/video/engine";
 import { INTRO_STYLES, addSceneAt, buildIntro, describeIntro, drawIntroFx, hasIntro, introCandidates, introFrameAt, introLength, introRegion, introStyle, mainClips, moveScene, pickMoments, removeIntro, removeScene, restyleIntro, sceneSecondsFor, scoreMoments, setSceneSeconds, shiftAfterIntro, styledGrade } from "@/lib/tools/video/intro";
 import { ProjectStore, hasFileSystemAccess, AUTOSAVE_FILE, FRAMES_DIR, PROJECT_FILE, PROXY_DIR } from "@/lib/tools/video/store";
 import { cn } from "@/lib/utils";
@@ -204,6 +204,7 @@ export function VideoEditorWidget() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const graderRef = useRef<Grader | null>(null);
+  const steadyRef = useRef<Steadier | null>(null);
   const proxyUrls = useRef<Map<string, string>>(new Map());
   const fileInput = useRef<HTMLInputElement>(null);
   const musicInput = useRef<HTMLInputElement>(null);
@@ -1086,6 +1087,13 @@ export function VideoEditorWidget() {
             drawIntroFx(ctx, w, h, intro, project, fxScratchRef.current);
           }
           drawOverlays(ctx as unknown as OffscreenCanvasRenderingContext2D, w, h, playhead, project, logo);
+          // Steady lights, as the export will do it: only while playing, when frames arrive in order.
+          const steadyFrames = STEADY_FRAMES[project.export.steadyLights ?? "off"];
+          if (steadyFrames && playing) {
+            if (!steadyRef.current || steadyRef.current.canvas.width !== w || steadyRef.current.canvas.height !== h || steadyRef.current.frames !== steadyFrames) steadyRef.current = new Steadier(w, h, steadyFrames);
+            steadyRef.current.apply(c);
+            ctx.drawImage(steadyRef.current.canvas, 0, 0, w, h);
+          } else steadyRef.current?.reset();
           // Music gains follow the playhead so fades and crossfades are audible in the preview.
           for (const [id, node] of musicNodes.current) {
             const m = project.music.find((x) => x.id === id);
@@ -1427,6 +1435,10 @@ export function VideoEditorWidget() {
   useEffect(() => {
     pxRef.current = pxPerSec;
   }, [pxPerSec]);
+  const underClipId = under?.clip.id ?? null;
+  useEffect(() => {
+    steadyRef.current?.reset();
+  }, [seekToken, underClipId]);
   /** Timeline seconds under a pointer, snapped to a nearby cut unless told not to. */
   const timeAtPointer = (el: HTMLDivElement, clientX: number, snap: boolean) => {
     const r = el.getBoundingClientRect();
@@ -2689,6 +2701,15 @@ export function VideoEditorWidget() {
                   <input type="checkbox" checked={project.export.smartCopy} onChange={(e) => setProject((p) => ({ ...p, export: { ...p.export, smartCopy: e.target.checked } }))} className="accent-[var(--accent)]" />
                   Smart copy — pass untouched footage through without re-encoding
                 </label>
+                <label className="flex flex-wrap items-center gap-1.5 text-muted">
+                  LED flicker
+                  <select value={project.export.steadyLights ?? "off"} onChange={(e) => setProject((p) => ({ ...p, export: { ...p.export, steadyLights: e.target.value as SteadyLights } }))} className={SEL} aria-label="LED flicker">
+                    <option value="off">Leave as recorded</option>
+                    <option value="light">Steady lights — hold each light over 2 frames</option>
+                    <option value="strong">Steady lights — hold each light over 3 frames</option>
+                  </select>
+                </label>
+                <p className="text-[12px] text-faint">Traffic lights, brake lights and LED signs pulse faster than the shutter and blink on camera. Steady lights keeps every bright or strongly coloured light at its brightest over the last two or three frames, so a light that drops out for a frame or two stays lit; the preview shows it while playing. Fast-moving lights at night can leave a short trail — prefer the 2-frame setting if they do.</p>
                 <div className="rounded-[var(--radius-sm)] bg-base p-2 text-[12.5px]">
                   <div className="flex flex-wrap gap-x-4 gap-y-1">
                     <span>
