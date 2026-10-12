@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { AlertTriangle, Camera, Check, ChevronDown, ChevronRight, Circle, Clapperboard, Crop, Download, FolderOpen, Loader, Maximize2, Minimize2, Music, Pause, Play, Repeat, Save, Scissors, SkipBack, SkipForward, SlidersHorizontal, StepBack, StepForward, Trash2, Type, Upload, Volume2, VolumeX } from "lucide-react";
+import { AlertTriangle, Camera, Check, ChevronDown, ChevronRight, ChevronUp, Sparkles, Circle, Clapperboard, Crop, Download, FolderOpen, Loader, Maximize2, Minimize2, Music, Pause, Play, Repeat, Save, Scissors, SkipBack, SkipForward, SlidersHorizontal, StepBack, StepForward, Trash2, Type, Upload, Volume2, VolumeX } from "lucide-react";
 import {
   DEFAULT_CLIP_GAIN_DB,
   DEFAULT_EXPORT,
@@ -71,11 +71,12 @@ import {
   type TitlePosition,
   type TitleShadow,
   type Transition,
-  type TransitionKind, type ExportTags } from "@/lib/tools/video/project";
+  type TransitionKind, type ExportTags, type IntroSettings } from "@/lib/tools/video/project";
 import { drawTransition } from "@/lib/tools/video/transitions";
 import { LUT_OPTIONS, buildDlogLut, deriveLut, fetchOfficialLut, lutToCube, parseCube, type Lut3D } from "@/lib/tools/video/lut";
 import { fmtBytes, fmtDelta, fmtDuration, fmtMs, type EstimateSource, type ExportProgress, type SpeedPriors, type StepProgress } from "@/lib/tools/video/progress";
-import { Grader, MAX_AUDIBLE_SPEED, MIN_AUDIBLE_SPEED, buildProxy, drawOverlays, encoderSupport, exportProject, probe, renderFrame } from "@/lib/tools/video/engine";
+import { Grader, MAX_AUDIBLE_SPEED, MIN_AUDIBLE_SPEED, buildProxy, drawOverlays, encoderSupport, exportProject, probe, renderFrame, renderSceneThumbs, scanMoments } from "@/lib/tools/video/engine";
+import { INTRO_STYLES, addSceneAt, buildIntro, describeIntro, drawIntroFx, hasIntro, introCandidates, introFrameAt, introLength, introRegion, introStyle, mainClips, moveScene, pickMoments, removeIntro, removeScene, restyleIntro, sceneSecondsFor, scoreMoments, setSceneSeconds, shiftAfterIntro, styledGrade } from "@/lib/tools/video/intro";
 import { ProjectStore, hasFileSystemAccess, AUTOSAVE_FILE, FRAMES_DIR, PROJECT_FILE, PROXY_DIR } from "@/lib/tools/video/store";
 import { cn } from "@/lib/utils";
 
@@ -89,9 +90,10 @@ const POSITION_NAMES: Record<TitlePosition, string> = { tl: "Top left", tc: "Top
 const KIND_LABELS: Record<Title["kind"], string> = { intro: "Intro", title: "Title", lowerThird: "Lower third" };
 const DEFAULT_PREVIEW_HEIGHT: ProxyHeight = 0;
 const toHex = (c: string) => (/^#[0-9a-fA-F]{6}$/.test(c) ? c : "#ffffff");
-type Tab = "trim" | "transform" | "colour" | "audio" | "titles" | "export";
+type Tab = "trim" | "intro" | "transform" | "colour" | "audio" | "titles" | "export";
 const TABS: [Tab, string, typeof Scissors][] = [
   ["trim", "Trim", Scissors],
+  ["intro", "Intro", Sparkles],
   ["transform", "Rotate & crop", Crop],
   ["colour", "Colour", SlidersHorizontal],
   ["audio", "Audio", Volume2],
@@ -100,7 +102,7 @@ const TABS: [Tab, string, typeof Scissors][] = [
 ];
 
 interface Job {
-  kind: "proxy" | "export" | "frame";
+  kind: "proxy" | "export" | "frame" | "intro";
   label: string;
   fraction: number;
   message?: string;
@@ -215,6 +217,13 @@ export function VideoEditorWidget() {
   // A hold doubles the set speed, up to the 16× that browsers allow a video element.
   const rate = Math.min(MAX_PREVIEW_RATE, speed * (boost ? 2 : 1));
   const [frameMenu, setFrameMenu] = useState(false);
+  // Intro: styled scene thumbnails (object URLs by clip id), the picker's settings, and where "Preview intro" stops.
+  const [thumbs, setThumbs] = useState<Map<string, string>>(() => new Map());
+  const [introCount, setIntroCount] = useState(6);
+  const [introScan, setIntroScan] = useState(true);
+  const stopAtRef = useRef<number | null>(null);
+  const fxScratchRef = useRef<{ a: OffscreenCanvas; b: OffscreenCanvas; w: number; h: number } | null>(null);
+  const projectRef = useRef<Project | null>(null);
   const [fsTimeline, setFsTimeline] = useState(true);
   const fsTimelineRef = useRef(true);
   useEffect(() => {
@@ -397,6 +406,13 @@ export function VideoEditorWidget() {
   useEffect(() => {
     playheadRef.current = playhead;
   }, [playhead]);
+  useEffect(() => {
+    projectRef.current = project;
+  }, [project]);
+  // "Preview intro" stops at the end of the intro; any other stop forgets that.
+  useEffect(() => {
+    if (!playing) stopAtRef.current = null;
+  }, [playing]);
   useEffect(() => {
     previewRef.current = project.preview.proxyHeight;
   }, [project.preview.proxyHeight]);
@@ -894,7 +910,11 @@ export function VideoEditorWidget() {
           setPlayhead(loopTo);
           setSeekToken((x) => x + 1);
         };
-        if (loopRef.current && t >= loopEnd - 0.03) restart();
+        if (stopAtRef.current !== null && t >= stopAtRef.current - 0.03) {
+          stopAtRef.current = null;
+          setPlayhead(Math.min(duration, t));
+          setPlaying(false);
+        } else if (loopRef.current && t >= loopEnd - 0.03) restart();
         else if (v.currentTime >= under.clip.out - 0.05) {
           if (under.clip.end >= duration - 0.05) {
             if (loopRef.current) restart();
@@ -922,6 +942,9 @@ export function VideoEditorWidget() {
           const ctx = c.getContext("2d")!;
           const alt = altRef.current;
           const tr = windows.length ? transitionAt(windows, playhead) : null;
+          // Inside the intro the clips draw through the style's look, and its effects go on before the titles.
+          const intro = introFrameAt(project, placed, playhead);
+          const gradeFor = (clip: Clip) => (clip.introRole && intro ? styledGrade(clip.grade, intro.style) : clip.grade);
           let composed = false;
           if (tr && alt) {
             const outgoingIsUnder = tr.window.outgoing.id === under.clip.id;
@@ -944,9 +967,9 @@ export function VideoEditorWidget() {
               if (alt.readyState >= 2) {
                 if (!scratchRef.current || scratchRef.current.w !== w || scratchRef.current.h !== h) scratchRef.current = { a: new OffscreenCanvas(w, h), b: new OffscreenCanvas(w, h), s: new OffscreenCanvas(w, h), w, h };
                 const sc = scratchRef.current;
-                grader.draw(v, under.clip.grade, under.clip.transform, v.videoWidth, v.videoHeight);
+                grader.draw(v, gradeFor(under.clip), under.clip.transform, v.videoWidth, v.videoHeight);
                 sc.a.getContext("2d")!.drawImage(grader.canvas, 0, 0);
-                grader.draw(alt, other.grade, other.transform, alt.videoWidth, alt.videoHeight);
+                grader.draw(alt, gradeFor(other), other.transform, alt.videoWidth, alt.videoHeight);
                 sc.b.getContext("2d")!.drawImage(grader.canvas, 0, 0);
                 drawTransition(ctx, outgoingIsUnder ? sc.a : sc.b, outgoingIsUnder ? sc.b : sc.a, w, h, tr.window.kind, tr.progress, sc.s);
                 composed = true;
@@ -966,8 +989,12 @@ export function VideoEditorWidget() {
             }
           }
           if (!composed) {
-            grader.draw(v, under.clip.grade, under.clip.transform, v.videoWidth, v.videoHeight);
+            grader.draw(v, gradeFor(under.clip), under.clip.transform, v.videoWidth, v.videoHeight);
             ctx.drawImage(grader.canvas, 0, 0);
+          }
+          if (intro) {
+            if (!fxScratchRef.current || fxScratchRef.current.w !== w || fxScratchRef.current.h !== h) fxScratchRef.current = { a: new OffscreenCanvas(w, h), b: new OffscreenCanvas(w, h), w, h };
+            drawIntroFx(ctx, w, h, intro, project, fxScratchRef.current);
           }
           drawOverlays(ctx as unknown as OffscreenCanvasRenderingContext2D, w, h, playhead, project, logo);
           // Music gains follow the playhead so fades and crossfades are audible in the preview.
@@ -983,7 +1010,7 @@ export function VideoEditorWidget() {
     };
     raf = requestAnimationFrame(draw);
     return () => cancelAnimationFrame(raf);
-  }, [under, playhead, project, logo, duration, windows, playing, rate, previewUrlFor, customLut, fileLuts]);
+  }, [under, playhead, project, placed, logo, duration, windows, playing, rate, previewUrlFor, customLut, fileLuts]);
 
   // Grade, crop and audio changes reach every clip of a joined run, so a hidden cut stays invisible.
   const update = (id: string, patch: Partial<Clip>) => setProject((p) => ({ ...p, clips: updateClip(p.clips, id, patch) }));
@@ -1062,9 +1089,121 @@ export function VideoEditorWidget() {
   };
   const patchTitle = (id: string, patch: Partial<Title>) => setProject((p) => ({ ...p, titles: p.titles.map((x) => (x.id === id ? { ...x, ...patch } : x)) }));
 
+  /* ------------------------------------------------------------------ intro */
+  const introReg = useMemo(() => introRegion(placed), [placed]);
+  /** Scenes are read from the proxy when there is one (quick), else from the recording. */
+  const fileForIntro = useCallback(
+    async (mediaId: string) => {
+      const px = projectRef.current?.proxies[mediaId];
+      if (px?.ready && px.file) {
+        const f = await store.proxyFile(px.file);
+        if (f && f.size > 0) return f;
+      }
+      return store.getFile(mediaId);
+    },
+    [store],
+  );
+  /** What the picker can afford: scanning decodes small frames, cheap from proxies, slow from 8K originals. */
+  const scanPlan = useMemo(() => {
+    const main = mainClips(placed);
+    if (!main.length) return null;
+    const proxied = main.every((c) => project.proxies[c.media]?.ready);
+    const maxH = Math.max(0, ...main.map((c) => project.media[c.media]?.height ?? 0));
+    if (proxied) return { perWindow: 5, hint: "Scanned from the proxies, five candidates per scene — quick." };
+    if (maxH <= 2160) return { perWindow: 3, hint: "No proxies yet: three candidates per scene are decoded from the recordings." };
+    return { perWindow: 1, hint: "Without proxies, 8K recordings are too slow to scan, so the scenes are spaced evenly across the drive. Render proxies (in the preview's size menu) and make the intro again to pick the lively moments." };
+  }, [placed, project.proxies, project.media]);
+  /** Replace the clips through an intro operation; titles and the export range move with the drive. */
+  const applyIntro = (fn: (p: Project) => Clip[] | null, failure?: string) => {
+    const clips = fn(project);
+    if (!clips) {
+      if (failure) setError(failure);
+      return;
+    }
+    const delta = introLength(clips) - introLength(project.clips);
+    setProject((p) => shiftAfterIntro({ ...p, clips }, delta));
+  };
+  const setIntro = (patch: Partial<IntroSettings>) => {
+    const next: Project = { ...project, intro: { ...project.intro, ...patch } };
+    const clips = hasIntro(next.clips) ? restyleIntro(next) : next.clips;
+    const delta = introLength(clips) - introLength(project.clips);
+    setProject(shiftAfterIntro({ ...next, clips }, delta));
+  };
+  const makeIntro = async () => {
+    const main = mainClips(placed);
+    if (!main.length) return setError("Add recordings first — the intro is cut from them.");
+    if (job) return;
+    const seconds = sceneSecondsFor(project);
+    const need = seconds * introStyle(project.intro.style).speed;
+    const perWindow = introScan ? (scanPlan?.perWindow ?? 1) : 1;
+    let windows = introCandidates(main, introCount, perWindow, need);
+    if (perWindow > 1) {
+      const abort = new AbortController();
+      setJob({ kind: "intro", label: "Looking for lively moments", message: `${windows.flat().length} candidates`, fraction: 0, abort });
+      try {
+        const stats = await scanMoments(fileForIntro, project, windows, { signal: abort.signal, onProgress: (d, n) => setJob((j) => (j ? { ...j, fraction: d / n } : j)) });
+        windows = scoreMoments(windows, stats);
+      } catch (e) {
+        if ((e as DOMException).name === "AbortError") {
+          setJob(null);
+          return;
+        }
+        setStatus("Couldn't scan the footage; spacing the scenes evenly instead.");
+      } finally {
+        setJob(null);
+      }
+    }
+    const moments = pickMoments(windows);
+    const clips = buildIntro(project, moments, seconds);
+    const delta = introLength(clips) - introLength(project.clips);
+    setProject((p) => shiftAfterIntro({ ...p, clips }, delta));
+    setSelected(null);
+    setSelectedTransition(null);
+    setPlayhead(0);
+    setSeekToken((x) => x + 1);
+    setTab("intro");
+    setStatus(`Intro: ${moments.length} scenes ${perWindow > 1 ? "picked for motion and contrast" : "spaced evenly across the drive"}, ${introStyle(project.intro.style).name} look — swap, reorder or retime them below.`);
+  };
+  const previewIntro = () => {
+    if (!introReg) return;
+    stopAtRef.current = introReg.end;
+    setPlayhead(0);
+    setSeekToken((x) => x + 1);
+    setPlaying(true);
+  };
+  // Thumbnails of the scenes in the chosen look, re-rendered when a scene, the look or the card text changes.
+  const thumbKey = introReg ? [...introReg.scenes, ...(introReg.card ? [introReg.card] : [])].map((c) => `${c.id}:${c.in.toFixed(2)}:${c.out.toFixed(2)}`).join("|") + `@${project.intro.style}@${project.intro.card.text}@${project.intro.card.subtitle}@${project.name}` : "";
+  useEffect(() => {
+    if (!thumbKey) return;
+    const abort = new AbortController();
+    const timer = setTimeout(() => {
+      const p = projectRef.current;
+      const region = p ? introRegion(placeClips(p.clips)) : null;
+      if (!p || !region) return;
+      renderSceneThumbs(fileForIntro, p, [...region.scenes, ...(region.card ? [region.card] : [])], 72, abort.signal)
+        .then((m) => {
+          if (abort.signal.aborted) {
+            for (const u of m.values()) URL.revokeObjectURL(u);
+            return;
+          }
+          setThumbs((old) => {
+            for (const u of old.values()) URL.revokeObjectURL(u);
+            return m;
+          });
+        })
+        .catch(() => undefined);
+    }, 400);
+    return () => {
+      abort.abort();
+      clearTimeout(timer);
+    };
+  }, [thumbKey, fileForIntro]);
+
   // Exposed for automated tests, which cannot drive the folder picker. Re-registered whenever the handlers change.
   useEffect(() => {
     (window as unknown as { __benchVideo?: unknown }).__benchVideo = {
+      makeIntro,
+      previewIntro,
       useDirectory: (d: FileSystemDirectoryHandle) => {
         store.useDirectory(d);
         setFolder(d.name || "test");
@@ -1576,6 +1715,119 @@ export function VideoEditorWidget() {
                       <input type="number" step={0.01} value={current.out} onChange={(e) => update(current.id, { out: Math.min(project.media[current.media]?.duration ?? current.out, Math.max(current.in + 0.1, Number(e.target.value))) })} className={cn(INPUT, "mt-1 font-mono")} />
                     </label>
                   </div>
+                )}
+              </>
+            )}
+            {tab === "intro" && (
+              <>
+                <div className="sticky top-0 z-10 -mx-3 -mt-3 flex flex-wrap items-center gap-1.5 bg-surface px-3 pt-3 pb-2">
+                  <button type="button" onClick={() => void makeIntro()} disabled={!placed.length || !!job} className={PRIMARY} data-make-intro>
+                    <Sparkles size={14} /> {introReg ? "Make it again" : "Make an intro from this drive"}
+                  </button>
+                  {introReg && (
+                    <>
+                      <button type="button" onClick={previewIntro} className={GHOST} data-preview-intro>
+                        <Play size={12} /> Preview intro
+                      </button>
+                      <button type="button" onClick={() => applyIntro((p) => addSceneAt(p, playhead), "Move the playhead into the drive, after the intro, to lift a scene from there.")} className={GHOST} data-add-scene title="Lift a scene from the frame under the playhead">
+                        + Use this moment
+                      </button>
+                      <button type="button" onClick={() => applyIntro((p) => removeIntro(p.clips))} className={cn(GHOST, "ml-auto hover:border-danger hover:text-danger")} data-remove-intro>
+                        <Trash2 size={12} /> Remove intro
+                      </button>
+                    </>
+                  )}
+                </div>
+                {!introReg && <p className="text-muted">A cold open: a few of the drive’s liveliest moments cut together in a look, ending on a title card, before the video proper starts. One click builds a starter from the footage; then swap scenes, reorder them, retime them or change the look.</p>}
+                <div className="grid grid-cols-2 gap-2 text-[12px] text-muted">
+                  <label>
+                    Scenes
+                    <input type="number" min={2} max={12} step={1} value={introCount} onChange={(e) => setIntroCount(Math.max(2, Math.min(12, Math.round(Number(e.target.value) || 6))))} className={cn(INPUT, "mt-0.5 font-mono")} aria-label="Scenes" />
+                  </label>
+                  <label>
+                    Seconds per scene
+                    <input type="number" min={0.3} max={6} step={0.1} value={Number(sceneSecondsFor(project).toFixed(2))} onChange={(e) => setIntro({ sceneSeconds: Math.max(0.3, Math.min(6, Number(e.target.value) || 1)) })} className={cn(INPUT, "mt-0.5 font-mono")} aria-label="Seconds per scene" />
+                  </label>
+                  <label className="col-span-2 flex items-start gap-1.5">
+                    <input type="checkbox" checked={introScan} onChange={(e) => setIntroScan(e.target.checked)} className="mt-0.5 accent-[var(--accent)]" />
+                    <span>Look for lively moments (motion and contrast) rather than spacing the scenes evenly</span>
+                  </label>
+                  {introScan && scanPlan && <p className="col-span-2 text-faint">{scanPlan.hint}</p>}
+                </div>
+                <div>
+                  <p className="mb-1 text-[12px] text-muted">Look</p>
+                  <div className="grid grid-cols-2 gap-1" role="radiogroup" aria-label="Intro look">
+                    {INTRO_STYLES.map((s) => (
+                      <button key={s.id} type="button" role="radio" aria-checked={project.intro.style === s.id} onClick={() => setIntro({ style: s.id })} title={s.hint} className={cn("rounded-[var(--radius-sm)] border px-2 py-1 text-left", project.intro.style === s.id ? "border-accent bg-accent-soft text-ink" : "border-edge text-muted hover:border-accent")} data-intro-style={s.id}>
+                        <span className="block text-[12.5px] font-medium">{s.name}</span>
+                        <span className="block text-[11px] text-faint">{s.hint}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                {introReg && (
+                  <>
+                    <p className="text-[12px] text-faint" data-intro-summary>
+                      {describeIntro(project)}. Titles and the export range moved with the drive; music stays where it is and plays under the intro.
+                    </p>
+                    <div className="space-y-1" data-intro-scenes>
+                      {[...introReg.scenes, ...(introReg.card ? [introReg.card] : [])].map((c, i) => {
+                        const isCard = c.introRole === "card";
+                        const thumb = thumbs.get(c.id);
+                        return (
+                          <div key={c.id} className="flex items-center gap-2 rounded-[var(--radius-sm)] border border-edge p-1" data-intro-scene={isCard ? "card" : i}>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setPlayhead(c.start + Math.min(0.3, (c.end - c.start) / 2));
+                                setSeekToken((x) => x + 1);
+                              }}
+                              className="shrink-0 overflow-hidden rounded-[3px] bg-black"
+                              style={{ width: 96, height: 54 }}
+                              title="Show it in the preview"
+                            >
+                              {/* eslint-disable-next-line @next/next/no-img-element -- a short-lived object URL, not an asset */}
+                              {thumb ? <img src={thumb} alt="" width={96} height={54} className="h-full w-full object-cover" /> : <span className="flex h-full w-full items-center justify-center text-[10px] text-white/50">…</span>}
+                            </button>
+                            <div className="min-w-0 flex-1 text-[12px]">
+                              <div className="truncate text-ink">
+                                {isCard ? "Title card" : `Scene ${i + 1}`} <span className="text-faint">· {project.media[c.media]?.name} at {fmtTime(c.in)}</span>
+                              </div>
+                              <label className="flex items-center gap-1 text-muted">
+                                <input type="number" min={0.3} max={isCard ? 10 : 6} step={0.1} value={Number((c.end - c.start).toFixed(2))} onChange={(e) => applyIntro((p) => setSceneSeconds(p, c.id, Number(e.target.value) || 1))} className={cn(INPUT, "h-6 w-16 font-mono text-[11.5px]")} aria-label={isCard ? "Card seconds" : `Scene ${i + 1} seconds`} /> s{clipSpeed(c) !== 1 && <span className="text-faint">· {clipSpeed(c)}×</span>}
+                              </label>
+                            </div>
+                            {!isCard && (
+                              <>
+                                <button type="button" onClick={() => applyIntro((p) => moveScene(p, c.id, -1))} disabled={i === 0} className="text-faint hover:text-ink disabled:opacity-30" aria-label="Move earlier">
+                                  <ChevronUp size={14} />
+                                </button>
+                                <button type="button" onClick={() => applyIntro((p) => moveScene(p, c.id, 1))} disabled={i === introReg.scenes.length - 1} className="text-faint hover:text-ink disabled:opacity-30" aria-label="Move later">
+                                  <ChevronDown size={14} />
+                                </button>
+                              </>
+                            )}
+                            <button type="button" onClick={() => (isCard ? setIntro({ card: { ...project.intro.card, seconds: 0 } }) : applyIntro((p) => removeScene(p, c.id)))} className="text-faint hover:text-danger" aria-label={isCard ? "Remove the title card" : `Remove scene ${i + 1}`}>
+                              <Trash2 size={13} />
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                    <div className="space-y-1.5 rounded-[var(--radius-sm)] border border-edge p-2 text-[12px] text-muted" data-intro-card>
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-medium text-ink">Title card</span>
+                        <label className="flex items-center gap-1">
+                          <input type="number" min={0} max={10} step={0.5} value={project.intro.card.seconds} onChange={(e) => setIntro({ card: { ...project.intro.card, seconds: Math.max(0, Math.min(10, Number(e.target.value) || 0)) } })} className={cn(INPUT, "h-6 w-16 font-mono")} aria-label="Card seconds" /> s (0 for none)
+                        </label>
+                      </div>
+                      <input value={project.intro.card.text} onChange={(e) => setIntro({ card: { ...project.intro.card, text: e.target.value } })} placeholder={project.name} className={INPUT} aria-label="Card title" />
+                      <input value={project.intro.card.subtitle} onChange={(e) => setIntro({ card: { ...project.intro.card, subtitle: e.target.value } })} placeholder="Subtitle (optional): the route, the date" className={INPUT} aria-label="Card subtitle" />
+                      <label className="flex items-center gap-1.5">
+                        <input type="checkbox" checked={project.intro.keepAudio} onChange={(e) => setIntro({ keepAudio: e.target.checked })} className="accent-[var(--accent)]" /> keep the scenes’ own sound (otherwise they play quiet under the music)
+                      </label>
+                    </div>
+                  </>
                 )}
               </>
             )}
@@ -2187,16 +2439,17 @@ export function VideoEditorWidget() {
                       setPlayhead(c.start);
                       setSeekToken((t) => t + 1);
                     }}
-                    className={cn("absolute top-0 h-full overflow-hidden border text-left text-[11.5px]", c.joinedToPrevious ? "rounded-l-none border-l-0 pl-0" : "rounded-l-[var(--radius-sm)] pl-2", joinsNext ? "rounded-r-none border-r-0 pr-0" : "rounded-r-[var(--radius-sm)] pr-2", selectedRun.has(c.id) ? "border-accent bg-accent-soft text-ink" : "border-edge bg-raised text-muted")}
+                    className={cn("absolute top-0 h-full overflow-hidden border text-left text-[11.5px]", c.joinedToPrevious ? "rounded-l-none border-l-0 pl-0" : "rounded-l-[var(--radius-sm)] pl-2", joinsNext ? "rounded-r-none border-r-0 pr-0" : "rounded-r-[var(--radius-sm)] pr-2", selectedRun.has(c.id) ? "border-accent bg-accent-soft text-ink" : c.introRole && introReg && i <= introReg.scenes.length ? "border-[#d9a400]/60 bg-[#d9a400]/15 text-muted" : "border-edge bg-raised text-muted")}
                     style={{ left: c.start * pxPerSec, width: Math.max(4, (c.end - c.start) * pxPerSec - (joinsNext ? 0 : 1)) }}
-                    title={`${project.media[c.media]?.name} ${fmtTime(c.in)}–${fmtTime(c.out)}${c.joinedToPrevious ? " · joined to the previous clip" : ""}`}
+                    title={`${c.introRole === "card" ? "Intro title card · " : c.introRole ? "Intro scene · " : ""}${project.media[c.media]?.name} ${fmtTime(c.in)}–${fmtTime(c.out)}${c.joinedToPrevious ? " · joined to the previous clip" : ""}`}
                     data-clip={c.id}
                     data-joined={c.joinedToPrevious ? "true" : undefined}
+                    data-intro-clip={c.introRole}
                   >
                     {!c.joinedToPrevious && (
                       <>
                         <span className="block truncate font-medium">
-                          {project.media[c.media]?.name}
+                          {c.introRole === "card" ? "Title card" : c.introRole ? `Intro ${introReg ? introReg.scenes.findIndex((s) => s.id === c.id) + 1 : ""}` : project.media[c.media]?.name}
                           {runCount > 1 ? ` +${runCount - 1}` : ""}
                         </span>
                         <span className="block truncate text-faint">
