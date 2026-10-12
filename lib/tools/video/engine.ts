@@ -27,7 +27,7 @@ import {
 import { GRADE_FRAGMENT_SHADER, buildDlogLut, deriveLut, fetchOfficialLut, lutTexture, parseCube, type Lut3D } from "./lut";
 import { clipAt, clipSpeed, sourceTimeAt, dbToGain, exportTags, fontFamilyCss, exportRange, isFileLutKind, musicGainAt, placeClips, planExport, transitionAt, transitionWindows, type Clip, type ExportSpan, type Grade, type LutKind, type MediaRef, type PlacedClip, type Project, type Title, type Transform, type TransitionWindow, STEADY_FRAMES } from "./project";
 import { drawTransition } from "./transitions";
-import { drawIntroFx, introFrameAt, introStyle, styledGrade, type IntroFrame, type Moment } from "./intro";
+import { drawIntroFx, introFrameAt, introStyle, styledGrade, type IntroFrame, type Moment, introBlendAt } from "./intro";
 import { ProgressTracker, defaultSpeeds, planSteps, type ExportProgress, type SpeedPriors, type StepProgress } from "./progress";
 import pkg from "@/package.json";
 import type { MotionTrace } from "./stops";
@@ -848,7 +848,7 @@ async function exportWithPulse(opts: ExportOptions, pulse: { emit: (() => void) 
       const intro = introFrameAt(project, placedAll, timelineT);
       if (intro) {
         fxScratch ??= { a: new OffscreenCanvas(outW, outH), b: new OffscreenCanvas(outW, outH) };
-        drawIntroFx(ctx2d, outW, outH, intro, project, fxScratch);
+        drawIntroFx(ctx2d, outW, outH, intro, project, fxScratch, introBlendAt(project, placedAll, tr, timelineT));
       }
       drawOverlays(ctx2d, outW, outH, timelineT, project, logo);
       if (steady) {
@@ -1010,7 +1010,7 @@ export async function renderFrame(opts: FrameOptions): Promise<RenderedFrame> {
     grader.draw(main.toCanvasImageSource(), gradeFor(under.clip), under.clip.transform, srcW, srcH);
     ctx.drawImage(grader.canvas, 0, 0, outW, outH);
   }
-  if (intro) drawIntroFx(ctx, outW, outH, intro, project, { a: new OffscreenCanvas(outW, outH), b: new OffscreenCanvas(outW, outH) });
+  if (intro) drawIntroFx(ctx, outW, outH, intro, project, { a: new OffscreenCanvas(outW, outH), b: new OffscreenCanvas(outW, outH) }, introBlendAt(project, placedAll, tr, t));
   drawOverlays(ctx, outW, outH, t, project, logo);
   main.close();
   const blob = await canvas.convertToBlob({ type: opts.type ?? "image/png", quality: opts.quality });

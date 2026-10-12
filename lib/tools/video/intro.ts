@@ -136,6 +136,31 @@ export interface IntroFrame {
   introLength: number;
 }
 
+/** The intro frame a given intro clip would show at `t`, with its local time held at the clip's edges (for blending across a cut). */
+export function introFrameForClip(project: Project, placed: PlacedClip[], clipId: string, t: number): IntroFrame | null {
+  const region = introRegion(placed);
+  if (!region) return null;
+  const all = region.card ? [...region.scenes, region.card] : region.scenes;
+  const clip = all.find((c) => c.id === clipId);
+  if (!clip) return null;
+  const length = clip.end - clip.start;
+  return { style: introStyle(project.intro.style), role: clip.introRole === "card" ? "card" : "scene", index: clip.introRole === "card" ? region.scenes.length : region.scenes.indexOf(clip), count: region.scenes.length, local: Math.max(0, Math.min(length, t - clip.start)), length, introT: t, introLength: region.end };
+}
+
+/** The two sides of a transition inside the intro, so the look's zoom can be blended across the cut instead of snapping. */
+export interface IntroBlend {
+  out: IntroFrame | null;
+  in: IntroFrame | null;
+  progress: number;
+}
+
+export function introBlendAt(project: Project, placed: PlacedClip[], tr: { window: { outgoing: PlacedClip; incoming: PlacedClip }; progress: number } | null, t: number): IntroBlend | null {
+  if (!tr) return null;
+  const out = introFrameForClip(project, placed, tr.window.outgoing.id, t), inn = introFrameForClip(project, placed, tr.window.incoming.id, t);
+  if (!out && !inn) return null;
+  return { out, in: inn, progress: Math.max(0, Math.min(1, tr.progress)) };
+}
+
 export function introFrameAt(project: Project, placed: PlacedClip[], t: number): IntroFrame | null {
   const region = introRegion(placed);
   if (!region || t >= region.end || t < 0) return null;
@@ -205,17 +230,33 @@ function keepChannel(c: Canvas, w: number, h: number, colour: string) {
  * Draw the style's post effects over the frame already in `ctx` (graded, through any transition). The two scratch
  * canvases must match the frame size; they are used for zoom, glitch and the card's blur.
  */
-export function drawIntroFx(ctx: Ctx, w: number, h: number, f: IntroFrame, project: Project, scratch: { a: Canvas; b: Canvas }) {
+/** The look's zoom at one frame: a push-in across the scene, and a punch that settles at its start. */
+export function introZoom(f: IntroFrame | null): number {
+  if (!f) return 1;
+  const { fx } = f.style;
+  let zoom = 1;
+  if (fx.pushIn) zoom *= 1 + fx.pushIn * ease(f.local / Math.max(0.01, f.length));
+  if (fx.punch && f.role === "scene") zoom *= 1 + fx.punch * Math.max(0, 1 - f.local / 0.35) ** 2;
+  return zoom;
+}
+
+/**
+ * The zoom to draw: inside a transition the two scenes' zooms are mixed by the transition's progress, so the push-in
+ * does not snap back at the cut in the middle of a dissolve (a drive clip on the far side counts as no zoom).
+ */
+export function introZoomAt(f: IntroFrame, blend?: IntroBlend | null): number {
+  if (!blend) return introZoom(f);
+  return introZoom(blend.out) * (1 - blend.progress) + introZoom(blend.in) * blend.progress;
+}
+
+export function drawIntroFx(ctx: Ctx, w: number, h: number, f: IntroFrame, project: Project, scratch: { a: Canvas; b: Canvas }, blend?: IntroBlend | null) {
   const { fx } = f.style;
   const frameNo = Math.floor(f.introT * 60);
   ctx.save();
   ctx.globalAlpha = 1;
   ctx.globalCompositeOperation = "source-over";
   ctx.filter = "none";
-  // zoom: push-in across the scene, a punch that settles at its start
-  let zoom = 1;
-  if (fx.pushIn) zoom *= 1 + fx.pushIn * ease(f.local / Math.max(0.01, f.length));
-  if (fx.punch && f.role === "scene") zoom *= 1 + fx.punch * Math.max(0, 1 - f.local / 0.35) ** 2;
+  const zoom = introZoomAt(f, blend);
   const glitch = fx.glitch && f.role === "scene" && f.local < fx.glitch ? 1 - f.local / fx.glitch : 0;
   const blur = f.role === "card" ? Math.min(h * 0.006, 24) * ease(f.local / 0.6) : 0;
   if (zoom !== 1 || glitch > 0 || blur > 0.3) {
