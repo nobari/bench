@@ -1,77 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { AlertTriangle, Camera, Check, ChevronDown, ChevronRight, ChevronUp, Sparkles, Circle, Clapperboard, Crop, Download, FolderOpen, Loader, Maximize2, Minimize2, Music, Pause, Play, Repeat, Save, Scissors, SkipBack, SkipForward, SlidersHorizontal, StepBack, StepForward, Trash2, Type, Upload, Volume2, VolumeX, Keyboard, Search } from "lucide-react";
-import {
-  DEFAULT_CLIP_GAIN_DB,
-  DEFAULT_EXPORT,
-  NEUTRAL_GRADE,
-  NEUTRAL_TRANSFORM,
-  TITLE_ALIGNS,
-  TITLE_FAMILIES,
-  TITLE_FONTS,
-  TITLE_POSITIONS,
-  TITLE_SHADOWS,
-  TITLE_WEIGHTS,
-  TRANSITIONS,
-  addTransitionAt,
-  appendMusic,
-  applyAudioTo,
-  applyGradeTo,
-  applyTransitionToAll,
-  clipAt,
-  crossfades,
-  dbToGain,
-  effectiveMusicEnd,
-  estimateExport,
-  exportRange,
-  fmtTime,
-  musicGainAt,
-  musicLength,
-  newId,
-  newProject,
-  newTitle,
-  orderRecordings,
-  parseTitlesImport,
-  placeClips,
-  planExport,
-  removeRange,
-  reorderMusic,
-  setTransition,
-  splitClip,
-  timelineDuration,
-  titleLanes,
-  titlesTemplate,
-  transitionAt,
-  transitionWindows,
-  CLIP_SPEEDS,
-  canMergeWithNext,
-  clipLength,
-  clipSpeed,
-  groupOf,
-  sourceTimeAt,
-  mergeWithNext,
-  moveClip,
-  unjoin,
-  updateClip,
-  visibleCuts,
-  type Clip,
-  type MediaRef,
-  type MusicTrack,
-  type Project,
-  type ProxyHeight,
-  type Title,
-  type TitleFont,
-  isFileLutKind,
-  type FileLutKind,
-  type LutKind,
-  type MathLutKind,
-  type TitleAlign,
-  type TitlePosition,
-  type TitleShadow,
-  type Transition,
-  type TransitionKind, type ExportTags, type IntroSettings } from "@/lib/tools/video/project";
+import { DEFAULT_CLIP_GAIN_DB, DEFAULT_EXPORT, NEUTRAL_GRADE, NEUTRAL_TRANSFORM, TITLE_ALIGNS, TITLE_FAMILIES, TITLE_FONTS, TITLE_POSITIONS, TITLE_SHADOWS, TITLE_WEIGHTS, TRANSITIONS, addTransitionAt, appendMusic, applyAudioTo, applyGradeTo, applyTransitionToAll, clipAt, crossfades, dbToGain, effectiveMusicEnd, estimateExport, exportRange, fmtTime, musicGainAt, musicLength, newId, newProject, newTitle, orderRecordings, parseTitlesImport, placeClips, planExport, removeRange, reorderMusic, setTransition, splitClip, timelineDuration, titleLanes, titlesTemplate, transitionAt, transitionWindows, CLIP_SPEEDS, canMergeWithNext, clipLength, clipSpeed, groupOf, sourceTimeAt, mergeWithNext, moveClip, unjoin, updateClip, visibleCuts, type Clip, type MediaRef, type MusicTrack, type Project, type ProxyHeight, type Title, type TitleFont, isFileLutKind, type FileLutKind, type LutKind, type MathLutKind, type TitleAlign, type TitlePosition, type TitleShadow, type Transition, type TransitionKind, type ExportTags, type IntroSettings, reorderClip, parseTime } from "@/lib/tools/video/project";
 import { drawTransition } from "@/lib/tools/video/transitions";
 import { LUT_OPTIONS, buildDlogLut, deriveLut, fetchOfficialLut, lutToCube, parseCube, type Lut3D } from "@/lib/tools/video/lut";
 import { fmtBytes, fmtDelta, fmtDuration, fmtMs, type EstimateSource, type ExportProgress, type SpeedPriors, type StepProgress } from "@/lib/tools/video/progress";
@@ -159,9 +91,44 @@ const SHORTCUTS: [string, string][] = [
   ["⌘Z", "Undo"],
   ["⌘S", "Save the project"],
   ["T", "Timeline summary in full screen"],
-  ["Esc", "Leave full screen or close a dialog"],
+  ["Esc", "Clear the selection; leave full screen or close a dialog"],
+  ["⌘ + wheel", "Zoom the timeline around the pointer"],
+  ["⌥ + drag", "Scrub without snapping to cuts"],
   ["?", "This list"],
 ];
+/** Scrubbing snaps to a cut this close (pixels); hold Alt to scrub freely. */
+const SNAP_PX = 6;
+/** Timeline zoom range (× the fit-to-width scale). */
+const ZOOM_MAX = 40;
+
+/** Pointer handlers for a button that fires once on press and keeps firing while held (keyboard activation fires once). */
+function useRepeat(fn: (shift: boolean) => void) {
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const stop = useCallback(() => {
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = null;
+  }, []);
+  useEffect(() => stop, [stop]);
+  return {
+    onPointerDown: (e: React.PointerEvent) => {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      const shift = e.shiftKey;
+      fn(shift);
+      const tick = () => {
+        fn(shift);
+        timer.current = setTimeout(tick, 60);
+      };
+      timer.current = setTimeout(tick, 350);
+    },
+    onPointerUp: stop,
+    onPointerLeave: stop,
+    onPointerCancel: stop,
+    onClick: (e: React.MouseEvent) => {
+      if (e.detail === 0) fn(e.shiftKey);
+    },
+  };
+}
 /** Holding Control skims the cuts: this many seconds before and after each one. */
 const SKIM_S = 3;
 /** What a navigation would abandon while a job runs. */
@@ -193,7 +160,7 @@ function Slider({ label, value, min, max, step, onChange, format }: { label: str
         {label}
         <span className="font-mono tabular text-ink">{format ? format(value) : value}</span>
       </span>
-      <input type="range" min={min} max={max} step={step} value={value} onChange={(e) => onChange(Number(e.target.value))} onDoubleClick={() => onChange((min + max) / 2 === 0.5 ? 1 : 0)} className={cn(RANGE, "mt-1")} />
+      <input type="range" min={min} max={max} step={step} value={value} onChange={(e) => onChange(Number(e.target.value))} onDoubleClick={() => onChange((min + max) / 2 === 0.5 ? 1 : 0)} title="Double-click to reset" className={cn(RANGE, "mt-1")} />
     </label>
   );
 }
@@ -214,6 +181,21 @@ export function VideoEditorWidget() {
   const [playhead, setPlayhead] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [zoom, setZoom] = useState(1);
+  const zoomRef = useRef(1);
+  useEffect(() => {
+    zoomRef.current = zoom;
+  }, [zoom]);
+  const pxRef = useRef(80);
+  const scrollAfterZoomRef = useRef<number | null>(null);
+  /** A scrub in progress on the ruler or lanes (pointer captured). */
+  const scrubRef = useRef<{ pointerId: number } | null>(null);
+  const hoverLineRef = useRef<HTMLDivElement>(null);
+  const hoverLabelRef = useRef<HTMLSpanElement>(null);
+  /** A clip being dragged along the video lane to a new place. */
+  const clipDragRef = useRef<{ id: string; startX: number; moved: boolean; pointerId: number; before: string | null | undefined } | null>(null);
+  const dropLineRef = useRef<HTMLDivElement>(null);
+  const suppressClickRef = useRef(false);
+  const [timeEdit, setTimeEdit] = useState<string | null>(null);
   const [job, setJob] = useState<Job | null>(null);
   useUnsavedWork(job ? JOB_WORK[job.kind] : null);
   const [support, setSupport] = useState<{ hevc: boolean; avc: boolean } | null>(null);
@@ -675,6 +657,11 @@ export function VideoEditorWidget() {
         else if (e.key === "ArrowUp") stepTo([...cuts].reverse().find((c) => c < t - 0.01) ?? 0);
         else if (e.key === "ArrowDown") stepTo(cuts.find((c) => c > t + 0.01) ?? durationRef.current);
         else if (e.key === "?") setShortcutsOpen((v) => !v);
+        else if (e.key === "Escape" && !document.fullscreenElement) {
+          setSelected(null);
+          setSelectedMusic(null);
+          setSelectedTransition(null);
+        }
         else if (e.key === "m" || e.key === "M") setPreviewMuted((m) => !m);
         else if (e.key === "s" || e.key === "S") void saveFrame(e.altKey ? "png" : e.shiftKey ? "jpeg" : "thumb");
         else return;
@@ -1437,10 +1424,142 @@ export function VideoEditorWidget() {
   };
 
   const pxPerSec = (timelineWidth / Math.max(10, duration)) * zoom;
-  const seekFromEvent = (e: React.PointerEvent<HTMLDivElement>) => {
-    const r = e.currentTarget.getBoundingClientRect();
-    setPlayhead(Math.max(0, Math.min(duration, (e.clientX - r.left + e.currentTarget.scrollLeft) / pxPerSec)));
-    setSeekToken((t) => t + 1);
+  useEffect(() => {
+    pxRef.current = pxPerSec;
+  }, [pxPerSec]);
+  /** Timeline seconds under a pointer, snapped to a nearby cut unless told not to. */
+  const timeAtPointer = (el: HTMLDivElement, clientX: number, snap: boolean) => {
+    const r = el.getBoundingClientRect();
+    let t = Math.max(0, Math.min(duration, (clientX - r.left + el.scrollLeft) / pxPerSec));
+    if (snap) {
+      for (const c of visibleCuts(placed)) {
+        if (Math.abs(c - t) * pxPerSec <= SNAP_PX) {
+          t = c;
+          break;
+        }
+      }
+    }
+    return t;
+  };
+  const onTimelinePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0) return;
+    const el = e.currentTarget;
+    el.setPointerCapture(e.pointerId);
+    scrubRef.current = { pointerId: e.pointerId };
+    setPlayhead(timeAtPointer(el, e.clientX, !e.altKey));
+    setSeekToken((x) => x + 1);
+  };
+  const onTimelinePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    const el = e.currentTarget;
+    const t = timeAtPointer(el, e.clientX, !e.altKey);
+    if (scrubRef.current) setPlayhead(t);
+    if (hoverLineRef.current) {
+      hoverLineRef.current.style.left = `${t * pxPerSec}px`;
+      hoverLineRef.current.style.display = clipDragRef.current?.moved ? "none" : "block";
+    }
+    if (hoverLabelRef.current) hoverLabelRef.current.textContent = fmtTime(t, first?.fps);
+  };
+  const onTimelinePointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!scrubRef.current) return;
+    scrubRef.current = null;
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
+    setSeekToken((x) => x + 1);
+  };
+  const onTimelinePointerLeave = () => {
+    if (hoverLineRef.current) hoverLineRef.current.style.display = "none";
+  };
+  /**
+   * Change the zoom keeping the playhead where it is on screen (or centred if it was out of view); with an anchor
+   * (the pointer, for wheel zoom) that point stays put instead and the playhead is only nudged into view.
+   */
+  const zoomTo = useCallback((z: number, anchor?: { t: number; x: number }) => {
+    const el = timelineRef.current;
+    const from = zoomRef.current;
+    const next = Math.max(1, Math.min(ZOOM_MAX, z));
+    if (next === from) return;
+    const pxNow = pxRef.current, pxNext = (pxNow / from) * next;
+    setZoom(next);
+    if (!el) return;
+    const view = el.clientWidth;
+    const ph = playheadRef.current * pxNext;
+    let left: number;
+    if (anchor) {
+      left = anchor.t * pxNext - anchor.x;
+      if (ph < left + 16) left = ph - 16;
+      else if (ph > left + view - 16) left = ph - view + 16;
+    } else {
+      const phNow = playheadRef.current * pxNow - el.scrollLeft;
+      left = phNow >= 0 && phNow <= view ? ph - phNow : ph - view / 2;
+    }
+    scrollAfterZoomRef.current = Math.max(0, left);
+  }, []);
+  // The scroll position for a new zoom is applied once the wider lane is in the DOM, before it paints.
+  useLayoutEffect(() => {
+    const el = timelineRef.current, left = scrollAfterZoomRef.current;
+    if (!el || left === null) return;
+    scrollAfterZoomRef.current = null;
+    el.scrollLeft = left;
+  }, [zoom]);
+  // ⌘/Ctrl + wheel over the timeline zooms around the pointer; a plain wheel scrolls as usual.
+  useEffect(() => {
+    const el = timelineRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      if (!(e.ctrlKey || e.metaKey)) return;
+      e.preventDefault();
+      const r = el.getBoundingClientRect();
+      const x = e.clientX - r.left;
+      zoomTo(zoomRef.current * Math.exp(-e.deltaY * 0.005), { t: (x + el.scrollLeft) / pxRef.current, x });
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, [zoomTo]);
+  // While playing, the view follows the playhead: when it runs off the right edge the timeline scrolls on.
+  useEffect(() => {
+    if (!playing || scrubRef.current) return;
+    const el = timelineRef.current;
+    if (!el) return;
+    const px = playhead * pxPerSec, view = el.clientWidth;
+    if (px < el.scrollLeft || px > el.scrollLeft + view - 24) el.scrollLeft = Math.max(0, px - view * 0.2);
+  }, [playhead, playing, pxPerSec]);
+  const stepBack = useRepeat((shift) => stepTo(playheadRef.current - (shift ? 1 : 1 / fpsRef.current)));
+  const stepForward = useRepeat((shift) => stepTo(playheadRef.current + (shift ? 1 : 1 / fpsRef.current)));
+  /** Dragging a drive clip along the lane moves it before the clip the pointer is over (intro scenes stay put). */
+  const beginClipDrag = (e: React.PointerEvent<HTMLButtonElement>, c: (typeof placed)[number]) => {
+    if (e.button !== 0 || c.introRole) return;
+    e.currentTarget.setPointerCapture(e.pointerId);
+    clipDragRef.current = { id: c.id, startX: e.clientX, moved: false, pointerId: e.pointerId, before: undefined };
+  };
+  const moveClipDrag = (e: React.PointerEvent<HTMLButtonElement>) => {
+    const d = clipDragRef.current;
+    if (!d) return;
+    if (!d.moved && Math.abs(e.clientX - d.startX) < 5) return;
+    d.moved = true;
+    const el = timelineRef.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    const t = (e.clientX - r.left + el.scrollLeft) / pxPerSec;
+    const main = placed.filter((c) => !c.introRole);
+    let idx = main.findIndex((c) => t < (c.start + c.end) / 2);
+    if (idx < 0) idx = main.length;
+    d.before = idx < main.length ? main[idx].id : null;
+    const x = idx < main.length ? main[idx].start : (main[main.length - 1]?.end ?? 0);
+    if (dropLineRef.current) {
+      dropLineRef.current.style.display = "block";
+      dropLineRef.current.style.left = `${x * pxPerSec - 1}px`;
+    }
+  };
+  const endClipDrag = (e: React.PointerEvent<HTMLButtonElement>) => {
+    const d = clipDragRef.current;
+    if (!d) return;
+    clipDragRef.current = null;
+    if (dropLineRef.current) dropLineRef.current.style.display = "none";
+    if (e.currentTarget.hasPointerCapture(d.pointerId)) e.currentTarget.releasePointerCapture(d.pointerId);
+    if (!d.moved || d.before === undefined) return;
+    suppressClickRef.current = true;
+    const before = d.before;
+    setProject((p) => ({ ...p, clips: reorderClip(p.clips, d.id, before) }));
+    setSelected(d.id);
   };
   const first = project.media[project.clips[0]?.media ?? ""];
   const previewAspect = first?.width && first.height ? first.width / first.height : 16 / 9;
@@ -1636,14 +1755,14 @@ export function VideoEditorWidget() {
               <button type="button" onClick={() => stepTo(0)} disabled={!project.clips.length} className={cn(GHOST, "h-8 px-1.5")} title="To the start (Home)" aria-label="To the start">
                 <SkipBack size={13} />
               </button>
-              <button type="button" onClick={() => stepTo(playhead - 1 / (first?.fps || 30))} disabled={!project.clips.length} className={cn(GHOST, "h-8 px-1.5")} title="Back one frame (←, ⇧← for 1 s)" aria-label="Back one frame">
+              <button type="button" {...stepBack} disabled={!project.clips.length} className={cn(GHOST, "h-8 px-1.5")} title="Back one frame (←, ⇧ for 1 s); hold to keep stepping" aria-label="Back one frame">
                 <StepBack size={13} />
               </button>
               <button type="button" onClick={togglePlay} disabled={!project.clips.length} className={cn(PRIMARY, "h-8 px-3 text-[13px]")}>
                 {playing ? <Pause size={13} /> : <Play size={13} />}
                 {playing ? "Pause" : "Play"}
               </button>
-              <button type="button" onClick={() => stepTo(playhead + 1 / (first?.fps || 30))} disabled={!project.clips.length} className={cn(GHOST, "h-8 px-1.5")} title="Forward one frame (→, ⇧→ for 1 s)" aria-label="Forward one frame">
+              <button type="button" {...stepForward} disabled={!project.clips.length} className={cn(GHOST, "h-8 px-1.5")} title="Forward one frame (→, ⇧ for 1 s); hold to keep stepping" aria-label="Forward one frame">
                 <StepForward size={13} />
               </button>
               <button type="button" onClick={() => stepTo(duration)} disabled={!project.clips.length} className={cn(GHOST, "h-8 px-1.5")} title="To the end (End)" aria-label="To the end">
@@ -1651,9 +1770,30 @@ export function VideoEditorWidget() {
               </button>
             </div>
 
-            <span className="font-mono text-[13px] whitespace-nowrap text-ink tabular">
-              {fmtTime(playhead, first?.fps)} <span className="text-faint">/ {fmtTime(duration)}</span>
-            </span>
+            {timeEdit === null ? (
+              <button type="button" onClick={() => setTimeEdit(fmtTime(playhead))} disabled={!project.clips.length} className="font-mono text-[13px] whitespace-nowrap text-ink tabular hover:text-accent" title="Click to type a time to go to" data-time>
+                {fmtTime(playhead, first?.fps)} <span className="text-faint">/ {fmtTime(duration)}</span>
+              </button>
+            ) : (
+              <input
+                ref={(el) => el?.focus()}
+                value={timeEdit}
+                onChange={(e) => setTimeEdit(e.target.value)}
+                onBlur={() => setTimeEdit(null)}
+                onKeyDown={(e) => {
+                  e.stopPropagation();
+                  if (e.key === "Enter") {
+                    const t = parseTime(timeEdit);
+                    if (Number.isFinite(t)) stepTo(t);
+                    setTimeEdit(null);
+                  } else if (e.key === "Escape") setTimeEdit(null);
+                }}
+                className={cn(INPUT, "h-8 w-28 font-mono text-[13px]")}
+                aria-label="Go to time"
+                placeholder="m:ss"
+                data-time-edit
+              />
+            )}
             <select value={speed} onChange={(e) => setSpeed(Number(e.target.value))} className={cn(SEL, "h-7 text-[12px]")} aria-label="Preview speed" title="Preview speed (export is unaffected). Hold Space to double it. Browsers silence the sound above 4× and cap playback at 16×.">
               {PREVIEW_SPEEDS.map((v) => (
                 <option key={v} value={v}>
@@ -2623,15 +2763,15 @@ export function VideoEditorWidget() {
       </div>
 
       {/* timeline */}
-      <div className="panel p-2" data-timeline>
+      <div className="panel select-none p-2" data-timeline>
         <div className="mb-1.5 flex items-center gap-3">
           <span className="readout">Timeline</span>
           <span className="text-[11.5px] text-faint tabular">{placed.length ? `${placed.length} clip${placed.length === 1 ? "" : "s"} · ${fmtTime(duration)}` : "empty"}</span>
           <label className="ml-auto flex items-center gap-1.5 text-[12px] text-muted">
             Zoom
-            <input type="range" min={1} max={40} step={1} value={zoom} onChange={(e) => setZoom(Number(e.target.value))} className={cn(RANGE, "w-28")} />
+            <input type="range" min={1} max={ZOOM_MAX} step={1} value={zoom} onChange={(e) => zoomTo(Number(e.target.value))} className={cn(RANGE, "w-28")} aria-label="Timeline zoom" title="Zoom (⌘/Ctrl + wheel over the timeline zooms around the pointer)" />
           </label>
-          <button type="button" onClick={() => setZoom(1)} disabled={zoom === 1} className={cn(GHOST, "h-7 px-2 text-[12px]")} title="Fit the whole drive in view">
+          <button type="button" onClick={() => zoomTo(1)} disabled={zoom === 1} className={cn(GHOST, "h-7 px-2 text-[12px]")} title="Fit the whole drive in view">
             Fit
           </button>
           <button type="button" onClick={() => setShortcutsOpen(true)} className={cn(GHOST, "h-7 px-2 text-[12px]")} title="Every keyboard shortcut (?)" data-shortcuts>
@@ -2647,10 +2787,10 @@ export function VideoEditorWidget() {
               <div key={lane} className="mt-1 flex h-7 items-center justify-end">Music {lane + 1}</div>
             ))}
           </div>
-        <div ref={timelineRef} className="relative min-w-0 flex-1 overflow-x-auto" onPointerDown={seekFromEvent}>
+        <div ref={timelineRef} className="relative min-w-0 flex-1 overflow-x-auto" onPointerDown={onTimelinePointerDown} onPointerMove={onTimelinePointerMove} onPointerUp={onTimelinePointerUp} onPointerCancel={onTimelinePointerUp} onPointerLeave={onTimelinePointerLeave} data-timeline-scroll>
           <div className="relative" style={{ width: Math.max(100, duration * pxPerSec + 40), minHeight: 150 }}>
             {/* ruler */}
-            <div className="h-5 border-b border-edge text-[10px] text-faint">
+            <div className="h-5 cursor-ew-resize border-b border-edge text-[10px] text-faint" data-ruler title="Click or drag to scrub; snaps to cuts (hold ⌥ to scrub freely)">
               {Array.from({ length: Math.ceil(duration / rulerStep(duration, zoom)) + 1 }, (_, i) => i * rulerStep(duration, zoom)).map((t) => (
                 <span key={t} className="absolute top-0" style={{ left: t * pxPerSec }}>
                   {fmtTime(t)}
@@ -2666,8 +2806,18 @@ export function VideoEditorWidget() {
                   <button
                     key={c.id}
                     type="button"
-                    onPointerDown={(e) => e.stopPropagation()}
+                    onPointerDown={(e) => {
+                      e.stopPropagation();
+                      beginClipDrag(e, c);
+                    }}
+                    onPointerMove={moveClipDrag}
+                    onPointerUp={endClipDrag}
+                    onPointerCancel={endClipDrag}
                     onClick={() => {
+                      if (suppressClickRef.current) {
+                        suppressClickRef.current = false;
+                        return;
+                      }
                       setSelected(c.id);
                       setSelectedMusic(null);
                       setSelectedTransition(null);
@@ -2676,7 +2826,7 @@ export function VideoEditorWidget() {
                     }}
                     className={cn("absolute top-0 h-full overflow-hidden border text-left text-[11.5px]", c.joinedToPrevious ? "rounded-l-none border-l-0 pl-0" : "rounded-l-[var(--radius-sm)] pl-2", joinsNext ? "rounded-r-none border-r-0 pr-0" : "rounded-r-[var(--radius-sm)] pr-2", selectedRun.has(c.id) ? "border-accent bg-accent-soft text-ink" : c.introRole && introReg && i <= introReg.scenes.length ? "border-[#d9a400]/60 bg-[#d9a400]/15 text-muted" : "border-edge bg-raised text-muted")}
                     style={{ left: c.start * pxPerSec, width: Math.max(4, (c.end - c.start) * pxPerSec - (joinsNext ? 0 : 1)) }}
-                    title={`${c.introRole === "card" ? "Intro title card · " : c.introRole ? "Intro scene · " : ""}${project.media[c.media]?.name} ${fmtTime(c.in)}–${fmtTime(c.out)}${c.joinedToPrevious ? " · joined to the previous clip" : ""}`}
+                    title={`${c.introRole === "card" ? "Intro title card · " : c.introRole ? "Intro scene · " : ""}${project.media[c.media]?.name} ${fmtTime(c.in)}–${fmtTime(c.out)}${c.joinedToPrevious ? " · joined to the previous clip" : ""}${c.introRole ? "" : " · drag to move it"}`}
                     data-clip={c.id}
                     data-joined={c.joinedToPrevious ? "true" : undefined}
                     data-intro-clip={c.introRole}
@@ -2778,8 +2928,13 @@ export function VideoEditorWidget() {
                 ))}
               </div>
             ))}
-            {/* playhead */}
+            {/* hover time, drop target, playhead */}
+            <div ref={hoverLineRef} className="pointer-events-none absolute top-0 bottom-0 z-10 w-px bg-ink/30" style={{ display: "none" }} data-hover-line>
+              <span ref={hoverLabelRef} className="absolute top-0 left-1 rounded-[3px] bg-black/75 px-1 font-mono text-[10px] leading-4 text-white tabular" />
+            </div>
+            <div ref={dropLineRef} className="pointer-events-none absolute top-5 z-10 h-14 w-0.5 bg-accent" style={{ display: "none" }} data-drop-line />
             <div className="pointer-events-none absolute bottom-0 top-0 w-px bg-[#e5484d]" style={{ left: playhead * pxPerSec }} />
+            <div className="pointer-events-none absolute top-0 h-0 w-0 border-x-[5px] border-t-[6px] border-x-transparent border-t-[#e5484d]" style={{ left: playhead * pxPerSec - 5 }} data-playhead-handle />
           </div>
         </div>
         </div>

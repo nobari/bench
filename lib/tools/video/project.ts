@@ -566,6 +566,19 @@ export function moveClip(clips: Clip[], id: string, dir: -1 | 1): Clip[] {
   return out.map((c, k) => (k >= lo && k <= hi ? unjoin([c], c.id)[0] : c));
 }
 
+/** Move a clip to just before `beforeId` (or to the end with null); cuts whose neighbours change are shown again. */
+export function reorderClip(clips: Clip[], id: string, beforeId: string | null): Clip[] {
+  const i = clips.findIndex((c) => c.id === id);
+  if (i < 0 || beforeId === id) return clips;
+  const rest = clips.filter((c) => c.id !== id);
+  const at = beforeId === null ? rest.length : rest.findIndex((c) => c.id === beforeId);
+  if (at < 0) return clips;
+  const out = [...rest.slice(0, at), clips[i], ...rest.slice(at)];
+  if (out.every((c, k) => c.id === clips[k].id)) return clips;
+  const prevBefore = new Map(clips.map((c, k) => [c.id, clips[k - 1]?.id ?? null]));
+  return out.map((c, k) => (c.joinedToPrevious && prevBefore.get(c.id) !== (out[k - 1]?.id ?? null) ? unjoin([c], c.id)[0] : c));
+}
+
 /**
  * Add a transition at a timeline instant: on the cut there if one is within
  * a frame or so, otherwise by splitting the clip under the playhead first.
@@ -1004,6 +1017,13 @@ export function applyGradeTo(clips: Clip[], fromId: string, toIds: string[] | "a
   if (!src) return clips;
   return clips.map((c) => (c.id !== fromId && (toIds === "all" || toIds.includes(c.id)) ? { ...c, grade: { ...src.grade } } : c));
 }
+
+/** "1:02:30", "2:05", "95", "1:02.5" → seconds; NaN when it is not a time. */
+export const parseTime = (text: string): number => {
+  const parts = text.trim().split(":");
+  if (!parts.length || parts.some((x) => !/^\d+(\.\d+)?$/.test(x.trim()))) return NaN;
+  return parts.reduce((acc, n) => acc * 60 + Number(n), 0);
+};
 
 export const fmtTime = (s: number, frames?: number) => {
   const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = Math.floor(s % 60);
