@@ -77,14 +77,15 @@ export default function RootLayout({
         {/* Applies the remembered sidebar state before first paint (see .tool-nav in globals.css). */}
         <script
           dangerouslySetInnerHTML={{
-            __html: "try{if(localStorage.getItem('bench:nav-collapsed')==='1')document.documentElement.dataset.nav='collapsed'}catch(e){}",
+            __html:
+              "try{var m=localStorage.getItem('bench:nav');if(m==='hidden')document.documentElement.dataset.nav='hidden';else if(m==='rail'||(!m&&localStorage.getItem('bench:nav-collapsed')==='1'))document.documentElement.dataset.nav='collapsed'}catch(e){}",
           }}
         />
       </head>
       <body className="flex min-h-full flex-col">
         <Providers>
           <SiteHeader />
-          <div className="mx-auto flex w-full max-w-[1440px] flex-1">
+          <div className="flex w-full flex-1">
             <ToolNav className="hidden lg:block" />
             <div className="flex min-w-0 flex-1 flex-col">
               <main className="flex-1">{children}</main>

@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { ReadMore } from "@/components/read-more";
 import { ChevronRight } from "lucide-react";
 import type { ToolDef } from "@/lib/tools/types";
 import { getCategory } from "@/lib/tools/categories";
@@ -16,7 +17,7 @@ export function ToolShell({ tool }: { tool: ToolDef }) {
   const Icon = tool.icon;
 
   return (
-    <div className="px-4 py-5 sm:px-5 lg:px-8">
+    <div className="px-3 py-4 sm:px-4">
       <script type="application/ld+json" dangerouslySetInnerHTML={jsonLdScript(softwareAppJsonLd(tool))} />
       <script
         type="application/ld+json"
@@ -80,7 +81,9 @@ export function ToolShell({ tool }: { tool: ToolDef }) {
           {tool.howItWorks && (
             <section>
               <h2 className="text-[15px] font-semibold text-ink">How it works</h2>
-              <p className="mt-2 max-w-prose text-[14px] leading-relaxed text-muted">{tool.howItWorks}</p>
+              <ReadMore className="mt-2 max-w-prose">
+                <p className="text-[14px] leading-relaxed text-muted">{tool.howItWorks}</p>
+              </ReadMore>
             </section>
           )}
 

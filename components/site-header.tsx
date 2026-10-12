@@ -1,10 +1,11 @@
 "use client";
 
 import Link from "next/link";
-import { Search } from "lucide-react";
+import { Search, PanelLeftOpen } from "lucide-react";
 import { useCommandPalette } from "@/components/command-palette";
 import { MobileToolNav } from "@/components/tool-nav";
 import { GithubMark } from "@/components/icons";
+import { setNavMode } from "@/lib/nav-state";
 import { Wordmark } from "@/components/logo";
 import { SITE } from "@/lib/site";
 
@@ -13,8 +14,18 @@ export function SiteHeader() {
 
   return (
     <header className="sticky top-0 z-30 h-12 border-b border-edge bg-base/90 backdrop-blur">
-      <div className="mx-auto flex h-full max-w-[1440px] items-center gap-2 px-3 sm:px-4">
+      <div className="flex h-full items-center gap-2 px-3 sm:px-4">
         <MobileToolNav />
+        <button
+          type="button"
+          onClick={() => setNavMode("open")}
+          aria-label="Show the sidebar"
+          title="Show the sidebar"
+          className="nav-show hidden h-8 w-8 items-center justify-center rounded-[var(--radius-sm)] text-muted hover:bg-raised hover:text-ink"
+          data-nav-show
+        >
+          <PanelLeftOpen size={16} />
+        </button>
         <Link href="/" className="shrink-0 rounded-[var(--radius-sm)]" aria-label="Bench home">
           <Wordmark />
         </Link>

@@ -10,8 +10,8 @@ import { getCategoryTree } from "@/lib/tools/registry";
 import { toolShortTitle } from "@/lib/tools/types";
 import { Wordmark } from "@/components/logo";
 import { cn } from "@/lib/utils";
+import { readNavMode, setNavMode, subscribeNavMode, type NavMode } from "@/lib/nav-state";
 
-const NAV_KEY = "bench:nav-collapsed";
 const CLOSED_KEY = "bench:nav-closed";
 
 function readClosed(): string[] {
@@ -151,51 +151,40 @@ function NavRail({ pathname }: { pathname: string }) {
   );
 }
 
-/** Desktop sidebar: the full tree, collapsible to an icon rail (remembered per browser). */
+/** Desktop sidebar: the full tree, collapsible to an icon rail or hidden for focus (remembered per browser). */
 export function ToolNav({ className }: { className?: string }) {
   const pathname = usePathname();
-  const [collapsed, setCollapsed] = useState(false);
+  const [mode, setMode] = useState<NavMode>("open");
 
   useEffect(() => {
-    let remembered = false;
-    try {
-      remembered = localStorage.getItem(NAV_KEY) === "1";
-    } catch {
-      /* storage unavailable */
-    }
-    if (remembered) queueMicrotask(() => setCollapsed(true));
+    const remembered = readNavMode();
+    if (remembered !== "open") queueMicrotask(() => setMode(remembered));
+    return subscribeNavMode(setMode);
   }, []);
 
-  const toggle = () => {
-    const next = !collapsed;
-    setCollapsed(next);
-    try {
-      localStorage.setItem(NAV_KEY, next ? "1" : "0");
-    } catch {
-      /* storage unavailable */
-    }
-    if (next) document.documentElement.dataset.nav = "collapsed";
-    else delete document.documentElement.dataset.nav;
+  const change = (next: NavMode) => {
+    setMode(next);
+    setNavMode(next);
   };
+  const collapsed = mode === "rail";
+  const iconBtn = "flex h-7 w-7 items-center justify-center rounded-[var(--radius-sm)] text-faint hover:bg-raised hover:text-ink";
 
   return (
     <aside
       className={cn(
         "tool-nav sticky top-12 h-[calc(100vh-3rem)] shrink-0 overflow-y-auto overflow-x-hidden border-r border-edge bg-base transition-[width] duration-200",
         collapsed ? "w-12" : "w-60",
+        mode === "hidden" && "hidden",
         className,
       )}
+      data-nav-mode={mode}
     >
-      <div className={cn("flex h-9 items-center border-b border-edge", collapsed ? "justify-center" : "justify-end px-2")}>
-        <button
-          type="button"
-          onClick={toggle}
-          aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-          aria-expanded={!collapsed}
-          title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-          className="flex h-7 w-7 items-center justify-center rounded-[var(--radius-sm)] text-faint hover:bg-raised hover:text-ink"
-        >
+      <div className={cn("flex h-9 items-center border-b border-edge", collapsed ? "flex-col justify-center gap-0.5 py-1 h-auto" : "justify-end gap-0.5 px-2")}>
+        <button type="button" onClick={() => change(collapsed ? "open" : "rail")} aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar to icons"} aria-expanded={!collapsed} title={collapsed ? "Expand sidebar" : "Collapse sidebar to icons"} className={iconBtn} data-nav-collapse>
           {collapsed ? <PanelLeftOpen size={15} /> : <PanelLeftClose size={15} />}
+        </button>
+        <button type="button" onClick={() => change("hidden")} aria-label="Hide the sidebar" title="Hide the sidebar (the button at the top left brings it back)" className={iconBtn} data-nav-hide>
+          <X size={15} />
         </button>
       </div>
       {collapsed ? <NavRail pathname={pathname} /> : <NavList pathname={pathname} />}

@@ -90,6 +90,15 @@
 html[data-nav="collapsed"] .tool-nav {
   width: 3rem;
 }
+html[data-nav="hidden"] .tool-nav {
+  display: none;
+}
+/* The header's "show the sidebar" button only exists while the sidebar is hidden, on screens that have one. */
+@media (min-width: 1024px) {
+  html[data-nav="hidden"] .nav-show {
+    display: flex;
+  }
+}
 
 @media (prefers-color-scheme: dark) {
   :root {
