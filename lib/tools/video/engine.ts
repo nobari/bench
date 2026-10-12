@@ -27,6 +27,7 @@ import {
 import { GRADE_FRAGMENT_SHADER, buildDlogLut, deriveLut, fetchOfficialLut, lutTexture, parseCube, type Lut3D } from "./lut";
 import { clipAt, clipSpeed, sourceTimeAt, dbToGain, exportTags, fontFamilyCss, exportRange, isFileLutKind, musicGainAt, placeClips, planExport, transitionAt, transitionWindows, type Clip, type ExportSpan, type Grade, type LutKind, type MediaRef, type PlacedClip, type Project, type Title, type Transform, type TransitionWindow } from "./project";
 import { drawTransition } from "./transitions";
+import { drawIntroFx, introFrameAt, introStyle, styledGrade, type IntroFrame, type Moment } from "./intro";
 import { ProgressTracker, defaultSpeeds, planSteps, type ExportProgress, type SpeedPriors, type StepProgress } from "./progress";
 import pkg from "@/package.json";
 
@@ -627,9 +628,16 @@ async function exportWithPulse(opts: ExportOptions, pulse: { emit: (() => void) 
   });
   // A partial export starts its file at zero: timeline times shift back by the range start.
   const offset = exportRange(project)?.from ?? 0;
-  const windows = transitionWindows(placeClips(project.clips));
+  const placedAll = placeClips(project.clips);
+  const windows = transitionWindows(placedAll);
   const neighbour = new NeighbourFrames((id) => openInput(id));
   let tmpA: OffscreenCanvas | null = null, tmpB: OffscreenCanvas | null = null, scratch: OffscreenCanvas | null = null;
+  let fxScratch: { a: OffscreenCanvas; b: OffscreenCanvas } | null = null;
+  // Intro scenes draw through the style's look; the clip on the other side of a transition gets the same treatment.
+  const gradeFor = (c: Clip, timelineT: number) => {
+    const f = c.introRole ? introFrameAt(project, placedAll, timelineT) : null;
+    return f ? styledGrade(c.grade, f.style) : c.grade;
+  };
   const output = new Output({ format: new Mp4OutputFormat({ fastStart: false }), target: new StreamTarget(counted, { chunked: true }) });
   const canvas = new OffscreenCanvas(outW, outH);
   const ctx2d = canvas.getContext("2d")!;
@@ -702,19 +710,24 @@ async function exportWithPulse(opts: ExportOptions, pulse: { emit: (() => void) 
           tmpB ??= new OffscreenCanvas(outW, outH);
           scratch ??= new OffscreenCanvas(outW, outH);
           const om = project.media[other.media];
-          grader.draw(sample.toCanvasImageSource(), clip.grade, clip.transform, srcW, srcH);
+          grader.draw(sample.toCanvasImageSource(), gradeFor(clip, timelineT), clip.transform, srcW, srcH);
           tmpA.getContext("2d")!.drawImage(grader.canvas, 0, 0, outW, outH);
-          grader.draw(frame.toCanvasImageSource(), other.grade, other.transform, om?.width ?? frame.displayWidth, om?.height ?? frame.displayHeight);
+          grader.draw(frame.toCanvasImageSource(), gradeFor(other, timelineT), other.transform, om?.width ?? frame.displayWidth, om?.height ?? frame.displayHeight);
           tmpB.getContext("2d")!.drawImage(grader.canvas, 0, 0, outW, outH);
           drawTransition(ctx2d, outgoingIsThis ? tmpA : tmpB, outgoingIsThis ? tmpB : tmpA, outW, outH, tr.window.kind, tr.progress, scratch);
           composed = true;
         }
       }
       if (!composed && span.kind === "encode") {
-        grader.draw(sample.toCanvasImageSource(), clip.grade, clip.transform, srcW, srcH);
+        grader.draw(sample.toCanvasImageSource(), gradeFor(clip, timelineT), clip.transform, srcW, srcH);
         ctx2d.drawImage(grader.canvas, 0, 0, outW, outH);
       } else if (!composed) {
         ctx2d.drawImage(sample.toCanvasImageSource(), 0, 0, outW, outH);
+      }
+      const intro = introFrameAt(project, placedAll, timelineT);
+      if (intro) {
+        fxScratch ??= { a: new OffscreenCanvas(outW, outH), b: new OffscreenCanvas(outW, outH) };
+        drawIntroFx(ctx2d, outW, outH, intro, project, fxScratch);
       }
       drawOverlays(ctx2d, outW, outH, timelineT, project, logo);
     };
@@ -845,7 +858,10 @@ export async function renderFrame(opts: FrameOptions): Promise<RenderedFrame> {
   if (!main) throw new Error("Couldn't decode a frame at the playhead.");
   const media = project.media[under.clip.media];
   const srcW = media?.width ?? main.displayWidth, srcH = media?.height ?? main.displayHeight;
-  const tr = transitionAt(transitionWindows(placeClips(project.clips)), t);
+  const placedAll = placeClips(project.clips);
+  const tr = transitionAt(transitionWindows(placedAll), t);
+  const intro = introFrameAt(project, placedAll, t);
+  const gradeFor = (c: Clip) => (c.introRole && intro ? styledGrade(c.grade, intro.style) : c.grade);
   let composed = false;
   if (tr) {
     const outgoingIsThis = tr.window.outgoing.id === under.clip.id;
@@ -854,9 +870,9 @@ export async function renderFrame(opts: FrameOptions): Promise<RenderedFrame> {
     if (frame) {
       const a = new OffscreenCanvas(outW, outH), b = new OffscreenCanvas(outW, outH), scratch = new OffscreenCanvas(outW, outH);
       const om = project.media[other.media];
-      grader.draw(main.toCanvasImageSource(), under.clip.grade, under.clip.transform, srcW, srcH);
+      grader.draw(main.toCanvasImageSource(), gradeFor(under.clip), under.clip.transform, srcW, srcH);
       a.getContext("2d")!.drawImage(grader.canvas, 0, 0, outW, outH);
-      grader.draw(frame.toCanvasImageSource(), other.grade, other.transform, om?.width ?? frame.displayWidth, om?.height ?? frame.displayHeight);
+      grader.draw(frame.toCanvasImageSource(), gradeFor(other), other.transform, om?.width ?? frame.displayWidth, om?.height ?? frame.displayHeight);
       b.getContext("2d")!.drawImage(grader.canvas, 0, 0, outW, outH);
       drawTransition(ctx, outgoingIsThis ? a : b, outgoingIsThis ? b : a, outW, outH, tr.window.kind, tr.progress, scratch);
       frame.close();
@@ -864,13 +880,113 @@ export async function renderFrame(opts: FrameOptions): Promise<RenderedFrame> {
     }
   }
   if (!composed) {
-    grader.draw(main.toCanvasImageSource(), under.clip.grade, under.clip.transform, srcW, srcH);
+    grader.draw(main.toCanvasImageSource(), gradeFor(under.clip), under.clip.transform, srcW, srcH);
     ctx.drawImage(grader.canvas, 0, 0, outW, outH);
   }
+  if (intro) drawIntroFx(ctx, outW, outH, intro, project, { a: new OffscreenCanvas(outW, outH), b: new OffscreenCanvas(outW, outH) });
   drawOverlays(ctx, outW, outH, t, project, logo);
   main.close();
   const blob = await canvas.convertToBlob({ type: opts.type ?? "image/png", quality: opts.quality });
   return { blob, width: outW, height: outH, clipName: media?.name ?? under.clip.media, sourceTime: under.sourceTime };
+}
+
+/* --------------------------------------------------------------- intro */
+
+/**
+ * How lively each candidate moment is: the contrast within a small frame and the motion against a frame a
+ * beat later. Decoded at thumbnail size from whichever file is handed over (a proxy, ideally).
+ */
+export async function scanMoments(fileFor: (mediaId: string) => Promise<File | null>, project: Project, windows: Moment[][], opts: { beat?: number; signal?: AbortSignal; onProgress?: (done: number, total: number) => void } = {}): Promise<Map<Moment, { motion: number; contrast: number }>> {
+  const beat = opts.beat ?? 0.4;
+  const all = windows.flat();
+  const stats = new Map<Moment, { motion: number; contrast: number }>();
+  const W = 64, H = 36;
+  const canvas = new OffscreenCanvas(W, H);
+  const ctx = canvas.getContext("2d", { willReadFrequently: true })!;
+  const luma = (img: CanvasImageSource) => {
+    ctx.drawImage(img, 0, 0, W, H);
+    const d = ctx.getImageData(0, 0, W, H).data;
+    const out = new Float32Array(W * H);
+    for (let i = 0; i < W * H; i++) out[i] = 0.299 * d[i * 4] + 0.587 * d[i * 4 + 1] + 0.114 * d[i * 4 + 2];
+    return out;
+  };
+  const byMedia = new Map<string, Moment[]>();
+  for (const m of all) {
+    const clip = project.clips.find((c) => c.id === m.clipId);
+    if (!clip) continue;
+    const list = byMedia.get(clip.media) ?? [];
+    list.push(m);
+    byMedia.set(clip.media, list);
+  }
+  let done = 0;
+  for (const [mediaId, moments] of byMedia) {
+    const f = await fileFor(mediaId);
+    if (!f) continue;
+    const input = new Input({ source: new BlobSource(f), formats: ALL_FORMATS });
+    const track = await input.getPrimaryVideoTrack();
+    if (!track) continue;
+    const sink = new VideoSampleSink(track);
+    const media = project.media[mediaId];
+    for (const m of moments.sort((a, b) => a.sourceTime - b.sourceTime)) {
+      if (opts.signal?.aborted) throw new DOMException("Cancelled", "AbortError");
+      const a = await sink.getSample(m.sourceTime);
+      const b = await sink.getSample(Math.max(0, Math.min((media?.duration ?? m.sourceTime + beat) - 0.05, m.sourceTime + beat)));
+      if (a && b) {
+        const la = luma(a.toCanvasImageSource()), lb = luma(b.toCanvasImageSource());
+        let mean = 0;
+        for (const v of la) mean += v;
+        mean /= la.length;
+        let varSum = 0, diff = 0;
+        for (let i = 0; i < la.length; i++) {
+          varSum += (la[i] - mean) ** 2;
+          diff += Math.abs(la[i] - lb[i]);
+        }
+        stats.set(m, { contrast: Math.sqrt(varSum / la.length) / 128, motion: diff / la.length / 255 });
+      }
+      a?.close();
+      b?.close();
+      done++;
+      opts.onProgress?.(done, all.length);
+    }
+  }
+  return stats;
+}
+
+/** Small styled stills of the intro's scenes (and card), keyed by clip id, as JPEG object URLs the caller revokes. */
+export async function renderSceneThumbs(fileFor: (mediaId: string) => Promise<File | null>, project: Project, clips: Clip[], height = 72, signal?: AbortSignal): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  const first = project.media[project.clips[0]?.media ?? ""];
+  if (!first?.width || !first.height || !clips.length) return out;
+  const h = height, w = Math.round((first.width * h) / first.height / 2) * 2;
+  const canvas = new OffscreenCanvas(w, h);
+  const ctx = canvas.getContext("2d")!;
+  const grader = new Grader(w, h);
+  const scratch = { a: new OffscreenCanvas(w, h), b: new OffscreenCanvas(w, h) };
+  const style = introStyle(project.intro.style);
+  const sinks = new Map<string, { sink: VideoSampleSink; w: number; h: number }>();
+  const scenes = clips.filter((c) => c.introRole === "scene");
+  for (const c of clips) {
+    if (signal?.aborted) throw new DOMException("Cancelled", "AbortError");
+    let s = sinks.get(c.media);
+    if (!s) {
+      const f = await fileFor(c.media);
+      if (!f) continue;
+      const track = await new Input({ source: new BlobSource(f), formats: ALL_FORMATS }).getPrimaryVideoTrack();
+      if (!track) continue;
+      s = { sink: new VideoSampleSink(track), w: track.displayWidth, h: track.displayHeight };
+      sinks.set(c.media, s);
+    }
+    const sample = await s.sink.getSample(c.in + (c.out - c.in) * (c.introRole === "card" ? 0.5 : 0.35));
+    if (!sample) continue;
+    grader.draw(sample.toCanvasImageSource(), styledGrade(c.grade, style), c.transform, s.w, s.h);
+    sample.close();
+    ctx.drawImage(grader.canvas, 0, 0, w, h);
+    const length = Math.max(0.01, (c.out - c.in) / clipSpeed(c));
+    const frame: IntroFrame = { style, role: c.introRole === "card" ? "card" : "scene", index: c.introRole === "card" ? scenes.length : scenes.indexOf(c), count: scenes.length, local: length * 0.6, length, introT: 10, introLength: 20 };
+    drawIntroFx(ctx, w, h, frame, project, scratch);
+    out.set(c.id, URL.createObjectURL(await canvas.convertToBlob({ type: "image/jpeg", quality: 0.82 })));
+  }
+  return out;
 }
 
 /** Whether this browser can hardware-encode the project's codec at a given size. */

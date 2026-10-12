@@ -71,7 +71,30 @@ export interface Clip {
   joinedToPrevious?: boolean;
   /** Playback speed: 2 plays the footage twice as fast (half as long on the timeline), 0.5 is slow motion. Missing means 1. */
   speed?: number;
+  /** Part of the intro at the head of the timeline: a scene lifted from the drive, or the title card that ends the intro. */
+  introRole?: IntroRole;
+  /** An intro scene's intended timeline length; its in/out follow this at the style's speed, as far as the footage allows. */
+  introSeconds?: number;
 }
+
+export type IntroRole = "scene" | "card";
+export const INTRO_ROLES: IntroRole[] = ["scene", "card"];
+
+/**
+ * The intro that opens the video: its scenes are ordinary clips tagged with introRole at the head of the
+ * timeline (see intro.ts); these settings say how they are styled and what the title card shows.
+ */
+export interface IntroSettings {
+  /** One of the ten looks in intro.ts. */
+  style: string;
+  /** Timeline seconds per new scene; null takes the style's own. */
+  sceneSeconds: number | null;
+  /** The title card that ends the intro: text (empty = the project name), subtitle, length in seconds (0 = no card). */
+  card: { text: string; subtitle: string; seconds: number };
+  /** Scenes keep their own sound (at their speed); off, they play quiet under the music. */
+  keepAudio: boolean;
+}
+export const DEFAULT_INTRO: IntroSettings = { style: "cinematic", sceneSeconds: null, card: { text: "", subtitle: "", seconds: 2.5 }, keepAudio: false };
 
 export const CLIP_SPEEDS = [0.25, 0.5, 0.75, 1, 1.5, 2, 3, 4, 8, 16] as const;
 export const MIN_CLIP_SPEED = 0.1, MAX_CLIP_SPEED = 16;
@@ -603,6 +626,7 @@ export interface Project {
   export: ExportSettings;
   preview: PreviewSettings;
   transition: TransitionSettings;
+  intro: IntroSettings;
   /** A .cube the user loaded (expects the camera's log in, Rec.709 out), applied by clips whose lut is "custom". */
   customLut?: { name: string; cube: string } | null;
   /** Proxy state per media id: whether a proxy exists (and which file). */
@@ -626,7 +650,7 @@ export const newId = () => Math.random().toString(36).slice(2, 10);
 
 export function newProject(name = "Untitled drive"): Project {
   const now = Date.now();
-  return { version: 1, id: newId(), name, createdAt: now, updatedAt: now, media: {}, clips: [], music: [], titles: [], watermark: { media: null, corner: "br", size: 0.08, opacity: 0.85, margin: 0.03 }, export: { ...DEFAULT_EXPORT }, preview: { ...DEFAULT_PREVIEW }, transition: { ...DEFAULT_TRANSITION }, proxies: {} };
+  return { version: 1, id: newId(), name, createdAt: now, updatedAt: now, media: {}, clips: [], music: [], titles: [], watermark: { media: null, corner: "br", size: 0.08, opacity: 0.85, margin: 0.03 }, export: { ...DEFAULT_EXPORT }, preview: { ...DEFAULT_PREVIEW }, transition: { ...DEFAULT_TRANSITION }, intro: { ...DEFAULT_INTRO, card: { ...DEFAULT_INTRO.card } }, proxies: {} };
 }
 
 /* ---------------------------------------------------------- timeline */
@@ -875,6 +899,7 @@ export function planExport(p: Project): ExportSpan[] {
     if (p.watermark.media) reasons.push("watermark");
     const speed = clipSpeed(c);
     if (speed !== 1) reasons.push(`speed ${speed}×`);
+    if (c.introRole) reasons.push(c.introRole === "card" ? "intro title card" : "intro scene");
     const overlays = p.titles.filter((t) => t.start < c.end && t.start + t.duration > c.start);
     if (reasons.length) {
       spans.push({ kind: "encode", clipId: c.id, sourceIn: c.in, sourceOut: c.out, start: c.start, end: c.end, reasons, speed });
@@ -943,8 +968,14 @@ export function deserialize(json: string): Project | null {
     const known = TRANSITIONS.some((t) => t.kind === legacy.kind);
     const transition: Transition = { kind: known ? (legacy.kind as TransitionKind) : DEFAULT_TRANSITION.kind, duration: legacy.duration ?? DEFAULT_TRANSITION.duration };
     const migrated = known && !p.clips.some((c) => c.transitionIn) ? applyTransitionToAll(p.clips, transition) : p.clips;
-    const clips = migrated.map((c) => ({ ...(LUT_KINDS.includes(c.grade?.lut) ? c : { ...c, grade: { ...c.grade, lut: "none" as LutKind } }), ...(c.speed !== undefined ? { speed: clipSpeed(c) } : {}) }));
-    return { ...newProject(), ...p, clips, export: { ...DEFAULT_EXPORT, ...p.export, tags: { ...DEFAULT_TAGS, ...(p.export?.tags ?? {}) } }, preview: { ...DEFAULT_PREVIEW, ...(p.preview ?? (Object.values(p.proxies ?? {}).some((x) => x?.ready) ? { proxyHeight: 1080 } : {})) }, transition, titles: (p.titles ?? []).map((t) => normalizeTitle(t)) };
+    const clips = migrated.map((c) => {
+      const { introRole, introSeconds, ...rest } = c;
+      const base = LUT_KINDS.includes(rest.grade?.lut) ? rest : { ...rest, grade: { ...rest.grade, lut: "none" as LutKind } };
+      return { ...base, ...(rest.speed !== undefined ? { speed: clipSpeed(rest) } : {}), ...(introRole && INTRO_ROLES.includes(introRole) ? { introRole } : {}), ...(typeof introSeconds === "number" && introSeconds > 0 ? { introSeconds } : {}) };
+    });
+    const intro: IntroSettings = { ...DEFAULT_INTRO, ...(p.intro ?? {}), card: { ...DEFAULT_INTRO.card, ...(p.intro?.card ?? {}) } };
+    if (typeof intro.sceneSeconds !== "number" || !(intro.sceneSeconds > 0)) intro.sceneSeconds = null;
+    return { ...newProject(), ...p, clips, export: { ...DEFAULT_EXPORT, ...p.export, tags: { ...DEFAULT_TAGS, ...(p.export?.tags ?? {}) } }, preview: { ...DEFAULT_PREVIEW, ...(p.preview ?? (Object.values(p.proxies ?? {}).some((x) => x?.ready) ? { proxyHeight: 1080 } : {})) }, transition, intro, titles: (p.titles ?? []).map((t) => normalizeTitle(t)) };
   } catch {
     return null;
   }
