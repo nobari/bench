@@ -7,6 +7,7 @@ import { MobileToolNav } from "@/components/tool-nav";
 import { GithubMark } from "@/components/icons";
 import { setNavMode } from "@/lib/nav-state";
 import { Wordmark } from "@/components/logo";
+import { ThemeSwitch } from "@/components/theme-switch";
 import { SITE } from "@/lib/site";
 
 export function SiteHeader() {
@@ -43,6 +44,7 @@ export function SiteHeader() {
         </button>
 
         <div className="ml-auto flex items-center gap-1">
+          <ThemeSwitch className="mr-1" />
           <button
             type="button"
             onClick={() => setOpen(true)}
