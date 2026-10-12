@@ -164,6 +164,22 @@ the `setState` happens in a `.then` callback — see
 
 ---
 
+### Work in progress → `useUnsavedWork`
+
+If the widget holds anything a navigation would throw away — files loaded, a job
+running, a result not yet downloaded, a draft that is not in the URL — declare it:
+
+```tsx
+import { useUnsavedWork } from "@/lib/unsaved-work";
+useUnsavedWork(busy ? "A conversion is running." : files.length ? "The loaded files will be lost." : null);
+```
+
+The `LeaveGuard` in the root layout then asks before the tab is closed or
+reloaded, before an in-app link, and before the browser's back/forward buttons
+take effect. Pass `null` once the work is saved or finished. Programmatic
+navigation (`router.push`) should call `confirmLeave()` first. State that lives
+in the URL via `nuqs` needs no guard — it survives.
+
 ## Step 4 — Register the widget
 
 1. `lib/tools/types.ts` — add your key to the `WidgetKey` union.

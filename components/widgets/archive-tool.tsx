@@ -28,6 +28,7 @@ import {
 } from "@/lib/tools/files/archive";
 import { buildZip } from "@/lib/tools/files/zip-write";
 import { buildTarGz } from "@/lib/tools/files/tar-write";
+import { useUnsavedWork } from "@/lib/unsaved-work";
 
 // Same self-hosted worker + wasm as the comic reader (scripts/copy-vendor.mjs).
 Archive.init({ workerUrl: "/vendor/libarchive/worker-bundle.js" });
@@ -161,6 +162,7 @@ export function ArchiveExtractWidget() {
   const [passwordBad, setPasswordBad] = useState(false);
   const [busyPath, setBusyPath] = useState<string | null>(null);
   const [zipBusy, setZipBusy] = useState(false);
+  useUnsavedWork(busyPath || zipBusy ? "The archive is still being unpacked; leaving now would abandon it." : entries.length ? "The opened archive and its extracted files would be lost." : null);
 
   const readerRef = useRef<Reader | null>(null);
   const extractedRef = useRef<Map<string, File> | null>(null);
@@ -492,6 +494,7 @@ export function ArchiveCreateWidget() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<{ name: string; size: number; url: string } | null>(null);
+  useUnsavedWork(busy ? "An archive is still being built; leaving now would abandon it." : files.length ? "The files added to the archive would be lost." : null);
   const idRef = useRef(0);
   const fileInput = useRef<HTMLInputElement>(null);
   const urlsRef = useRef<string[]>([]);

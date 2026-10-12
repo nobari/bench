@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useQueryState, parseAsString, parseAsInteger } from "nuqs";
 import { Download, ImagePlus, Loader, Trash2, Upload } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useUnsavedWork } from "@/lib/unsaved-work";
 
 interface Src {
   id: string;
@@ -53,6 +54,7 @@ export function ImageConverterWidget() {
   const [outs, setOuts] = useState<Out[]>([]);
   const [busy, setBusy] = useState(false);
   const [dragOver, setDragOver] = useState(false);
+  useUnsavedWork(busy ? "Images are still converting; leaving now would abandon them." : srcs.length ? "The loaded images and their conversions would be lost." : null);
   const idRef = useRef(0);
   const fileInput = useRef<HTMLInputElement>(null);
 

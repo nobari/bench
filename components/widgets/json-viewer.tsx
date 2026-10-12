@@ -32,6 +32,7 @@ import {
 } from "@/lib/tools/json/utils";
 import { cn } from "@/lib/utils";
 import { SHARE_SYNC_EVENT } from "@/components/share-button";
+import { useUnsavedWork } from "@/lib/unsaved-work";
 
 const SAMPLE = `{
   "name": "Bench",
@@ -63,6 +64,7 @@ type IndentOpt = 2 | 4 | "\t";
 
 export function JsonViewerWidget() {
   const [text, setText] = useState<string>(readInitial);
+  useUnsavedWork(text.trim() && text !== readInitial() ? "The JSON in the viewer is not in the link yet; it would be lost. Use Share to keep it in the URL." : null);
   const [view, setView] = useState<"tree" | "raw">("tree");
   const [indent, setIndent] = useState<IndentOpt>(2);
   const [query, setQuery] = useState("");

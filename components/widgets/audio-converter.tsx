@@ -17,6 +17,7 @@ import {
 import { formatBytes, formatDuration } from "@/lib/tools/audio/music";
 import type { AudioCodec, MetadataTags } from "mediabunny";
 import { cn } from "@/lib/utils";
+import { useUnsavedWork } from "@/lib/unsaved-work";
 
 const SEL = "h-8 rounded-[var(--radius-sm)] border border-edge bg-base px-2 pr-7 text-[13px] text-ink outline-none focus:border-accent";
 const INPUT = "h-8 w-full rounded-[var(--radius-sm)] border border-edge bg-base px-2 text-[13px] text-ink outline-none focus:border-accent";
@@ -51,6 +52,7 @@ export function AudioConverterWidget() {
   const [jobs, setJobs] = useState<Job[]>([]);
   const [support, setSupport] = useState<Record<OutputId, boolean> | null>(null);
   const [busy, setBusy] = useState(false);
+  useUnsavedWork(busy ? "Audio is still converting; leaving now would abandon it." : jobs.length ? "The loaded audio files and their conversions would be lost." : null);
   const [dragOver, setDragOver] = useState(false);
   const [trimStart, setTrimStart] = useState("");
   const [trimEnd, setTrimEnd] = useState("");

@@ -9,6 +9,7 @@ import { fmtBytes, fmtDelta, fmtDuration } from "@/lib/tools/video/progress";
 import { probeVideo, type VideoInfo } from "@/lib/tools/image/retime";
 import { formatBytes } from "@/lib/tools/bytes";
 import { cn } from "@/lib/utils";
+import { useUnsavedWork } from "@/lib/unsaved-work";
 
 /** File System Access API (Chrome/Edge): a handle lets the tags be written back into the file itself. */
 interface FileHandle {
@@ -192,6 +193,7 @@ export function Mp4TagsWidget() {
   const setTag = (patch: Partial<FileTags>) => setTags((t) => ({ ...t, ...patch }));
 
   const dirty = !!loaded && !sameTags(loaded.ins.tags, tags);
+  useUnsavedWork(job || busy === "saving" ? "A save is in progress in the MP4 tag editor; leaving now would abandon it." : dirty ? "The edited tags have not been saved into the file yet." : null);
   const plan = useMemo<{ plan: WritePlan } | { error: string } | null>(() => {
     if (!loaded) return null;
     try {

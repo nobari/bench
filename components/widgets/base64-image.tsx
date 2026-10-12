@@ -17,6 +17,7 @@ import {
 import { CopyButton } from "@/components/copy-button";
 import { SHARE_SYNC_EVENT } from "@/components/share-button";
 import { cn } from "@/lib/utils";
+import { useUnsavedWork } from "@/lib/unsaved-work";
 
 const SEL = "h-8 rounded-[var(--radius-sm)] border border-edge bg-base px-2 pr-7 text-[13px] text-ink outline-none focus:border-accent";
 const GHOST =
@@ -149,6 +150,7 @@ export function Base64ImageWidget() {
   const inputRef = useRef<HTMLInputElement>(null);
 
   const [text, setText] = useState(readInitial);
+  useUnsavedWork(busy ? "The image is still being encoded; leaving now would abandon it." : text.trim() && text !== readInitial() ? "The loaded image and its Base64 text are not in the link yet; they would be lost. Use Share to keep them in the URL." : null);
   const [decodedDims, setDecodedDims] = useState<{ w: number; h: number } | null>(null);
   const dText = useDeferredValue(text);
   const m: Mode = mode === "decode" ? "decode" : "encode";

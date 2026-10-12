@@ -38,6 +38,7 @@ import {
 } from "@/lib/tools/image/provenance";
 import { DEMO_CERT_CHAIN_PEM, DEMO_PRIVATE_KEY_PEM } from "@/lib/tools/image/demo-cert";
 import { cn } from "@/lib/utils";
+import { useUnsavedWork } from "@/lib/unsaved-work";
 
 /* ------------------------------------------------------------------ data */
 
@@ -290,6 +291,7 @@ export function ProvenanceWidget() {
   const [analysis, setAnalysis] = useState<Analysis | null>(null);
   const [sdk, setSdk] = useState<SdkState>({ kind: "idle" });
   const [busy, setBusy] = useState(false);
+  useUnsavedWork(busy ? "The file's credentials are still being read; leaving now would abandon it." : file ? "The loaded file and its inspection would be lost." : null);
   const [error, setError] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -992,6 +994,7 @@ function SignDemo({ file, analysis, hasManifest, onSigned }: { file: File | null
   const [dst, setDst] = useState("digitalCreation");
   const [author, setAuthor] = useState("");
   const [state, setState] = useState<{ kind: "idle" } | { kind: "busy"; step: string } | { kind: "done"; name: string; size: number } | { kind: "error"; message: string }>({ kind: "idle" });
+  useUnsavedWork(state.kind === "busy" ? "Signing is in progress; leaving now would abandon it." : null);
   const can = !!file && !!analysis && SIGNABLE.has(analysis.scan.container);
 
   async function sign() {

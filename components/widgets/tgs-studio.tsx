@@ -30,6 +30,7 @@ import {
   telegramChecks,
   type LottieJson,
 } from "@/lib/tools/image/tgs";
+import { useUnsavedWork } from "@/lib/unsaved-work";
 
 interface Source {
   /** The original (never-mutated) animation as loaded. */
@@ -57,6 +58,7 @@ export function TgsStudioWidget() {
   const [speed, setSpeed] = useState(1);
   const [busy, setBusy] = useState<null | "tgs" | "png" | "gif">(null);
   const [gifProgress, setGifProgress] = useState(0);
+  useUnsavedWork(busy ? "A sticker export is running; leaving now would abandon it." : src && Object.keys(colorMap).length ? "The sticker's colour edits would be lost." : null);
   const [note, setNote] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
 

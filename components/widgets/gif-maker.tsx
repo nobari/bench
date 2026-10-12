@@ -13,6 +13,7 @@ import {
   X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useUnsavedWork } from "@/lib/unsaved-work";
 
 interface Frame {
   id: string;
@@ -51,6 +52,7 @@ export function GifMakerWidget() {
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState(0);
   const [result, setResult] = useState<Result | null>(null);
+  useUnsavedWork(busy ? "A GIF is being encoded; leaving now would abandon it." : frames.length ? "The frames added to the GIF maker would be lost." : null);
   const [error, setError] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
 

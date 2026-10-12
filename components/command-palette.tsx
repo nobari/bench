@@ -12,6 +12,7 @@ import { Command } from "cmdk";
 import { Lightbulb, Search } from "lucide-react";
 import { CATEGORIES, getCategory } from "@/lib/tools/categories";
 import { TOOLS, getCategoryTree } from "@/lib/tools/registry";
+import { confirmLeave } from "@/lib/unsaved-work";
 import { searchTools } from "@/lib/tools/search";
 import { toolShortTitle, type ToolDef } from "@/lib/tools/types";
 
@@ -94,6 +95,7 @@ function CommandMenu({ open, setOpen }: { open: boolean; setOpen: (v: boolean) =
 
   const go = useCallback(
     (href: string) => {
+      if (!confirmLeave()) return;
       setOpen(false);
       router.push(href);
     },

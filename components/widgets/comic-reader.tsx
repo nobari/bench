@@ -24,6 +24,7 @@ import {
   imageMime,
   isComicPage,
 } from "@/lib/tools/image/comic";
+import { useUnsavedWork } from "@/lib/unsaved-work";
 
 // libarchive runs in its own worker; both the worker bundle and the wasm it
 // loads are self-hosted (copied by scripts/copy-vendor.mjs), never a CDN.
@@ -92,6 +93,7 @@ export function ComicReaderWidget() {
   const [error, setError] = useState<string | null>(null);
   const [pendingFile, setPendingFile] = useState<File | null>(null);
   const [passwordBad, setPasswordBad] = useState(false);
+  useUnsavedWork(pages.length ? "The open comic and your place in it would be lost." : null);
   const [password, setPassword] = useState("");
   const [dragOver, setDragOver] = useState(false);
   const [isFs, setIsFs] = useState(false);

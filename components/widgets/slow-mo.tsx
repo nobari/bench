@@ -7,6 +7,7 @@ import { probeVideo, retimeVideo, webCodecsSupported, type RetimeResult, type Vi
 import { estimateOutputBytes, fitSize, outputFpsChoices } from "@/lib/tools/image/retime-core";
 import { formatBytes } from "@/lib/tools/bytes";
 import { cn } from "@/lib/utils";
+import { useUnsavedWork } from "@/lib/unsaved-work";
 
 /** File System Access API (Chrome/Edge): lets the MP4 stream to disk instead of memory. */
 interface SaveHandle {
@@ -77,6 +78,7 @@ export function SlowMoWidget() {
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState<Progress | null>(null);
   const [result, setResult] = useState<(RetimeResult & { url: string; name: string; bytes: number; savedAs?: string }) | null>(null);
+  useUnsavedWork(busy ? "A slow-motion conversion is running; leaving now would abandon it." : result && !result.savedAs ? "The converted video has not been downloaded yet; it would be lost." : null);
   const [dragging, setDragging] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
