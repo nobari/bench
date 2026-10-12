@@ -3,7 +3,7 @@
 <a href="https://bench.bozmoz.com">![Bench — everyday tools for text, data, images and the web](docs/banner.svg)</a>
 
 <p>
-  <a href="https://bench.bozmoz.com"><img alt="bench.bozmoz.com" src="https://img.shields.io/badge/live-bench.bozmoz.com-68a52a?style=flat-square&labelColor=1c2414"></a>
+  <a href="https://bench.bozmoz.com"><img alt="bench.bozmoz.com" src="https://img.shields.io/badge/live-bench.bozmoz.com-232327?style=flat-square&labelColor=1c2414"></a>
   <a href="#tools"><img alt="57 tools" src="https://img.shields.io/badge/tools-57-68a52a?style=flat-square&labelColor=1c2414"></a>
   <a href="https://nextjs.org"><img alt="Next.js 16" src="https://img.shields.io/badge/Next.js-16-1e2419?style=flat-square&logo=nextdotjs&logoColor=white&labelColor=1c2414"></a>
   <a href="https://react.dev"><img alt="React 19" src="https://img.shields.io/badge/React-19-149eca?style=flat-square&logo=react&logoColor=white&labelColor=1c2414"></a>
