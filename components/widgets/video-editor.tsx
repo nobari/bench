@@ -2,8 +2,8 @@
 
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { AlertTriangle, Camera, Check, ChevronDown, ChevronRight, ChevronUp, Sparkles, Circle, Clapperboard, Crop, Download, FolderOpen, Loader, Maximize2, Minimize2, Music, Pause, Play, Repeat, Save, Scissors, SkipBack, SkipForward, SlidersHorizontal, StepBack, StepForward, Trash2, Type, Upload, Volume2, VolumeX, Keyboard, Search } from "lucide-react";
-import { DEFAULT_CLIP_GAIN_DB, DEFAULT_EXPORT, NEUTRAL_GRADE, NEUTRAL_TRANSFORM, TITLE_ALIGNS, TITLE_FAMILIES, TITLE_FONTS, TITLE_POSITIONS, TITLE_SHADOWS, TITLE_WEIGHTS, TRANSITIONS, addTransitionAt, appendMusic, applyAudioTo, applyGradeTo, applyTransitionToAll, clipAt, crossfades, dbToGain, effectiveMusicEnd, estimateExport, exportRange, fmtTime, musicGainAt, musicLength, newId, newProject, newTitle, orderRecordings, placeClips, planExport, removeRange, reorderMusic, setTransition, splitClip, timelineDuration, titleLanes, transitionAt, transitionWindows, CLIP_SPEEDS, canMergeWithNext, clipLength, clipSpeed, groupOf, sourceTimeAt, mergeWithNext, moveClip, unjoin, updateClip, visibleCuts, type Clip, type MediaRef, type MusicTrack, type Project, type ProxyHeight, type Title, type TitleFont, isFileLutKind, type FileLutKind, type LutKind, type MathLutKind, type TitleAlign, type TitlePosition, type TitleShadow, type Transition, type TransitionKind, type ExportTags, type IntroSettings, reorderClip, parseTime, type SteadyLights, STEADY_FRAMES, clampMusicStart, musicUnused } from "@/lib/tools/video/project";
+import { AlertTriangle, Camera, Check, ChevronDown, ChevronRight, ChevronUp, Sparkles, Circle, Clapperboard, Crop, Download, FolderOpen, Loader, Maximize2, Minimize2, Music, Pause, Play, Repeat, Save, Scissors, SkipBack, SkipForward, SlidersHorizontal, StepBack, StepForward, Trash2, Type, Upload, Volume2, VolumeX, Keyboard, Search, Shuffle } from "lucide-react";
+import { DEFAULT_CLIP_GAIN_DB, DEFAULT_EXPORT, NEUTRAL_GRADE, NEUTRAL_TRANSFORM, TITLE_ALIGNS, TITLE_FAMILIES, TITLE_FONTS, TITLE_POSITIONS, TITLE_SHADOWS, TITLE_WEIGHTS, TRANSITIONS, addTransitionAt, appendMusic, applyAudioTo, applyGradeTo, applyTransitionToAll, clipAt, crossfades, dbToGain, effectiveMusicEnd, estimateExport, exportRange, fmtTime, musicGainAt, musicLength, newId, newProject, newTitle, orderRecordings, placeClips, planExport, removeRange, reorderMusic, setTransition, splitClip, timelineDuration, titleLanes, transitionAt, transitionWindows, CLIP_SPEEDS, canMergeWithNext, clipLength, clipSpeed, groupOf, sourceTimeAt, mergeWithNext, moveClip, unjoin, updateClip, visibleCuts, type Clip, type MediaRef, type MusicTrack, type Project, type ProxyHeight, type Title, type TitleFont, isFileLutKind, type FileLutKind, type LutKind, type MathLutKind, type TitleAlign, type TitlePosition, type TitleShadow, type Transition, type TransitionKind, type ExportTags, type IntroSettings, reorderClip, parseTime, type SteadyLights, STEADY_FRAMES, clampMusicStart, musicUnused, shuffleFillMusic } from "@/lib/tools/video/project";
 import { drawTransition } from "@/lib/tools/video/transitions";
 import { LUT_OPTIONS, buildDlogLut, deriveLut, fetchOfficialLut, lutToCube, parseCube, type Lut3D } from "@/lib/tools/video/lut";
 import { fmtBytes, fmtDelta, fmtDuration, fmtMs, type EstimateSource, type ExportProgress, type SpeedPriors, type StepProgress } from "@/lib/tools/video/progress";
@@ -321,6 +321,8 @@ export function VideoEditorWidget() {
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   // Stops: the scan lives on the project; which ones the user unticked lives here, keyed to that scan.
   const [stopDefaults, setStopDefaults] = useState({ minSeconds: DEFAULT_STOPS.minSeconds, margin: DEFAULT_STOPS.margin });
+  // Fill the video with music: the crossfade between shuffled songs.
+  const [fillOverlap, setFillOverlap] = useState(2);
   const [skippedStops, setSkippedStops] = useState<{ scannedAt: number; keys: string[] }>({ scannedAt: 0, keys: [] });
   const [clearFiles, setClearFiles] = useState(false);
   const [clearProxies, setClearProxies] = useState(false);
@@ -1127,6 +1129,15 @@ export function VideoEditorWidget() {
     [placed],
   );
   const updateMusic = (id: string, patch: Partial<MusicTrack>) => setProject((p) => ({ ...p, music: p.music.map((m) => (m.id === id ? { ...m, ...patch } : m)) }));
+  const songCount = new Set(project.music.map((m) => m.media)).size;
+  /** Shuffle every song and lay them end to end over the whole video (replacing the music lanes). */
+  const fillMusic = () => {
+    const filled = shuffleFillMusic(project.music, duration, fillOverlap);
+    if (filled === project.music) return;
+    setProject((p) => ({ ...p, music: filled }));
+    setSelectedMusic(null);
+    setStatus(`${filled.length} song placements shuffled over ${fmtTime(duration)} from ${songCount} song${songCount === 1 ? "" : "s"}${fillOverlap ? `, ${fillOverlap} s crossfades` : ""} — Shuffle again for another order, ⌘Z to go back`);
+  };
   // Transitions live on the cut they lead into; selecting one parks the playhead on the cut so the preview shows its middle.
   const focusTransition = (incomingId: string | null) => {
     setSelectedTransition(incomingId);
@@ -2341,7 +2352,7 @@ export function VideoEditorWidget() {
               <>
                 <div className="flex flex-wrap items-center gap-1.5">
                   <input ref={musicInput} type="file" accept="audio/*" multiple hidden onChange={(e) => e.target.files && void addMusic(Array.from(e.target.files))} />
-                  <button type="button" onClick={() => void pickFiles("audio")} className={GHOST}>
+                  <button type="button" onClick={() => void pickFiles("audio")} className={GHOST} title="Add one song or many at once">
                     <Music size={13} /> Add music
                   </button>
                   {current && (
@@ -2352,6 +2363,23 @@ export function VideoEditorWidget() {
                       </label>
                     </>
                   )}
+                </div>
+                <div className="space-y-1.5 rounded-[var(--radius-sm)] border border-edge p-2" data-music-fill>
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                    <span className="font-medium text-ink">Fill the video with music</span>
+                    <span className="text-[12px] text-faint" data-music-fill-summary>
+                      {songCount ? `${songCount} song${songCount === 1 ? "" : "s"}` : "no songs yet"} · video {fmtTime(duration)}
+                    </span>
+                    <label className="ml-auto flex items-center gap-1 text-[12px] text-muted">
+                      crossfade
+                      <input type="number" min={0} max={10} step={0.5} value={fillOverlap} onChange={(e) => setFillOverlap(Math.max(0, Math.min(10, Number(e.target.value) || 0)))} className={cn(INPUT, "w-14 font-mono")} aria-label="Crossfade seconds" />
+                      s
+                    </label>
+                  </div>
+                  <button type="button" onClick={fillMusic} disabled={!songCount || !duration} className={cn(PRIMARY, "h-8 px-3 text-[13px]")} data-fill-music>
+                    <Shuffle size={13} /> {project.music.length > songCount ? "Shuffle again" : "Shuffle & fill the video"}
+                  </button>
+                  <p className="text-[12px] text-faint">Add as many songs as you like, then shuffle: they are laid end to end in a random order from the start of the video to its end, crossfading between them; when the songs run out before the video does, a fresh shuffle follows (never the same song twice in a row). The last one fades out at the end. This replaces the music lanes; undo brings them back.</p>
                 </div>
                 {current && (
                   <>
@@ -2825,18 +2853,18 @@ export function VideoEditorWidget() {
 
       {/* timeline */}
       <div className="panel select-none p-2" data-timeline>
-        <div className="mb-1.5 flex items-center gap-3">
+        <div className="mb-1.5 flex flex-wrap items-center gap-x-3 gap-y-1">
           <span className="readout">Timeline</span>
           <span className="text-[11.5px] text-faint tabular">{placed.length ? `${placed.length} clip${placed.length === 1 ? "" : "s"} · ${fmtTime(duration)}` : "empty"}</span>
           <label className="ml-auto flex items-center gap-1.5 text-[12px] text-muted">
             Zoom
-            <input type="range" min={1} max={ZOOM_MAX} step={1} value={zoom} onChange={(e) => zoomTo(Number(e.target.value))} className={cn(RANGE, "w-28")} aria-label="Timeline zoom" title="Zoom (⌘/Ctrl + wheel over the timeline zooms around the pointer)" />
+            <input type="range" min={1} max={ZOOM_MAX} step={1} value={zoom} onChange={(e) => zoomTo(Number(e.target.value))} className={cn(RANGE, "w-28 max-sm:w-16")} aria-label="Timeline zoom" title="Zoom (⌘/Ctrl + wheel over the timeline zooms around the pointer)" />
           </label>
           <button type="button" onClick={() => zoomTo(1)} disabled={zoom === 1} className={cn(GHOST, "h-7 px-2 text-[12px]")} title="Fit the whole drive in view">
             Fit
           </button>
-          <button type="button" onClick={() => setShortcutsOpen(true)} className={cn(GHOST, "h-7 px-2 text-[12px]")} title="Every keyboard shortcut (?)" data-shortcuts>
-            <Keyboard size={13} /> Shortcuts
+          <button type="button" onClick={() => setShortcutsOpen(true)} className={cn(GHOST, "h-7 px-2 text-[12px]")} title="Every keyboard shortcut (?)" aria-label="Keyboard shortcuts" data-shortcuts>
+            <Keyboard size={13} /> <span className="max-sm:hidden">Shortcuts</span>
           </button>
         </div>
         <div className="flex">

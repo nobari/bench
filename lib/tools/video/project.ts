@@ -902,6 +902,41 @@ export function appendMusic(music: MusicTrack[], track: Omit<MusicTrack, "start"
   return { ...track, start: latest };
 }
 
+/**
+ * Lay every song end to end in a random order to cover the whole video: each placement overlaps the one before
+ * by `overlap` seconds for the crossfade, and when the songs run out before the video does a fresh shuffle
+ * follows — never the same song twice in a row when there is a choice. The last one is cut at the end of the
+ * video by playback as usual. Each song keeps the trim, gain and fades of its first placement; everything goes
+ * on the first lane and replaces the music that was there. `rng` is Math.random unless a test seeds it.
+ */
+export function shuffleFillMusic(music: MusicTrack[], timelineEnd: number, overlap = 2, rng: () => number = Math.random): MusicTrack[] {
+  const songs: MusicTrack[] = [];
+  for (const m of music) if (!songs.some((s) => s.media === m.media) && musicLength(m) > 0) songs.push(m);
+  if (!songs.length || !(timelineEnd > 0)) return music;
+  const shuffle = (last: string | null) => {
+    const a = [...songs];
+    for (let i = a.length - 1; i > 0; i--) {
+      const j = Math.floor(rng() * (i + 1));
+      [a[i], a[j]] = [a[j], a[i]];
+    }
+    if (a.length > 1 && a[0].media === last) [a[0], a[1]] = [a[1], a[0]];
+    return a;
+  };
+  const out: MusicTrack[] = [];
+  let covered = 0, last: string | null = null;
+  for (let cycle = 0; cycle < 1000 && covered < timelineEnd - 1e-6; cycle++) {
+    for (const s of shuffle(last)) {
+      if (covered >= timelineEnd - 1e-6) break;
+      const ov = Math.min(Math.max(0, overlap), musicLength(s) / 2);
+      const start = clampMusicStart(out.length ? covered - ov : 0, s, timelineEnd);
+      out.push({ ...s, id: newId(), lane: 0, start, muted: false, keyframes: [] });
+      last = s.media;
+      covered = start + musicLength(s);
+    }
+  }
+  return out;
+}
+
 /* ---------------------------------------------------------- export plan */
 
 export type SpanKind = "copy" | "encode";

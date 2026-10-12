@@ -22,7 +22,7 @@ export default function HomePage() {
         </div>
       </div>
 
-      <div className="mt-8 grid gap-x-10 gap-y-8 md:grid-cols-2">
+      <div className="mt-8 grid grid-cols-[minmax(0,1fr)] gap-x-10 gap-y-8 md:grid-cols-[repeat(2,minmax(0,1fr))]">
         {CATEGORIES.map((cat) => {
           const tree = getCategoryTree(cat.slug);
           if (!tree.length) return null;
@@ -30,7 +30,7 @@ export default function HomePage() {
           const grouped = tree.length > 1;
           const Icon = cat.icon;
           return (
-            <section key={cat.slug} aria-labelledby={`cat-${cat.slug}`}>
+            <section key={cat.slug} aria-labelledby={`cat-${cat.slug}`} className="min-w-0">
               <h2
                 id={`cat-${cat.slug}`}
                 className="flex items-center gap-2 border-b border-edge pb-2 text-[13px] font-semibold text-ink"
