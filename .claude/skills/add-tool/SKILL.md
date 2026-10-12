@@ -119,7 +119,7 @@ Reuse these utilities (defined in `app/globals.css`) so the tool looks native:
 - **Accent**: use `text-accent` / `bg-accent` / `border-accent` and
   `accent-[var(--accent)]` for range inputs. The page sets `--accent` per
   category — never hard-code a category color in a widget.
-- Primary action buttons: `bg-accent text-on-accent font-medium` (vivid matcha fill with dark text; `text-accent` is the deeper readable green).
+- Primary action buttons: `bg-accent text-on-accent font-medium` (a near-black fill with white text; `text-accent` is the deep gray for links and outlines).
 
 Reusable components: `CopyButton` (`@/components/copy-button`), `ShareButton`
 (`@/components/share-button`, copies the current URL), and the `Button`
