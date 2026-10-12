@@ -42,14 +42,14 @@ export function videoTemplate(p: Project): Record<string, unknown> {
     project,
     instructions: [
       "This one file describes both the intro and the titles of a driving video. Fill it in, save it, and import it in the Intro or Titles tab of the Bench video editor (Import JSON): both parts are applied at once.",
-      "intro: set enabled to false for no intro. style is the id of one of options.introStyles (each lists its name and look). scenes is how many short moments are lifted from the drive when moments is empty — the editor then picks lively ones itself. sceneSeconds is seconds per scene (null = the style's own; never shorter than the style's transition plus 0.3 s). card ends the intro: text (empty = the project name), subtitle, and seconds (0 = no card). keepAudio keeps the scenes' own sound instead of playing them quiet under the music. moments, optional, names the exact moments to use, in order: file is one of project.clips files and at is seconds into that recording.",
+      "intro: set enabled to false for no intro. style is the id of one of options.introStyles (each lists its name and look). scenes (1–20) is how many moments are lifted from the drive when moments is empty — the editor then picks lively ones itself. sceneSeconds is seconds per scene (null = the style's own; never shorter than the style's transition plus 0.3 s). card ends the intro: text (empty = the project name), subtitle, and seconds (0 = no card). keepAudio keeps the scenes' own sound instead of playing them quiet under the music. moments, optional, names the exact moments to use, in order: file is one of project.clips files and at is seconds into that recording.",
       "Avoid jumps: a cross dissolve shows the outgoing clip past its end and the incoming clip before its start, so each side of a cut needs its half of the transition plus a margin of handleMarginSeconds inside the recording. Pick every moment's at inside that clip's momentRange (recording seconds): it already leaves the handles and the margin on both sides of the scene; outside it the scene is moved or shortened, and a scene with no room would freeze. Likewise keep a title's start and end at least transitionSeconds / 2 + handleMarginSeconds away from a cut between clips (clips lists start and end on the timeline) unless the title spans the cut entirely.",
       ...base.instructions.slice(1),
     ],
     options: {
       ...base.options,
       introStyles: INTRO_STYLES.map((s) => ({ id: s.id, name: s.name, look: s.hint, sceneSeconds: s.sceneSeconds })),
-      introScenesRange: [1, 12],
+      introScenesRange: [1, 20],
       introSceneSecondsRange: [0.5, 10],
       introCardSecondsRange: [0, 10],
     },
@@ -89,9 +89,9 @@ function parseIntro(raw: unknown, p: Project, warnings: string[]): IntroImport {
   const card = { text: c && typeof c.text === "string" ? c.text.trim() : p.intro.card.text, subtitle: c && typeof c.subtitle === "string" ? c.subtitle.trim() : p.intro.card.subtitle, seconds: cardSeconds };
   const keepAudio = typeof r.keepAudio === "boolean" ? r.keepAudio : p.intro.keepAudio;
   let scenes = Math.round(num(r.scenes) ?? 6);
-  if (scenes < 1 || scenes > 12) {
-    warnings.push(`intro: scenes ${scenes} is outside 1–12, clamped`);
-    scenes = Math.max(1, Math.min(12, scenes));
+  if (scenes < 1 || scenes > 20) {
+    warnings.push(`intro: scenes ${scenes} is outside 1–20, clamped`);
+    scenes = Math.max(1, Math.min(20, scenes));
   }
   const moments: Moment[] = [];
   if (Array.isArray(r.moments)) {

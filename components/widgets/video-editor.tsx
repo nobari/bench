@@ -2161,7 +2161,7 @@ export function VideoEditorWidget() {
                 <div className="grid grid-cols-2 gap-2 text-[12px] text-muted">
                   <label>
                     Scenes
-                    <input type="number" min={2} max={12} step={1} value={introCount} onChange={(e) => setIntroCount(Math.max(2, Math.min(12, Math.round(Number(e.target.value) || 6))))} className={cn(INPUT, "mt-0.5 font-mono")} aria-label="Scenes" />
+                    <input type="number" min={2} max={20} step={1} value={introCount} onChange={(e) => setIntroCount(Math.max(2, Math.min(20, Math.round(Number(e.target.value) || 6))))} className={cn(INPUT, "mt-0.5 font-mono")} aria-label="Scenes" />
                   </label>
                   <label>
                     Seconds per scene
