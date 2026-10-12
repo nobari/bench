@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { AlertTriangle, Camera, Check, ChevronDown, ChevronRight, ChevronUp, Sparkles, Circle, Clapperboard, Crop, Download, FolderOpen, Loader, Maximize2, Minimize2, Music, Pause, Play, Repeat, Save, Scissors, SkipBack, SkipForward, SlidersHorizontal, StepBack, StepForward, Trash2, Type, Upload, Volume2, VolumeX } from "lucide-react";
+import { AlertTriangle, Camera, Check, ChevronDown, ChevronRight, ChevronUp, Sparkles, Circle, Clapperboard, Crop, Download, FolderOpen, Loader, Maximize2, Minimize2, Music, Pause, Play, Repeat, Save, Scissors, SkipBack, SkipForward, SlidersHorizontal, StepBack, StepForward, Trash2, Type, Upload, Volume2, VolumeX, Keyboard } from "lucide-react";
 import {
   DEFAULT_CLIP_GAIN_DB,
   DEFAULT_EXPORT,
@@ -95,10 +95,10 @@ type Tab = "trim" | "intro" | "transform" | "colour" | "audio" | "titles" | "exp
 const TABS: [Tab, string, typeof Scissors][] = [
   ["trim", "Trim", Scissors],
   ["intro", "Intro", Sparkles],
-  ["transform", "Rotate & crop", Crop],
+  ["transform", "Crop", Crop],
   ["colour", "Colour", SlidersHorizontal],
   ["audio", "Audio", Volume2],
-  ["titles", "Titles & logo", Type],
+  ["titles", "Titles", Type],
   ["export", "Export", Download],
 ];
 
@@ -144,6 +144,23 @@ function savePriors(profile: string, measured: SpeedPriors) {
   }
 }
 
+/** The shortcut list behind the ? key. */
+const SHORTCUTS: [string, string][] = [
+  ["Space", "Play or pause"],
+  ["Space (held)", "Double the preview speed while held"],
+  ["Control (held)", "Skim the cuts: 3 s before and after each"],
+  ["← / →", "Step one frame (⇧ for a second)"],
+  ["↑ / ↓", "Jump to the previous or next cut"],
+  ["Home / End", "Start or end of the drive"],
+  ["M", "Mute the preview"],
+  ["S", "Save a thumbnail of the frame (⇧S full-size JPEG, ⌥S PNG)"],
+  ["⌫", "Remove the selected transition"],
+  ["⌘Z", "Undo"],
+  ["⌘S", "Save the project"],
+  ["T", "Timeline summary in full screen"],
+  ["Esc", "Leave full screen or close a dialog"],
+  ["?", "This list"],
+];
 /** Holding Control skims the cuts: this many seconds before and after each one. */
 const SKIM_S = 3;
 /** What a navigation would abandon while a job runs. */
@@ -315,6 +332,7 @@ export function VideoEditorWidget() {
   };
   // Clear-project dialog: forgetting is always in the browser only; deleting our own files from the folder is opt-in.
   const [clearOpen, setClearOpen] = useState(false);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [clearFiles, setClearFiles] = useState(false);
   const [clearProxies, setClearProxies] = useState(false);
   const keepButtonRef = useRef<HTMLButtonElement>(null);
@@ -327,6 +345,14 @@ export function VideoEditorWidget() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [clearOpen]);
+  useEffect(() => {
+    if (!shortcutsOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setShortcutsOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [shortcutsOpen]);
   const clearProject = async () => {
     setPlaying(false);
     store.cancelAutosave();
@@ -643,6 +669,7 @@ export function VideoEditorWidget() {
         else if (e.key === "End") stepTo(durationRef.current);
         else if (e.key === "ArrowUp") stepTo([...cuts].reverse().find((c) => c < t - 0.01) ?? 0);
         else if (e.key === "ArrowDown") stepTo(cuts.find((c) => c > t + 0.01) ?? durationRef.current);
+        else if (e.key === "?") setShortcutsOpen((v) => !v);
         else if (e.key === "m" || e.key === "M") setPreviewMuted((m) => !m);
         else if (e.key === "s" || e.key === "S") void saveFrame(e.altKey ? "png" : e.shiftKey ? "jpeg" : "thumb");
         else return;
@@ -1455,6 +1482,13 @@ export function VideoEditorWidget() {
                 {fullscreen ? <Minimize2 size={15} /> : <Maximize2 size={15} />}
               </button>
             )}
+            {(boost || skim || speed > 4) && (
+              <div className="pointer-events-none absolute top-2 left-2 flex max-w-[calc(100%-4rem)] items-center gap-1.5 rounded-[var(--radius-sm)] bg-black/60 px-2 py-1 text-[12px] text-white backdrop-blur-sm" data-preview-badge>
+                {boost && <span data-boost>{rate}× while held{speed * 2 > MAX_PREVIEW_RATE ? ` · ${MAX_PREVIEW_RATE}× is the browser's ceiling` : ""}</span>}
+                {skim && <span data-skim>skimming the cuts · {SKIM_S} s either side</span>}
+                {!boost && !skim && speed > 4 && <span title="Browsers silence video above 4×, and the music preview stops too; export is unaffected">silent above 4×</span>}
+              </div>
+            )}
             {fullscreen && (
               <div className="absolute inset-x-0 bottom-0 flex items-center gap-3 bg-gradient-to-t from-black/70 to-transparent px-4 pt-8 pb-3 text-white opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
                 <button type="button" onClick={togglePlay} className="flex h-9 items-center gap-1.5 rounded-[var(--radius-sm)] bg-white/15 px-3 text-[13px] hover:bg-white/25">
@@ -1530,7 +1564,8 @@ export function VideoEditorWidget() {
               </div>
             )}
           </div>
-          <div className="mt-2 flex flex-wrap items-center gap-2">
+          {/* Transport: one fixed row (two on phones) whose members never come and go, so the timeline below never moves; transient state is a badge on the preview. */}
+          <div className="mt-2 flex items-center gap-2 max-sm:flex-wrap" data-transport>
             <div className="flex items-center gap-0.5" role="group" aria-label="Transport">
               <button type="button" onClick={() => stepTo(0)} disabled={!project.clips.length} className={cn(GHOST, "h-8 px-1.5")} title="To the start (Home)" aria-label="To the start">
                 <SkipBack size={13} />
@@ -1549,7 +1584,8 @@ export function VideoEditorWidget() {
                 <SkipForward size={13} />
               </button>
             </div>
-            <span className="font-mono text-[13px] text-ink tabular">
+
+            <span className="font-mono text-[13px] whitespace-nowrap text-ink tabular">
               {fmtTime(playhead, first?.fps)} <span className="text-faint">/ {fmtTime(duration)}</span>
             </span>
             <select value={speed} onChange={(e) => setSpeed(Number(e.target.value))} className={cn(SEL, "h-7 text-[12px]")} aria-label="Preview speed" title="Preview speed (export is unaffected). Hold Space to double it. Browsers silence the sound above 4× and cap playback at 16×.">
@@ -1559,32 +1595,63 @@ export function VideoEditorWidget() {
                 </option>
               ))}
             </select>
-            {boost && (
-              <span className="text-[12px] text-accent" data-boost>
-                {rate}× while held{speed * 2 > MAX_PREVIEW_RATE ? ` — ${MAX_PREVIEW_RATE}× is the browser's ceiling` : ""}
-              </span>
-            )}
-            {skim && (
-              <span className="text-[12px] text-accent" data-skim>
-                skimming the cuts: {SKIM_S} s either side of each one while Control is held
-              </span>
-            )}
-            {!boost && speed > 4 && (
-              <span className="text-[11.5px] text-faint" title="Browsers silence video above 4×, and the music preview stops too; export is unaffected">
-                silent above 4×
-              </span>
-            )}
-            <button type="button" onClick={() => setLoop((l) => !l)} aria-pressed={loop} className={cn(GHOST, "h-7 text-[12px]", loop && "border-accent text-accent")} title={range ? "Loop the export range" : "Loop the whole timeline"}>
-              <Repeat size={12} /> Loop{range ? " range" : ""}
+            <button type="button" onClick={() => setLoop((l) => !l)} aria-pressed={loop} className={cn(GHOST, "h-8 px-2 text-[12px]", loop && "border-accent text-accent")} title={range ? "Loop the export range" : "Loop the whole timeline"} aria-label={range ? "Loop the export range" : "Loop the whole timeline"}>
+              <Repeat size={13} />
             </button>
-            <button type="button" onClick={() => setPreviewMuted((m) => !m)} aria-pressed={previewMuted} className={cn(GHOST, "h-7 text-[12px]", previewMuted && "border-accent text-accent")} title="Mute the preview (M) — export is unaffected" aria-label={previewMuted ? "Unmute preview" : "Mute preview"}>
+            <button type="button" onClick={() => setPreviewMuted((m) => !m)} aria-pressed={previewMuted} className={cn(GHOST, "h-8 px-2 text-[12px]", previewMuted && "border-accent text-accent")} title="Mute the preview (M) — export is unaffected" aria-label={previewMuted ? "Unmute preview" : "Mute preview"}>
               {previewMuted ? <VolumeX size={12} /> : <Volume2 size={12} />}
             </button>
+            <div className="ml-auto flex items-center gap-2">
+              <button type="button" onClick={toggleFullscreen} disabled={!project.clips.length} className={cn(GHOST, "h-8 px-2 text-[12px]")} title="Watch the preview full screen (double-click the preview)" aria-label="Full screen">
+              <Maximize2 size={13} />
+            </button>
+              <div
+                className="relative flex"
+                onBlur={(e) => {
+                  if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setFrameMenu(false);
+                }}
+            >
+                <button type="button" onClick={() => void saveFrame("thumb")} disabled={!project.clips.length || !!job} className={cn(GHOST, "h-8 rounded-r-none text-[12px] whitespace-nowrap")} title={`Save this frame as a YouTube thumbnail: ${thumbSize} JPEG from the source, graded, through any transition, with titles — into the project's frames folder (S)`} data-save-frame>
+                  <Camera size={12} /> Save frame
+                </button>
+                <button type="button" onClick={() => setFrameMenu((v) => !v)} disabled={!project.clips.length || !!job} aria-haspopup="menu" aria-expanded={frameMenu} aria-label="Other frame sizes" className={cn(GHOST, "h-8 rounded-l-none border-l-0 px-1")} data-save-frame-menu>
+                  <ChevronDown size={12} />
+                </button>
+                {frameMenu && (
+                  <div role="menu" className="panel absolute top-full right-0 z-20 mt-1 flex w-72 flex-col p-1 text-[12.5px] shadow-lg">
+                    {(Object.keys(FRAME_KINDS) as FrameKind[]).map((k) => (
+                      <button
+                        key={k}
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          setFrameMenu(false);
+                          void saveFrame(k);
+                        }}
+                        className="flex items-start gap-2 rounded-[var(--radius-sm)] px-2 py-1.5 text-left hover:bg-raised"
+                      >
+                        <Camera size={13} className="mt-0.5 shrink-0 text-faint" />
+                        <span>
+                          <span className="text-ink">{FRAME_KINDS[k].label}</span>
+                          <span className="block text-[11.5px] text-faint">
+                            {k === "thumb" ? `${thumbSize} · ` : first?.width ? `${first.width}×${first.height} · ` : ""}
+                            {FRAME_KINDS[k].note}
+                          </span>
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+            </div>
+            </div>
+          </div>
+          <div className="mt-1.5 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-[12px] sm:h-7 sm:flex-nowrap" data-clip-status>
             {under && (
-              <span className="truncate text-[12px] text-faint">
+              <span className="min-w-0 flex-1 truncate text-[12px] text-faint max-sm:basis-full">
                 {project.media[under.clip.media]?.name} · {project.proxies[under.clip.media]?.ready ? `${project.preview.proxyHeight}p proxy` : project.preview.proxyHeight ? "full-res (no proxy yet)" : "full-res"}
               </span>
             )}
+            {!under && <span className="min-w-0 flex-1 truncate text-[12px] text-faint max-sm:basis-full">{project.clips.length ? "Between clips" : "No recordings yet"}</span>}
             <label className="flex items-center gap-1.5 text-[12px] text-muted" title="Smaller proxies render faster and scrub more smoothly; larger ones show the grade in more detail. Export always uses the originals.">
               Proxy
               <select
@@ -1596,7 +1663,7 @@ export function VideoEditorWidget() {
                   // Choosing a size renders the proxies straight away (existing ones at that size are reused).
                   void rebuildProxies(h, false);
                 }}
-                className={cn(SEL, "h-7 text-[12px]")}
+                className={cn(SEL, "h-7 max-w-[12rem] text-[12px]")} aria-label="Proxy size"
               >
                 <option value={1080}>1080p</option>
                 <option value={720}>720p</option>
@@ -1607,69 +1674,25 @@ export function VideoEditorWidget() {
             <button type="button" onClick={() => void rebuildProxies()} disabled={!project.clips.length || !!job || !folder} className={cn(GHOST, "h-7 text-[12px]")} title="Render the proxies again at the chosen size">
               Rebuild proxies
             </button>
-            <button type="button" onClick={toggleFullscreen} disabled={!project.clips.length} className={cn(GHOST, "h-7 text-[12px]")} title="Watch the preview full screen">
-              <Maximize2 size={12} /> Full screen
-            </button>
-            <div
-              className="relative flex"
-              onBlur={(e) => {
-                if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setFrameMenu(false);
-              }}
-            >
-              <button type="button" onClick={() => void saveFrame("thumb")} disabled={!project.clips.length || !!job} className={cn(GHOST, "h-7 rounded-r-none text-[12px]")} title={`Save this frame as a YouTube thumbnail: ${thumbSize} JPEG from the source, graded, through any transition, with titles — into the project's frames folder (S)`} data-save-frame>
-                <Camera size={12} /> Save frame
-              </button>
-              <button type="button" onClick={() => setFrameMenu((v) => !v)} disabled={!project.clips.length || !!job} aria-haspopup="menu" aria-expanded={frameMenu} aria-label="Other frame sizes" className={cn(GHOST, "h-7 rounded-l-none border-l-0 px-1")} data-save-frame-menu>
-                <ChevronDown size={12} />
-              </button>
-              {frameMenu && (
-                <div role="menu" className="panel absolute top-full right-0 z-20 mt-1 flex w-72 flex-col p-1 text-[12.5px] shadow-lg">
-                  {(Object.keys(FRAME_KINDS) as FrameKind[]).map((k) => (
-                    <button
-                      key={k}
-                      type="button"
-                      role="menuitem"
-                      onClick={() => {
-                        setFrameMenu(false);
-                        void saveFrame(k);
-                      }}
-                      className="flex items-start gap-2 rounded-[var(--radius-sm)] px-2 py-1.5 text-left hover:bg-raised"
-                    >
-                      <Camera size={13} className="mt-0.5 shrink-0 text-faint" />
-                      <span>
-                        <span className="text-ink">{FRAME_KINDS[k].label}</span>
-                        <span className="block text-[11.5px] text-faint">
-                          {k === "thumb" ? `${thumbSize} · ` : first?.width ? `${first.width}×${first.height} · ` : ""}
-                          {FRAME_KINDS[k].note}
-                        </span>
-                      </span>
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-            <label className="ml-auto flex items-center gap-1.5 text-[12px] text-muted">
-              Zoom
-              <input type="range" min={1} max={40} step={1} value={zoom} onChange={(e) => setZoom(Number(e.target.value))} className={cn(RANGE, "w-28")} />
-            </label>
           </div>
         </div>
 
         {/* The inspector never grows past the preview: it scrolls inside, so the timeline stays within reach. */}
         <div className="relative min-h-[360px]">
           <div className="panel flex min-w-0 flex-col max-lg:max-h-[60vh] lg:absolute lg:inset-0">
-          <div className="flex flex-wrap gap-1 border-b border-edge px-2 py-1.5">
+          <div role="tablist" aria-label="Inspector" className="flex shrink-0 overflow-x-auto border-b border-edge px-1 [scrollbar-width:none]">
             {TABS.map(([id, label, Icon]) => (
-              <button key={id} type="button" onClick={() => setTab(id)} className={cn("flex h-7 items-center gap-1 rounded-[var(--radius-sm)] px-2 text-[12.5px]", tab === id ? "bg-accent font-medium text-on-accent" : "text-muted hover:bg-raised hover:text-ink")}>
-                <Icon size={13} /> {label}
+              <button key={id} type="button" role="tab" id={`tab-${id}`} aria-selected={tab === id} aria-controls="inspector-panel" onClick={() => setTab(id)} className={cn("-mb-px flex h-11 min-w-0 flex-1 flex-col items-center justify-center gap-1 border-b-2 px-1 text-[11px] leading-none whitespace-nowrap transition-colors", tab === id ? "border-accent font-medium text-ink" : "border-transparent text-muted hover:text-ink")}>
+                <Icon size={15} className={tab === id ? "text-accent" : undefined} />
+                {label}
               </button>
             ))}
           </div>
-          <div className="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain p-3 text-[13px]">
+          <div id="inspector-panel" role="tabpanel" aria-labelledby={`tab-${tab}`} className="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain p-3 text-[13px]">
             {tab === "trim" && (
               <>
                 <p className="text-muted">{current ? `${project.media[current.media]?.name} · ${fmtTime(current.in)} → ${fmtTime(current.out)} (${fmtTime(current.out - current.in)})` : "Select a clip on the timeline, or move the playhead and use the buttons."}</p>
-                <div className="flex flex-wrap gap-1.5">
+                <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-3" data-trim-actions>
                   <button type="button" disabled={!under} onClick={() => under && setProject((p) => ({ ...p, clips: splitClip(p.clips, under.clip.id, playhead) }))} className={GHOST}>
                     <Scissors size={13} /> Split at playhead
                   </button>
@@ -2487,8 +2510,31 @@ export function VideoEditorWidget() {
       </div>
 
       {/* timeline */}
-      <div className="panel p-2">
-        <div ref={timelineRef} className="relative overflow-x-auto" onPointerDown={seekFromEvent}>
+      <div className="panel p-2" data-timeline>
+        <div className="mb-1.5 flex items-center gap-3">
+          <span className="readout">Timeline</span>
+          <span className="text-[11.5px] text-faint tabular">{placed.length ? `${placed.length} clip${placed.length === 1 ? "" : "s"} · ${fmtTime(duration)}` : "empty"}</span>
+          <label className="ml-auto flex items-center gap-1.5 text-[12px] text-muted">
+            Zoom
+            <input type="range" min={1} max={40} step={1} value={zoom} onChange={(e) => setZoom(Number(e.target.value))} className={cn(RANGE, "w-28")} />
+          </label>
+          <button type="button" onClick={() => setZoom(1)} disabled={zoom === 1} className={cn(GHOST, "h-7 px-2 text-[12px]")} title="Fit the whole drive in view">
+            Fit
+          </button>
+          <button type="button" onClick={() => setShortcutsOpen(true)} className={cn(GHOST, "h-7 px-2 text-[12px]")} title="Every keyboard shortcut (?)" data-shortcuts>
+            <Keyboard size={13} /> Shortcuts
+          </button>
+        </div>
+        <div className="flex">
+          <div className="w-14 shrink-0 pr-1.5 text-right text-[10.5px] leading-none text-faint select-none" aria-hidden>
+            <div className="h-5" />
+            <div className="mt-1 flex h-12 items-center justify-end">Video</div>
+            <div className="mt-1 flex items-center justify-end" style={{ height: Math.max(0, titleLaneOf.count * 22 - 2) }}>Titles</div>
+            {[0, 1, 2].map((lane) => (
+              <div key={lane} className="mt-1 flex h-7 items-center justify-end">Music {lane + 1}</div>
+            ))}
+          </div>
+        <div ref={timelineRef} className="relative min-w-0 flex-1 overflow-x-auto" onPointerDown={seekFromEvent}>
           <div className="relative" style={{ width: Math.max(100, duration * pxPerSec + 40), minHeight: 150 }}>
             {/* ruler */}
             <div className="h-5 border-b border-edge text-[10px] text-faint">
@@ -2560,7 +2606,8 @@ export function VideoEditorWidget() {
               ))}
             </div>
             {/* title lanes: overlapping titles stack */}
-            <div className="relative mt-1" style={{ height: titleLaneOf.count * 22 - 2 }}>
+            <div className="relative mt-1" style={{ height: Math.max(0, titleLaneOf.count * 22 - 2) }}>
+              {!project.titles.length && project.clips.length > 0 && <div className="pointer-events-none absolute inset-0 rounded-[3px] border border-dashed border-edge px-2 text-[10.5px] leading-5 text-faint">Titles and lower thirds from the Titles tab land here</div>}
               {project.titles.map((t) => (
                 <button
                   key={t.id}
@@ -2581,6 +2628,7 @@ export function VideoEditorWidget() {
             {/* music lanes */}
             {[0, 1, 2].map((lane) => (
               <div key={lane} className="relative mt-1 h-7">
+                {lane === 0 && !project.music.length && project.clips.length > 0 && <div className="pointer-events-none absolute inset-0 rounded-[3px] border border-dashed border-edge px-2 text-[10.5px] leading-7 text-faint">Drop music onto the preview, or add it from the Audio tab</div>}
                 {project.music.filter((m) => m.lane === lane).map((m) => (
                   <button
                     key={m.id}
@@ -2605,8 +2653,35 @@ export function VideoEditorWidget() {
             <div className="pointer-events-none absolute bottom-0 top-0 w-px bg-[#e5484d]" style={{ left: playhead * pxPerSec }} />
           </div>
         </div>
-        <p className="mt-1 text-[11.5px] text-faint">Click the ruler to seek · space plays (hold it to double the speed) · hold Control to skim the cuts, 3 s either side of each · ←/→ step a frame (⇧ for 1 s) · ↑/↓ jump between cuts · Home/End · Merge with next (Trim) rejoins a split or hides a cut · S saves a thumbnail of the frame (⇧S full-size JPEG, ⌥S PNG) · M mutes · ⌘Z undoes · ⌘S saves. Clips are shown in playback order; music lanes stack, and overlaps on one lane crossfade.</p>
+        </div>
+        <p className="mt-1.5 text-[11.5px] text-faint">
+          Click the ruler to seek · Space plays, hold it for double speed · hold Control to skim the cuts · <kbd className="rounded border border-edge px-1 font-mono">?</kbd> lists every shortcut.
+        </p>
       </div>
+      {shortcutsOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-labelledby="shortcuts-title" data-shortcuts-dialog>
+          <div className="absolute inset-0 bg-scrim" onClick={() => setShortcutsOpen(false)} />
+          <div className="panel relative w-full max-w-2xl p-4 shadow-xl">
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <h2 id="shortcuts-title" className="text-[15px] font-semibold text-ink">
+                Keyboard shortcuts
+              </h2>
+              <button type="button" onClick={() => setShortcutsOpen(false)} className={cn(GHOST, "h-7 px-2 text-[12px]")}>
+                Close (Esc)
+              </button>
+            </div>
+            <div className="grid gap-x-6 gap-y-1 text-[13px] sm:grid-cols-2">
+              {SHORTCUTS.map(([keys, what]) => (
+                <div key={keys} className="flex items-baseline justify-between gap-3 border-b border-edge/60 py-1">
+                  <span className="text-muted">{what}</span>
+                  <kbd className="shrink-0 rounded border border-edge bg-base px-1.5 font-mono text-[12px] text-ink">{keys}</kbd>
+                </div>
+              ))}
+            </div>
+            <p className="mt-3 text-[12px] text-faint">Also: click the ruler to seek, double-click the preview for full screen, drop recordings or music onto the preview, and click a cut&apos;s marker on the timeline to change or remove its transition.</p>
+          </div>
+        </div>
+      )}
       {clearOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-labelledby="clear-project-title">
           <div className="absolute inset-0 bg-scrim" onClick={() => setClearOpen(false)} />
