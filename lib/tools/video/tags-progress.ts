@@ -139,7 +139,7 @@ export class SaveTracker {
     if (id === "copy") {
       const { rate, source } = this.copyRate(now);
       const remaining = status === "done" ? 0 : ((this.bytes - this.copied) / Math.max(1, rate)) * 1000;
-      const basis = status === "done" ? `actual time: ${fmtBytes(this.bytes / Math.max(0.001, elapsed / 1000))}/s` : `${fmtBytes(this.bytes)} at ${fmtBytes(rate)}/s (${describe(source, this.rates.label)})`;
+      const basis = status === "done" ? `actual: ${fmtBytes(this.bytes)} at ${fmtBytes(this.bytes / Math.max(0.001, elapsed / 1000))}/s` : `${fmtBytes(this.bytes)} at ${fmtBytes(rate)}/s (${describe(source, this.rates.label)})`;
       return {
         id,
         title: "Write a fresh copy of the file",
@@ -160,7 +160,7 @@ export class SaveTracker {
       const guess = (this.bytes / rate) * 1000;
       const remaining = status === "done" ? 0 : status === "running" ? overrun(guess, elapsed) : guess;
       const source: SaveSource = status === "done" ? "actual" : learned !== undefined ? "learned" : "default";
-      const basis = status === "done" ? `actual time: ${fmtBytes(this.bytes / Math.max(0.001, elapsed / 1000))}/s` : `${fmtBytes(this.bytes)} at ${fmtBytes(rate)}/s (${describe(source, this.rates.closeLabel)})${status === "running" && elapsed > guess ? late : ""}`;
+      const basis = status === "done" ? `actual: ${fmtBytes(this.bytes)} at ${fmtBytes(this.bytes / Math.max(0.001, elapsed / 1000))}/s` : `${fmtBytes(this.bytes)} at ${fmtBytes(rate)}/s (${describe(source, this.rates.closeLabel)})${status === "running" && elapsed > guess ? late : ""}`;
       return {
         id,
         title: "Close the file",
