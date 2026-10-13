@@ -3,7 +3,7 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { AlertTriangle, Camera, Check, ChevronDown, ChevronRight, ChevronUp, Sparkles, Circle, Clapperboard, Crop, Download, FolderOpen, Loader, Maximize2, Minimize2, Music, Pause, Play, Repeat, Save, Scissors, SkipBack, SkipForward, SlidersHorizontal, StepBack, StepForward, Trash2, Type, Upload, Volume2, VolumeX, Keyboard, Search, Shuffle, X } from "lucide-react";
-import { DEFAULT_CLIP_GAIN_DB, DEFAULT_EXPORT, NEUTRAL_GRADE, NEUTRAL_TRANSFORM, TITLE_ALIGNS, TITLE_FAMILIES, TITLE_FONTS, TITLE_POSITIONS, TITLE_SHADOWS, TITLE_WEIGHTS, TRANSITIONS, addTransitionAt, appendMusic, applyAudioTo, applyGradeTo, applyTransitionToAll, clipAt, crossfades, dbToGain, effectiveMusicEnd, estimateExport, exportRange, fmtTime, musicGainAt, musicLength, newId, newProject, newTitle, orderRecordings, placeClips, planExport, removeRange, reorderMusic, setTransition, splitClip, timelineDuration, titleLanes, transitionAt, transitionWindows, CLIP_SPEEDS, canMergeWithNext, clipLength, clipSpeed, groupOf, sourceTimeAt, mergeWithNext, moveClip, unjoin, updateClip, visibleCuts, type Clip, type MediaRef, type MusicTrack, type Project, type ProxyHeight, type Title, type TitleFont, isFileLutKind, type FileLutKind, type LutKind, type MathLutKind, type TitleAlign, type TitlePosition, type TitleShadow, type Transition, type TransitionKind, type ExportTags, type IntroSettings, reorderClip, parseTime, type SteadyLights, STEADY_FRAMES, clampMusicStart, musicUnused, shuffleFillMusic } from "@/lib/tools/video/project";
+import { DEFAULT_CLIP_GAIN_DB, DEFAULT_EXPORT, NEUTRAL_GRADE, NEUTRAL_TRANSFORM, TITLE_ALIGNS, TITLE_FAMILIES, TITLE_FONTS, TITLE_POSITIONS, TITLE_SHADOWS, TITLE_WEIGHTS, TRANSITIONS, addTransitionAt, appendMusic, applyAudioTo, applyGradeTo, applyTransitionToAll, clipAt, crossfades, dbToGain, effectiveMusicEnd, estimateExport, exportRange, fmtTime, musicGainAt, musicLength, newId, newProject, newTitle, orderRecordings, placeClips, planExport, removeRange, reorderMusic, setTransition, splitClip, timelineDuration, titleLanes, transitionAt, transitionWindows, CLIP_SPEEDS, canMergeWithNext, clipLength, clipSpeed, groupOf, sourceTimeAt, mergeWithNext, moveClip, unjoin, updateClip, visibleCuts, type Clip, type MediaRef, type MusicTrack, type Project, type ProxyHeight, type Title, type TitleFont, isFileLutKind, type FileLutKind, type LutKind, type MathLutKind, type TitleAlign, type TitlePosition, type TitleShadow, type Transition, type TransitionKind, type ExportTags, type IntroSettings, reorderClip, parseTime, type SteadyLights, STEADY_FRAMES, clampMusicStart, musicUnused, shuffleFillMusic, describeWhere, type MediaWhere } from "@/lib/tools/video/project";
 import { drawTransition } from "@/lib/tools/video/transitions";
 import { LUT_OPTIONS, buildDlogLut, deriveLut, fetchOfficialLut, lutToCube, parseCube, type Lut3D } from "@/lib/tools/video/lut";
 import { fmtBytes, fmtDelta, fmtDuration, fmtMs, type EstimateSource, type ExportProgress, type SpeedPriors, type StepProgress } from "@/lib/tools/video/progress";
@@ -131,6 +131,7 @@ function useRepeat(fn: (shift: boolean) => void) {
     },
   };
 }
+type Picker = { showDirectoryPicker(opts?: { id?: string; mode?: "read" | "readwrite" }): Promise<FileSystemDirectoryHandle> };
 /** Holding Control skims the cuts: this many seconds before and after each one. */
 const SKIM_S = 3;
 /** What a navigation would abandon while a job runs. */
@@ -710,6 +711,8 @@ export function VideoEditorWidget() {
   const resolveMedia = useCallback(
     async (p: Project, interactive: boolean) => {
       await store.restoreHandles(p.id, interactive);
+      await store.loadFolders(p.id, interactive);
+      for (const m of Object.values(p.media)) if (!store.hasFile(m.id) && m.where) await store.locateByPath(m.id, m.where);
       for (const m of Object.values(p.media)) if (!store.hasFile(m.id)) await store.resolveByName(m.id, m.name);
       setMissingMedia(store.missing(Object.keys(p.media)));
       setFilesVersion((v) => v + 1);
@@ -776,7 +779,8 @@ export function VideoEditorWidget() {
           setError(`${f.name}: this browser can't decode ${info.codec ?? "that codec"}.`);
           continue;
         }
-        refs.push({ id, name: f.name, size: f.size, duration: info.duration, width: info.width, height: info.height, fps: info.fps, codec: info.codec ?? undefined, hasAudio: info.hasAudio, sampleRate: info.sampleRate });
+        const where = (await store.whereIs(h)) ?? undefined;
+        refs.push({ id, name: f.name, size: f.size, duration: info.duration, width: info.width, height: info.height, fps: info.fps, codec: info.codec ?? undefined, hasAudio: info.hasAudio, sampleRate: info.sampleRate, ...(where ? { where } : {}) });
       } catch (e) {
         setError(`${f.name}: ${e instanceof Error ? e.message : "couldn't read the file."}`);
       }
@@ -834,6 +838,7 @@ export function VideoEditorWidget() {
   const linkFiles = async (items: (File | FileSystemFileHandle)[]) => {
     const missing = store.missing(Object.keys(project.media)).map((id) => project.media[id]).filter(Boolean);
     const linked = new Set<string>();
+    const placed_where = new Map<string, MediaWhere>();
     let files = 0;
     for (const h of items) {
       const f = h instanceof File ? h : await h.getFile();
@@ -841,16 +846,60 @@ export function VideoEditorWidget() {
       const matches = byName.length ? byName : missing.filter((x) => x.size === f.size && !linked.has(x.id));
       if (!matches.length) continue;
       files++;
+      const where = (await store.whereIs(h)) ?? undefined;
       for (const m of matches) {
         store.registerFile(m.id, h);
         linked.add(m.id);
+        if (where) placed_where.set(m.id, where);
       }
     }
+    if (placed_where.size) setProject((p) => ({ ...p, media: Object.fromEntries(Object.entries(p.media).map(([id, m]) => [id, placed_where.has(id) ? { ...m, where: placed_where.get(id) } : m])) }));
     await store.persistHandles(project.id);
     await resolveMedia(project, true);
     const uses = linked.size;
     setStatus(files ? `Linked ${files} file${files === 1 ? "" : "s"}${uses > files ? ` to ${uses} uses (the same file appears more than once)` : ""}` : "None of those matched a missing file by name or size");
     return uses;
+  };
+  /**
+   * Remember a folder the files live in: every file already added from it gets its path recorded, missing files
+   * with a matching name are found in it (one level deep), and next time its contents are located without asking.
+   */
+  const rememberFolder = async (picked?: FileSystemDirectoryHandle) => {
+    const dirPicker = (window as unknown as Picker).showDirectoryPicker;
+    try {
+      const dir = picked ?? (await dirPicker({ id: "bench-video-folder", mode: "read" }));
+      const key = await store.addFolder(project.id, dir);
+      let recorded = 0, found = 0;
+      const where = new Map<string, MediaWhere>();
+      const live = new Set(["project", ...store.folderKeys()]);
+      for (const m of Object.values(project.media)) {
+        // A place whose folder is still known needs nothing; one whose folder handle was lost is tried again here.
+        if (m.where && live.has(m.where.folder) && m.where.folder !== key) continue;
+        if (store.hasFile(m.id)) {
+          const f = store.handleOf(m.id);
+          const w = f ? await store.whereIs(f) : null;
+          if (w && (!m.where || w.folder !== m.where.folder || w.path !== m.where.path)) {
+            where.set(m.id, w);
+            recorded++;
+          }
+        } else {
+          const byPath = m.where && (await store.locateByPath(m.id, { folder: key, path: m.where.path })) ? { folder: key, path: m.where.path } : null;
+          const w = byPath ?? (await store.findInFolder(key, m.name, m.id));
+          if (w) {
+            where.set(m.id, w);
+            found++;
+          }
+        }
+      }
+      setProject((p) => ({ ...p, folders: { ...(p.folders ?? {}), [key]: dir.name }, media: Object.fromEntries(Object.entries(p.media).map(([id, m]) => [id, where.has(id) ? { ...m, where: where.get(id) } : m])) }));
+      await store.persistHandles(project.id);
+      await resolveMedia({ ...project, media: Object.fromEntries(Object.entries(project.media).map(([id, m]) => [id, where.has(id) ? { ...m, where: where.get(id) } : m])) }, true);
+      setStatus(`Remembered “${dir.name}”: ${found} missing file${found === 1 ? "" : "s"} found there, ${recorded} path${recorded === 1 ? "" : "s"} recorded — its files are located without asking from now on`);
+      return key;
+    } catch (e) {
+      if ((e as DOMException).name !== "AbortError") setError(e instanceof Error ? e.message : String(e));
+      return null;
+    }
   };
   const relinkFiles = async () => {
     const picker = (window as unknown as { showOpenFilePicker?: (o: unknown) => Promise<FileSystemFileHandle[]> }).showOpenFilePicker;
@@ -893,7 +942,8 @@ export function VideoEditorWidget() {
       store.registerFile(id, h);
       try {
         const info = await probe(f);
-        const ref: MediaRef = { id, name: f.name, size: f.size, duration: info.duration, hasAudio: true, sampleRate: info.sampleRate };
+        const where = (await store.whereIs(h)) ?? undefined;
+        const ref: MediaRef = { id, name: f.name, size: f.size, duration: info.duration, hasAudio: true, sampleRate: info.sampleRate, ...(where ? { where } : {}) };
         setProject((p) => ({ ...p, media: { ...p.media, [id]: ref }, music: [...p.music, appendMusic(p.music, { id: newId(), media: id, lane: 0, in: 0, out: info.duration, gainDb: -12, muted: false, fadeIn: 2, fadeOut: 3, keyframes: [] }, 2, timelineDuration(p))] }));
         await decodeMusic(id, f);
       } catch (e) {
@@ -1436,6 +1486,7 @@ export function VideoEditorWidget() {
       addVideos,
       addMusic,
       linkFiles,
+      rememberFolder,
       missing: () => store.missing(Object.keys(project.media)),
       getProject: () => project,
       audioState: () => ({ ctx: audioCtxRef.current?.state ?? null, nodes: musicNodes.current.size, buffers: musicBuffers.current.size, video: videoRef.current ? { muted: videoRef.current.muted, volume: videoRef.current.volume, paused: videoRef.current.paused } : null }),
@@ -1743,7 +1794,15 @@ export function VideoEditorWidget() {
           <span>
             {missingMedia.length === 1 ? "One recording can" : `${missingMedia.length} recordings can`}&apos;t be found right now: {missingMedia.map((id) => project.media[id]?.name ?? id).join(", ")}. The timeline is intact; pick the file{missingMedia.length === 1 ? "" : "s"} again to preview and export.
           </span>
-          <button type="button" onClick={() => void relinkFiles()} className={cn(GHOST, "ml-auto border-accent text-accent")}>
+          {missingMedia.some((id) => project.media[id]?.where) && (
+            <span className="basis-full text-[12px] text-faint" data-missing-where>
+              Last seen at {missingMedia.filter((id) => project.media[id]?.where).map((id) => describeWhere(project, project.media[id])).join(", ")}.
+            </span>
+          )}
+          <button type="button" onClick={() => void rememberFolder()} disabled={!hasFileSystemAccess()} className={cn(GHOST, "ml-auto")} title="Point at the folder the files live in: their paths inside it are recorded, missing ones are found there by name, and next time they are located without asking" data-remember-folder>
+            Remember a folder…
+          </button>
+          <button type="button" onClick={() => void relinkFiles()} className={cn(GHOST, "border-accent text-accent")}>
             Locate files…
           </button>
         </div>
@@ -2541,6 +2600,11 @@ export function VideoEditorWidget() {
                           : `Runs ${fmtTime(musicUnused(currentMusic, duration))} past the end of the video: that part is not used, and the track fades out over ${currentMusic.fadeOut || 1} s before ${fmtTime(duration)}.`}
                       </p>
                     )}
+                    {describeWhere(project, project.media[currentMusic.media]) && (
+                      <p className="text-[12px] text-faint" data-music-where>
+                        File: {describeWhere(project, project.media[currentMusic.media])}
+                      </p>
+                    )}
                     <div className="grid grid-cols-2 gap-2">
                       <label className="text-[12.5px] text-muted">
                         Starts at (s)
@@ -3072,7 +3136,7 @@ export function VideoEditorWidget() {
                     }}
                     className={cn("absolute top-0 h-full overflow-hidden border text-left text-[11.5px]", c.joinedToPrevious ? "rounded-l-none border-l-0 pl-0" : "rounded-l-[var(--radius-sm)] pl-2", joinsNext ? "rounded-r-none border-r-0 pr-0" : "rounded-r-[var(--radius-sm)] pr-2", selectedRun.has(c.id) ? "border-accent bg-accent-soft text-ink" : c.introRole && introReg && i <= introReg.scenes.length ? "border-[#d9a400]/60 bg-[#d9a400]/15 text-muted" : "border-edge bg-raised text-muted")}
                     style={{ left: c.start * pxPerSec, width: Math.max(4, (c.end - c.start) * pxPerSec - (joinsNext ? 0 : 1)) }}
-                    title={`${c.introRole === "card" ? "Intro title card · " : c.introRole ? "Intro scene · " : ""}${project.media[c.media]?.name} ${fmtTime(c.in)}–${fmtTime(c.out)}${c.joinedToPrevious ? " · joined to the previous clip" : ""}${c.introRole ? "" : " · drag to move it"}`}
+                    title={`${c.introRole === "card" ? "Intro title card · " : c.introRole ? "Intro scene · " : ""}${project.media[c.media]?.name} ${fmtTime(c.in)}–${fmtTime(c.out)}${c.joinedToPrevious ? " · joined to the previous clip" : ""}${describeWhere(project, project.media[c.media]) ? ` · ${describeWhere(project, project.media[c.media])}` : ""}${c.introRole ? "" : " · drag to move it"}`}
                     data-clip={c.id}
                     data-joined={c.joinedToPrevious ? "true" : undefined}
                     data-intro-clip={c.introRole}

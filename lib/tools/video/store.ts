@@ -5,7 +5,7 @@
  * IndexedDB for the project file alone where the API is unavailable.
  */
 
-import { deserialize, serialize, type Project } from "./project";
+import { deserialize, serialize, type Project, type MediaWhere } from "./project";
 
 export const PROJECT_FILE = "project.benchvideo.json";
 export const AUTOSAVE_FILE = "project.autosave.json";
@@ -54,6 +54,8 @@ async function dbSet(key: string, value: unknown): Promise<void> {
 
 export class ProjectStore {
   private dir: FileSystemDirectoryHandle | null = null;
+  /** Folders outside the project the user asked to remember, by key (persisted per project). */
+  private extra = new Map<string, FileSystemDirectoryHandle>();
   private files = new Map<string, FileSystemFileHandle | File>();
   private saveTimer: ReturnType<typeof setTimeout> | null = null;
   private pending: Project | null = null;
@@ -212,6 +214,10 @@ export class ProjectStore {
     return this.files.has(id);
   }
 
+  handleOf(id: string): FileSystemFileHandle | File | null {
+    return this.files.get(id) ?? null;
+  }
+
   /** Media ids with no file behind them (after a reload, say). */
   missing(ids: string[]): string[] {
     return ids.filter((id) => !this.files.has(id));
@@ -244,6 +250,107 @@ export class ProjectStore {
       }
     }
     return restored;
+  }
+
+  /** Where a handle lives relative to the project folder or a remembered folder, or null when it is in neither. */
+  async whereIs(h: FileSystemFileHandle | File): Promise<MediaWhere | null> {
+    if (h instanceof File) return null;
+    const inside = async (dir: FileSystemDirectoryHandle) => {
+      try {
+        return await dir.resolve(h);
+      } catch {
+        return null;
+      }
+    };
+    if (this.dir) {
+      const rel = await inside(this.dir);
+      if (rel) return { folder: "project", path: rel.join("/") };
+    }
+    for (const [key, dir] of this.extra) {
+      const rel = await inside(dir);
+      if (rel) return { folder: key, path: rel.join("/") };
+    }
+    return null;
+  }
+
+  /** Remember a folder for this project; returns its key. */
+  async addFolder(projectId: string, dir: FileSystemDirectoryHandle): Promise<string> {
+    for (const [key, d] of this.extra) if (await d.isSameEntry(dir).catch(() => false)) return key;
+    const key = `f-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+    this.extra.set(key, dir);
+    await dbSet(`folders:${projectId}`, [...this.extra.entries()]).catch(() => undefined);
+    return key;
+  }
+
+  /** Bring back the remembered folders (asking for permission only during a user gesture). */
+  async loadFolders(projectId: string, interactive: boolean): Promise<string[]> {
+    const entries = await dbGet<[string, FileSystemDirectoryHandle][]>(`folders:${projectId}`).catch(() => undefined);
+    if (!entries) return [];
+    type Perm = { queryPermission(o: { mode: string }): Promise<string>; requestPermission(o: { mode: string }): Promise<string> };
+    const ok: string[] = [];
+    for (const [key, dir] of entries) {
+      if (this.extra.has(key)) {
+        ok.push(key);
+        continue;
+      }
+      const h = dir as unknown as Perm;
+      let state = await h.queryPermission({ mode: "read" }).catch(() => "denied");
+      if (state === "prompt" && interactive) state = await h.requestPermission({ mode: "read" }).catch(() => "denied");
+      if (state === "granted") {
+        this.extra.set(key, dir);
+        ok.push(key);
+      }
+    }
+    return ok;
+  }
+
+  folderKeys(): string[] {
+    return [...this.extra.keys()];
+  }
+
+  /** Find a media file again from its recorded place; true when it is back. */
+  async locateByPath(id: string, where: MediaWhere): Promise<boolean> {
+    const root = where.folder === "project" ? this.dir : this.extra.get(where.folder);
+    if (!root) return false;
+    try {
+      const parts = where.path.split("/").filter(Boolean);
+      let dir = root;
+      for (const seg of parts.slice(0, -1)) dir = await dir.getDirectoryHandle(seg);
+      const fh = await dir.getFileHandle(parts[parts.length - 1]);
+      this.files.set(id, fh);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** Look for a file by name in a remembered folder, one level deep; returns where it was found. */
+  async findInFolder(key: string, name: string, id: string): Promise<MediaWhere | null> {
+    const root = key === "project" ? this.dir : this.extra.get(key);
+    if (!root) return null;
+    type Listable = FileSystemDirectoryHandle & { entries(): AsyncIterable<[string, FileSystemHandle]> };
+    const scan = async (dir: FileSystemDirectoryHandle, prefix: string, depth: number): Promise<MediaWhere | null> => {
+      for await (const [entryName, h] of (dir as Listable).entries()) {
+        if (h.kind === "file" && entryName === name) {
+          this.files.set(id, h as FileSystemFileHandle);
+          return { folder: key, path: prefix + entryName };
+        }
+      }
+      if (depth > 0) {
+        for await (const [entryName, h] of (dir as Listable).entries()) {
+          if (h.kind === "directory") {
+            const found = await scan(h as FileSystemDirectoryHandle, `${prefix}${entryName}/`, depth - 1);
+            if (found) return found;
+          }
+        }
+      }
+      return null;
+    };
+    try {
+      return await scan(root, "", 1);
+    } catch {
+      return null;
+    }
   }
 
   /** Try to resolve media by name inside the project folder (after reopening a project). */

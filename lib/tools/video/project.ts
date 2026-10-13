@@ -40,11 +40,22 @@ export interface Transform {
 
 export const NEUTRAL_TRANSFORM: Transform = { rotate: 0, straighten: 0, crop: { x: 0, y: 0, w: 1, h: 1 } };
 
+/**
+ * Where a media file lives, as near to a path as the browser allows: a folder the editor holds a handle for — the
+ * project folder, or one the user asked it to remember — and the file's path inside it.
+ */
+export interface MediaWhere {
+  /** "project", or the key of a remembered folder (see Project.folders). */
+  folder: string;
+  path: string;
+}
+
 export interface MediaRef {
   /** Key into the project store's file handles. */
   id: string;
   name: string;
   size: number;
+  where?: MediaWhere;
   /** Media duration in seconds. */
   duration: number;
   width?: number;
@@ -692,6 +703,15 @@ export interface Project {
   proxies: Record<string, { ready: boolean; file?: string }>;
   /** Where the car stood still, from the last scan (see stops.ts); null until one has run. */
   stops?: StopScan | null;
+  /** Remembered folders outside the project folder, by key: their names, for the record. */
+  folders?: Record<string, string>;
+}
+
+/** A readable location for a media file. */
+export function describeWhere(p: Project, m: MediaRef): string | null {
+  if (!m.where) return null;
+  const folder = m.where.folder === "project" ? "project folder" : (p.folders?.[m.where.folder] ?? "a remembered folder");
+  return `${folder}/${m.where.path}`;
 }
 
 export const DEFAULT_EXPORT: ExportSettings = { codec: "hevc", bitrateMbps: 100, preset: "balanced", audioBitrateKbps: 256, resolution: "source", smartCopy: true, range: null, tags: { ...DEFAULT_TAGS }, steadyLights: "off" };
