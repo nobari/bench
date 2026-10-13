@@ -10,6 +10,7 @@ import { probeVideo, type VideoInfo } from "@/lib/tools/image/retime";
 import { formatBytes } from "@/lib/tools/bytes";
 import { cn } from "@/lib/utils";
 import { useUnsavedWork } from "@/lib/unsaved-work";
+import { useKeepAwake } from "@/lib/keep-awake";
 
 /** File System Access API (Chrome/Edge): a handle lets the tags be written back into the file itself. */
 interface FileHandle {
@@ -194,6 +195,7 @@ export function Mp4TagsWidget() {
 
   const dirty = !!loaded && !sameTags(loaded.ins.tags, tags);
   useUnsavedWork(job || busy === "saving" ? "A save is in progress in the MP4 tag editor; leaving now would abandon it." : dirty ? "The edited tags have not been saved into the file yet." : null);
+  useKeepAwake(!!job || busy === "saving", "bench-tag-save");
   const plan = useMemo<{ plan: WritePlan } | { error: string } | null>(() => {
     if (!loaded) return null;
     try {
@@ -522,7 +524,7 @@ export function Mp4TagsWidget() {
       <p className="text-[12px] text-faint">
         The tags are the iTunes-style atoms ffmpeg writes from <span className="font-mono">-metadata</span>: title, artist, album_artist, album, genre, date, comment, and media_type for the kind. YouTube takes the title from the file; the Music category and the song credits are set on the upload page, and that is what YouTube Music lists by. Exports from the{" "}
         <Link href="/media/editor" className="text-accent underline-offset-2 hover:underline">
-          8K drive video editor
+          video editor
         </Link>{" "}
         carry these tags already.
       </p>

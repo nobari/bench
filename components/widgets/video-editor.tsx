@@ -14,6 +14,7 @@ import { cn } from "@/lib/utils";
 import { DEFAULT_STOPS, cutOutStops, stillRuns, stillThreshold, stopKey, stopsOnTimeline, stopsTotal, type Still, type StopScan } from "@/lib/tools/video/stops";
 import { parseTemplateImport, videoTemplate } from "@/lib/tools/video/template";
 import { useUnsavedWork } from "@/lib/unsaved-work";
+import { useKeepAwake } from "@/lib/keep-awake";
 
 const SEL = "h-8 rounded-[var(--radius-sm)] border border-edge bg-base px-2 pr-7 text-[13px] text-ink outline-none focus:border-accent";
 const INPUT = "h-8 w-full rounded-[var(--radius-sm)] border border-edge bg-base px-2 text-[13px] text-ink outline-none focus:border-accent";
@@ -199,6 +200,7 @@ export function VideoEditorWidget() {
   const [timeEdit, setTimeEdit] = useState<string | null>(null);
   const [job, setJob] = useState<Job | null>(null);
   useUnsavedWork(job ? JOB_WORK[job.kind] : null);
+  useKeepAwake(!!job, "bench-video-job");
   const [support, setSupport] = useState<{ hevc: boolean; avc: boolean } | null>(null);
   const [logo, setLogo] = useState<ImageBitmap | null>(null);
   const [dragOver, setDragOver] = useState(false);
@@ -2981,7 +2983,7 @@ export function VideoEditorWidget() {
                 <button type="button" onClick={() => void runExport()} disabled={!project.clips.length || !!job} className={PRIMARY}>
                   <Download size={14} /> Export to project folder
                 </button>
-                <p className="text-[12px] text-faint">Upload the file to YouTube as-is: HEVC in MP4 at 80–160 Mbps is what YouTube recommends for 8K. Keep the browser tab in front while exporting.</p>
+                <p className="text-[12px] text-faint">Upload the file to YouTube as-is: HEVC in MP4 at 80–160 Mbps is what YouTube recommends for 8K. You can switch tabs or minimise the window while it runs: the page holds a lock so the browser does not freeze it, keeps the display awake while it is visible, and the tab title carries the progress.</p>
               </>
             )}
           </div>
