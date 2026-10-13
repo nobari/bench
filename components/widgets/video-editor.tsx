@@ -15,6 +15,7 @@ import { DEFAULT_STOPS, cutOutStops, stillRuns, stillThreshold, stopKey, stopsOn
 import { parseTemplateImport, videoTemplate } from "@/lib/tools/video/template";
 import { useUnsavedWork } from "@/lib/unsaved-work";
 import { useKeepAwake } from "@/lib/keep-awake";
+import { ENOUGH_SPACE, LOW_SPACE, estimateFree, overrideFreeSpace } from "@/lib/tools/video/space";
 
 const SEL = "h-8 rounded-[var(--radius-sm)] border border-edge bg-base px-2 pr-7 text-[13px] text-ink outline-none focus:border-accent";
 const INPUT = "h-8 w-full rounded-[var(--radius-sm)] border border-edge bg-base px-2 text-[13px] text-ink outline-none focus:border-accent";
@@ -47,6 +48,10 @@ interface Job {
   progress?: ExportProgress;
   output?: { name: string; codec: string; width: number; height: number; bitrateMbps: number; preset: string; estimatedBytes: number };
   paused?: boolean;
+  /** Export only: paused by the space watchdog (or a failed write) until the disk has room again. */
+  lowSpace?: boolean;
+  /** Free space as the browser last reported it. */
+  freeBytes?: number | null;
 }
 
 /**
@@ -132,6 +137,31 @@ function useRepeat(fn: (shift: boolean) => void) {
   };
 }
 type Picker = { showDirectoryPicker(opts?: { id?: string; mode?: "read" | "readwrite" }): Promise<FileSystemDirectoryHandle> };
+/** Get the user's attention: the tab title, a notification when allowed, and two short beeps. */
+function alertUser(title: string, body: string) {
+  document.title = `⚠️ ${title} · Bench`;
+  try {
+    if ("Notification" in window && Notification.permission === "granted") new Notification(title, { body, tag: "bench-export-space" });
+  } catch {
+    /* no notifications */
+  }
+  try {
+    const ctx = new AudioContext();
+    for (const at of [0, 0.25]) {
+      const osc = ctx.createOscillator(), gain = ctx.createGain();
+      osc.frequency.value = 880;
+      gain.gain.setValueAtTime(0.0001, ctx.currentTime + at);
+      gain.gain.exponentialRampToValueAtTime(0.2, ctx.currentTime + at + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + at + 0.18);
+      osc.connect(gain).connect(ctx.destination);
+      osc.start(ctx.currentTime + at);
+      osc.stop(ctx.currentTime + at + 0.2);
+    }
+    setTimeout(() => void ctx.close(), 800);
+  } catch {
+    /* no audio */
+  }
+}
 /** Holding Control skims the cuts: this many seconds before and after each one. */
 const SKIM_S = 3;
 /** What a navigation would abandon while a job runs. */
@@ -1487,6 +1517,7 @@ export function VideoEditorWidget() {
       addMusic,
       linkFiles,
       rememberFolder,
+      overrideFreeSpace,
       missing: () => store.missing(Object.keys(project.media)),
       getProject: () => project,
       audioState: () => ({ ctx: audioCtxRef.current?.state ?? null, nodes: musicNodes.current.size, buffers: musicBuffers.current.size, video: videoRef.current ? { muted: videoRef.current.muted, volume: videoRef.current.volume, paused: videoRef.current.paused } : null }),
@@ -1503,15 +1534,66 @@ export function VideoEditorWidget() {
   const setExportPaused = (paused: boolean) => {
     pauseRef.current.paused = paused;
     if (!paused) {
+      lowSpaceRef.current = false;
       for (const w of pauseRef.current.waiters) w();
       pauseRef.current.waiters = [];
     }
-    setJob((j) => (j ? { ...j, paused } : j));
+    setJob((j) => (j ? { ...j, paused, ...(paused ? {} : { lowSpace: false }) } : j));
+  };
+  const lowSpaceRef = useRef(false);
+  /** Pause for lack of space and wait until the user resumes or the watchdog sees room again. */
+  const pauseForSpace = (free: number | null, why: string) => {
+    if (lowSpaceRef.current) return;
+    lowSpaceRef.current = true;
+    pauseRef.current.paused = true;
+    setJob((j) => (j ? { ...j, paused: true, lowSpace: true, freeBytes: free } : j));
+    alertUser("Disk almost full — export paused", `${why} Free some space and it continues on its own.`);
+  };
+  /**
+   * While a job writes, watch the space the browser reports: under 2 GB it pauses the job and asks for attention;
+   * once 3 GB are free again it resumes by itself. Returns a stop function.
+   */
+  const watchSpace = () => {
+    const tick = async () => {
+      const free = await estimateFree();
+      if (free === null) return;
+      setJob((j) => (j ? { ...j, freeBytes: free } : j));
+      if (free < LOW_SPACE && !pauseRef.current.paused) pauseForSpace(free, `Only ${fmtBytes(free)} left as the browser reports it.`);
+      else if (lowSpaceRef.current && free >= ENOUGH_SPACE) {
+        setExportPaused(false);
+        document.title = pageTitleRef.current;
+        setStatus(`Space is back (${fmtBytes(free)} free) — continuing`);
+      }
+    };
+    void tick();
+    const id = setInterval(() => void tick(), 3000);
+    return () => clearInterval(id);
+  };
+  /** A write just failed for lack of room: pause, and resolve when the export may try that chunk again. */
+  const onWriteBlocked = async () => {
+    const free = await estimateFree();
+    pauseForSpace(free, "The disk refused a write.");
+    pauseRef.current.paused = true;
+    await new Promise<void>((r) => pauseRef.current.waiters.push(r));
+  };
+  /** Before an export: warn when the browser reports less room than the file needs; the choice stays with the user. */
+  const spaceWarning = async (expectedBytes: number): Promise<boolean> => {
+    const free = await estimateFree();
+    if (free === null || expectedBytes <= free) return true;
+    try {
+      if ("Notification" in window && Notification.permission === "default") void Notification.requestPermission();
+    } catch {
+      /* ignore */
+    }
+    return window.confirm(`The file is expected to be about ${fmtBytes(expectedBytes)}, but the browser reports only ${fmtBytes(free)} free (it keeps a reserve, so the real figure may be a little higher).\n\nStart anyway? The export pauses itself when less than ${fmtBytes(LOW_SPACE)} remain and continues once you free space.`);
   };
   const runExport = async () => {
     if (!store.hasFolder) return setError("Pick a project folder first — the export is written there.");
+    if (!(await spaceWarning(estimate.bytes))) return;
     const abort = new AbortController();
     pauseRef.current = { paused: false, waiters: [] };
+    lowSpaceRef.current = false;
+    const stopWatch = watchSpace();
     const name = `${project.name.replace(/[^\w-]+/g, "-")}-${project.export.resolution === "source" ? "8K" : project.export.resolution + "p"}${range ? `-${Math.round(range.from)}s-${Math.round(range.to)}s` : ""}.mp4`;
     const outH = project.export.resolution === "source" ? (first?.height ?? 4320) : project.export.resolution;
     const outW = first?.width && first.height ? Math.round((first.width * (outH / first.height)) / 2) * 2 : Math.round((outH * 16) / 9);
@@ -1528,11 +1610,13 @@ export function VideoEditorWidget() {
         signal: abort.signal,
         priors: loadPriors(profile, `${outH}p ${project.export.codec.toUpperCase()}`),
         whilePaused: () => (pauseRef.current.paused ? new Promise<void>((r) => pauseRef.current.waiters.push(r)) : undefined),
+        onWriteBlocked,
         onProgress: (progress) => {
           setJob((j) => (j ? { ...j, fraction: progress.fraction, progress } : j));
-          document.title = `${(progress.fraction * 100).toFixed(1)}% · ${progress.paused ? "Paused" : "Exporting"} · Bench`;
+          if (!lowSpaceRef.current) document.title = `${(progress.fraction * 100).toFixed(1)}% · ${progress.paused ? "Paused" : "Exporting"} · Bench`;
         },
       });
+      stopWatch();
       savePriors(profile, result.measured);
       const stepMs = (kind: StepProgress["kind"]) => result.steps.filter((s) => s.kind === kind).reduce((a, s) => a + s.elapsedMs, 0);
       setStatus(
@@ -1541,6 +1625,7 @@ export function VideoEditorWidget() {
     } catch (e) {
       if ((e as DOMException).name !== "AbortError") setError(e instanceof Error ? e.message : String(e));
     } finally {
+      stopWatch();
       document.title = pageTitleRef.current;
       setJob(null);
     }
@@ -1567,6 +1652,9 @@ export function VideoEditorWidget() {
     const outW = first?.width && first.height ? Math.round((first.width * (outH / first.height)) / 2) * 2 : Math.round((outH * 16) / 9);
     const bitrateMbps = Math.max(1, Math.round(outH / 90));
     const seconds = scope ? scope.to - scope.from : duration;
+    if (!(await spaceWarning((bitrateMbps * 1e6 * seconds) / 8))) return;
+    lowSpaceRef.current = false;
+    const stopWatch = watchSpace();
     const preview: Project = { ...project, export: { ...project.export, resolution: outH, codec: "avc", bitrateMbps, preset: "fast", smartCopy: false, range: scope } };
     const name = `preview-${outH}p.mp4`;
     setJob({ kind: "export", label: "Rendering preview", fraction: 0, abort, output: { name, codec: "AVC", width: outW, height: outH, bitrateMbps, preset: "fast", estimatedBytes: (bitrateMbps * 1e6 * seconds) / 8 }, paused: false });
@@ -1582,11 +1670,13 @@ export function VideoEditorWidget() {
         writable: writable as unknown as WritableStream<import("mediabunny").StreamTargetChunk>,
         signal: abort.signal,
         whilePaused: () => (pauseRef.current.paused ? new Promise<void>((r) => pauseRef.current.waiters.push(r)) : undefined),
+        onWriteBlocked,
         onProgress: (progress) => {
           setJob((j) => (j ? { ...j, fraction: progress.fraction, progress } : j));
-          document.title = `${(progress.fraction * 100).toFixed(1)}% · Rendering preview · Bench`;
+          if (!lowSpaceRef.current) document.title = `${(progress.fraction * 100).toFixed(1)}% · Rendering preview · Bench`;
         },
       });
+      stopWatch();
       const file = await fh.getFile();
       const url = URL.createObjectURL(file), ms = result.activeMs;
       setPlaying(false);
@@ -1597,6 +1687,7 @@ export function VideoEditorWidget() {
     } catch (e) {
       if ((e as DOMException).name !== "AbortError") setError(e instanceof Error ? e.message : String(e));
     } finally {
+      stopWatch();
       document.title = pageTitleRef.current;
       setJob(null);
     }
@@ -3404,7 +3495,16 @@ function ExportPanel({ job, onPause, onResume, onCancel }: { job: Job; onPause: 
     }
   }
   return (
-    <div className={cn("panel space-y-3 border-2 p-4", job.paused ? "border-warn" : "border-accent")} data-export-panel aria-live="polite">
+    <div className={cn("panel space-y-3 border-2 p-4", job.lowSpace ? "border-danger" : job.paused ? "border-warn" : "border-accent")} data-export-panel aria-live="polite">
+      {job.lowSpace && (
+        <div className="flex flex-wrap items-center gap-2 rounded-[var(--radius-sm)] border border-danger/50 bg-danger/10 px-3 py-2 text-[13px]" role="alert" data-low-space>
+          <AlertTriangle size={15} className="shrink-0 text-danger" />
+          <span>
+            <span className="font-medium text-ink">Paused: the disk is almost full</span>
+            {job.freeBytes != null ? ` — ${fmtBytes(job.freeBytes)} free as the browser reports it.` : "."} Free at least {fmtBytes(ENOUGH_SPACE)} and it continues on its own, or press Resume to try now. Nothing written so far is lost.
+          </span>
+        </div>
+      )}
       <div className="flex flex-wrap items-center gap-3">
         {job.paused ? <Pause size={18} className="text-warn" /> : <Loader size={18} className="animate-spin text-accent" />}
         <div className="min-w-0 flex-1">
@@ -3448,6 +3548,7 @@ function ExportPanel({ job, onPause, onResume, onCancel }: { job: Job; onPause: 
         <Stat label="Remaining" value={p ? `≈ ${fmtDuration(p.etaMs)} · ${SOURCE_LABEL[p.etaSource]}` : "estimating…"} title="The unfinished steps' estimates added up, and what most of that rests on" />
         <Stat label="Finish at" value={finishAt} title="Expected clock time when the file is closed" />
         <Stat label="Written" value={p ? `${fmtBytes(p.bytesWritten)}${out ? ` of ~${fmtBytes(out.estimatedBytes)}` : ""}` : "0 kB"} title="Bytes that reached the file so far, against the estimate" />
+        {job.freeBytes != null && <Stat label="Free on disk" value={fmtBytes(job.freeBytes)} title="As the browser reports it; it keeps a reserve, so the real figure can be a little higher" />}
         <Stat label="Output" value={out ? `${out.codec} ${out.width}×${out.height}` : "—"} />
         <Stat label="Bitrate · preset" value={out ? `${out.bitrateMbps} Mbps · ${out.preset}` : "—"} />
         <Stat label="Started" value={p ? new Date(p.startedAt).toLocaleTimeString() : "—"} />

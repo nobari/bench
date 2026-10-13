@@ -79,6 +79,7 @@ import {
 } from "./progress";
 import pkg from "@/package.json";
 import type { MotionTrace } from "./stops";
+import { isSpaceError } from "./space";
 
 export interface Probe {
   duration: number;
@@ -890,6 +891,8 @@ export interface ExportOptions {
   onProgress?: (p: ExportProgress) => void;
   /** Awaited between frames and audio blocks: return a promise while paused, nothing otherwise. */
   whilePaused?: () => Promise<void> | void;
+  /** A write failed, most likely because the disk is full: resolve once the user has made room and the chunk is retried. */
+  onWriteBlocked?: (error: unknown) => Promise<void>;
   /** Speeds from an earlier export on this machine, to estimate from before anything is measured. */
   priors?: SpeedPriors;
   signal?: AbortSignal;
@@ -1070,10 +1073,18 @@ async function exportWithPulse(
   // Count what reaches the file: every chunk passes through here on its way to the folder.
   const fileWriter = opts.writable.getWriter();
   const counted = new WritableStream<StreamTargetChunk>({
-    write: (chunk) => {
+    write: async (chunk) => {
       tracker.addBytes(chunk.data.byteLength);
       emit();
-      return fileWriter.write(chunk);
+      for (;;) {
+        try {
+          await fileWriter.write(chunk);
+          return;
+        } catch (e) {
+          if (!opts.onWriteBlocked || !isSpaceError(e)) throw e;
+          await opts.onWriteBlocked(e);
+        }
+      }
     },
     close: async () => {
       // Everything is written; from here the browser reads the file back to check it, then moves it into place.
