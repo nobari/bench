@@ -827,24 +827,37 @@ export function VideoEditorWidget() {
   };
 
   /** Re-attach recordings the browser can no longer find: pick them again and match by name (then size). */
+  /**
+   * Match located files to the missing media: by name (then by size), and to every entry that matches — a song added
+   * twice, or a recording imported again, has two media entries and both must come back from one located file.
+   */
+  const linkFiles = async (items: (File | FileSystemFileHandle)[]) => {
+    const missing = store.missing(Object.keys(project.media)).map((id) => project.media[id]).filter(Boolean);
+    const linked = new Set<string>();
+    let files = 0;
+    for (const h of items) {
+      const f = h instanceof File ? h : await h.getFile();
+      const byName = missing.filter((x) => x.name === f.name && !linked.has(x.id));
+      const matches = byName.length ? byName : missing.filter((x) => x.size === f.size && !linked.has(x.id));
+      if (!matches.length) continue;
+      files++;
+      for (const m of matches) {
+        store.registerFile(m.id, h);
+        linked.add(m.id);
+      }
+    }
+    await store.persistHandles(project.id);
+    await resolveMedia(project, true);
+    const uses = linked.size;
+    setStatus(files ? `Linked ${files} file${files === 1 ? "" : "s"}${uses > files ? ` to ${uses} uses (the same file appears more than once)` : ""}` : "None of those matched a missing file by name or size");
+    return uses;
+  };
   const relinkFiles = async () => {
     const picker = (window as unknown as { showOpenFilePicker?: (o: unknown) => Promise<FileSystemFileHandle[]> }).showOpenFilePicker;
-    if (!picker) return fileInput.current?.click();
+    if (!picker) return relinkInput.current?.click();
     try {
-      const handles = await picker({ multiple: true, types: [{ description: "Recordings and music", accept: { "video/*": [".mp4", ".MP4", ".mov", ".MOV"], "audio/*": [".mp3", ".m4a", ".wav", ".aac", ".flac"] } }] });
-      const missing = missingMedia.map((id) => project.media[id]).filter(Boolean);
-      let linked = 0;
-      for (const h of handles) {
-        const f = await h.getFile();
-        const m = missing.find((x) => x.name === f.name && !store.hasFile(x.id)) ?? missing.find((x) => x.size === f.size && !store.hasFile(x.id));
-        if (m) {
-          store.registerFile(m.id, h);
-          linked++;
-        }
-      }
-      await store.persistHandles(project.id);
-      await resolveMedia(project, true);
-      setStatus(linked ? `Linked ${linked} file${linked === 1 ? "" : "s"}` : "None of those matched a missing recording by name or size");
+      const handles = await picker({ multiple: true, types: [{ description: "Recordings and music", accept: { "video/*": [".mp4", ".MP4", ".mov", ".MOV"], "audio/*": [".mp3", ".m4a", ".wav", ".aac", ".flac", ".ogg"] } }] });
+      await linkFiles(handles);
     } catch (e) {
       if ((e as DOMException).name !== "AbortError") setError(e instanceof Error ? e.message : String(e));
     }
@@ -1181,6 +1194,7 @@ export function VideoEditorWidget() {
     focusTitle(t);
   };
   const templateJsonInput = useRef<HTMLInputElement>(null);
+  const relinkInput = useRef<HTMLInputElement>(null);
   const [importReplace, setImportReplace] = useState(false);
   const downloadTemplate = () => {
     const blob = new Blob([JSON.stringify(videoTemplate(project), null, 2)], { type: "application/json" });
@@ -1421,6 +1435,8 @@ export function VideoEditorWidget() {
       },
       addVideos,
       addMusic,
+      linkFiles,
+      missing: () => store.missing(Object.keys(project.media)),
       getProject: () => project,
       audioState: () => ({ ctx: audioCtxRef.current?.state ?? null, nodes: musicNodes.current.size, buffers: musicBuffers.current.size, video: videoRef.current ? { muted: videoRef.current.muted, volume: videoRef.current.volume, paused: videoRef.current.paused } : null }),
     };
@@ -1695,6 +1711,7 @@ export function VideoEditorWidget() {
     <div className="space-y-3">
       {/* project bar */}
       <input ref={templateJsonInput} type="file" accept=".json,application/json" hidden onChange={(e) => e.target.files?.[0] && void importTemplateJson(e.target.files[0])} data-template-input />
+      <input ref={relinkInput} type="file" accept="video/*,audio/*,.mp4,.mov,.mp3,.m4a,.wav,.aac,.flac,.ogg" multiple hidden onChange={(e) => e.target.files?.length && void linkFiles(Array.from(e.target.files))} data-relink-input />
       <div className="panel flex flex-wrap items-center gap-2 p-2">
         <button type="button" onClick={chooseFolder} className={cn(GHOST, "h-9")} disabled={!hasFileSystemAccess()}>
           <FolderOpen size={14} /> {folder ? folder : "Choose project folder"}
