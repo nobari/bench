@@ -137,6 +137,24 @@ function useRepeat(fn: (shift: boolean) => void) {
   };
 }
 type Picker = { showDirectoryPicker(opts?: { id?: string; mode?: "read" | "readwrite" }): Promise<FileSystemDirectoryHandle> };
+const NOTIFY_KEY = "bench:video:notify";
+/** A progress notification that replaces itself (same tag, silent), for a tab the user is not looking at. */
+function notifyProgress(title: string, p: ExportProgress, final?: { body: string; failed?: boolean }) {
+  try {
+    if (!("Notification" in window) || Notification.permission !== "granted") return;
+    if (final) {
+      new Notification(title, { body: final.body, tag: "bench-export-progress", silent: false });
+      return;
+    }
+    const pct = Math.max(0, Math.min(1, p.fraction));
+    const bar = "▓".repeat(Math.round(pct * 20)).padEnd(20, "░");
+    const phase = p.phase === "video" && p.span?.kind === "copy" ? "Copying video" : PHASE_LABEL[p.phase];
+    const finish = new Date(p.startedAt + p.elapsedMs + p.pausedMs + p.etaMs).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    new Notification(title, { body: `${bar} ${(pct * 100).toFixed(1)}%\n${phase} · about ${fmtDuration(p.etaMs)} left · done around ${finish}`, tag: "bench-export-progress", silent: true });
+  } catch {
+    /* no notifications */
+  }
+}
 /** Get the user's attention: the tab title, a notification when allowed, and two short beeps. */
 function alertUser(title: string, body: string) {
   document.title = `⚠️ ${title} · Bench`;
@@ -356,6 +374,43 @@ export function VideoEditorWidget() {
   const [stopDefaults, setStopDefaults] = useState({ minSeconds: DEFAULT_STOPS.minSeconds, margin: DEFAULT_STOPS.margin });
   // Fill the video with music: the crossfade between shuffled songs.
   const [fillOverlap, setFillOverlap] = useState(2);
+  // Progress notifications while the tab is hidden (and one when a job finishes); remembered per browser.
+  const [notify, setNotify] = useState(true);
+  const [notifyPermission, setNotifyPermission] = useState<NotificationPermission | "unsupported">("default");
+  useEffect(() => {
+    queueMicrotask(() => {
+      try {
+        const v = localStorage.getItem(NOTIFY_KEY);
+        if (v === "0") setNotify(false);
+      } catch {
+        /* storage unavailable */
+      }
+      setNotifyPermission("Notification" in window ? Notification.permission : "unsupported");
+    });
+  }, []);
+  const setNotifySetting = (on: boolean) => {
+    setNotify(on);
+    try {
+      localStorage.setItem(NOTIFY_KEY, on ? "1" : "0");
+    } catch {
+      /* storage unavailable */
+    }
+    if (on && "Notification" in window && Notification.permission === "default") void Notification.requestPermission().then((perm) => setNotifyPermission(perm));
+  };
+  const notifyAt = useRef(0);
+  /** Every ten seconds while the tab is hidden, and on a phase change, replace the progress notification. */
+  const maybeNotify = (title: string, p: ExportProgress) => {
+    if (!notify || document.visibilityState === "visible") return;
+    const now = p.startedAt + p.elapsedMs + p.pausedMs;
+    if (now - notifyAt.current < 10000) return;
+    notifyAt.current = now;
+    notifyProgress(title, p);
+  };
+  /** The job is over: say so once, however the tab stands. */
+  const notifyDone = (title: string, body: string, p?: ExportProgress) => {
+    if (!notify || !p) return;
+    notifyProgress(title, p, { body });
+  };
   // Rendered preview: the real export at a small size on a chosen stretch, played in the preview box.
   const [previewOpts, setPreviewOpts] = useState<{ height: number; scope: "all" | "range" | "intro" | "around"; proxies: boolean }>({ height: 360, scope: "around", proxies: true });
   const [rendered, setRendered] = useState<{ url: string; width: number; height: number; from: number; to: number; proxies: boolean; bytes: number; ms: number } | null>(null);
@@ -1589,7 +1644,9 @@ export function VideoEditorWidget() {
   };
   const runExport = async () => {
     if (!store.hasFolder) return setError("Pick a project folder first — the export is written there.");
+    if (notify && "Notification" in window && Notification.permission === "default") void Notification.requestPermission().then((perm) => setNotifyPermission(perm));
     if (!(await spaceWarning(estimate.bytes))) return;
+    notifyAt.current = 0;
     const abort = new AbortController();
     pauseRef.current = { paused: false, waiters: [] };
     lowSpaceRef.current = false;
@@ -1614,8 +1671,11 @@ export function VideoEditorWidget() {
         onProgress: (progress) => {
           setJob((j) => (j ? { ...j, fraction: progress.fraction, progress } : j));
           if (!lowSpaceRef.current) document.title = `${(progress.fraction * 100).toFixed(1)}% · ${progress.paused ? "Paused" : "Exporting"} · Bench`;
+          lastProgress.current = progress;
+          maybeNotify(`Exporting ${name}`, progress);
         },
       });
+      notifyDone("Export finished", `${name} — ${fmtBytes(result.bytesWritten)} in ${fmtDuration(result.activeMs)}`, lastProgress.current ?? undefined);
       stopWatch();
       savePriors(profile, result.measured);
       const stepMs = (kind: StepProgress["kind"]) => result.steps.filter((s) => s.kind === kind).reduce((a, s) => a + s.elapsedMs, 0);
@@ -1623,13 +1683,17 @@ export function VideoEditorWidget() {
         `Exported ${name} — ${fmtBytes(result.bytesWritten)} in ${fmtDuration(result.activeMs)}${result.pausedMs > 500 ? ` plus ${fmtDuration(result.pausedMs)} paused` : ""} (${(result.seconds / Math.max(0.001, result.activeMs / 1000)).toFixed(2)}× realtime) · prepare ${fmtDuration(stepMs("prepare"))} · video ${fmtDuration(stepMs("video"))} · audio ${fmtDuration(stepMs("audio"))} · finish ${fmtDuration(stepMs("finalize"))}`,
       );
     } catch (e) {
-      if ((e as DOMException).name !== "AbortError") setError(e instanceof Error ? e.message : String(e));
+      if ((e as DOMException).name !== "AbortError") {
+        setError(e instanceof Error ? e.message : String(e));
+        notifyDone("Export failed", e instanceof Error ? e.message : String(e), lastProgress.current ?? undefined);
+      }
     } finally {
       stopWatch();
       document.title = pageTitleRef.current;
       setJob(null);
     }
   };
+  const lastProgress = useRef<ExportProgress | null>(null);
 
   /** The stretch a rendered preview covers for the chosen scope, or null for the whole timeline. */
   const previewScope = (scope: typeof previewOpts.scope): { from: number; to: number } | null => {
@@ -1674,9 +1738,12 @@ export function VideoEditorWidget() {
         onProgress: (progress) => {
           setJob((j) => (j ? { ...j, fraction: progress.fraction, progress } : j));
           if (!lowSpaceRef.current) document.title = `${(progress.fraction * 100).toFixed(1)}% · Rendering preview · Bench`;
+          lastProgress.current = progress;
+          maybeNotify("Rendering preview", progress);
         },
       });
       stopWatch();
+      notifyDone("Rendered preview ready", `${outW}×${outH}, ${fmtTime(scope?.from ?? 0)}–${fmtTime(scope?.to ?? duration)} — playing in the editor`, lastProgress.current ?? undefined);
       const file = await fh.getFile();
       const url = URL.createObjectURL(file), ms = result.activeMs;
       setPlaying(false);
@@ -3054,6 +3121,12 @@ export function VideoEditorWidget() {
                     <option value="light">Steady lights — hold each light over 2 frames</option>
                     <option value="strong">Steady lights — hold each light over 3 frames</option>
                   </select>
+                </label>
+                <label className="flex flex-wrap items-center gap-1.5 text-muted" data-notify-setting>
+                  <input type="checkbox" checked={notify} onChange={(e) => setNotifySetting(e.target.checked)} className="accent-[var(--accent)]" />
+                  Notify about progress while this tab is hidden, and when an export finishes
+                  {notifyPermission === "denied" && <span className="text-warn">— blocked in the browser; allow notifications for this site to get them</span>}
+                  {notifyPermission === "unsupported" && <span className="text-faint">— not available in this browser</span>}
                 </label>
                 <div className="space-y-1.5 rounded-[var(--radius-sm)] border border-edge p-2" data-preview-render>
                   <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
