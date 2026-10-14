@@ -896,6 +896,8 @@ export interface ExportOptions {
   /** Speeds from an earlier export on this machine, to estimate from before anything is measured. */
   priors?: SpeedPriors;
   signal?: AbortSignal;
+  /** Called with every video frame's timeline time as it is handed to the encoder (tests check they only go forward). */
+  onFrame?: (timelineT: number) => void;
 }
 
 const PRESET_LATENCY: Record<
@@ -1167,6 +1169,15 @@ async function exportWithPulse(
     return inp;
   };
   let spanIndex = 0;
+  // The timeline time of the last frame handed to the encoder: frames must only ever go forward, whatever the spans
+  // and the footage's frame grid do, or the file would carry a frame before its predecessor (and the muxer refuses
+  // one that lands on a keyframe).
+  let lastFrameT = -Infinity;
+  const addFrame = async (timelineT: number, duration: number) => {
+    await videoSource.add(timelineT - offset, duration);
+    lastFrameT = timelineT;
+    opts.onFrame?.(timelineT);
+  };
   for (const span of spans) {
     spanIndex++;
     if (signal?.aborted) throw new DOMException("Cancelled", "AbortError");
@@ -1286,9 +1297,18 @@ async function exportWithPulse(
         throw new DOMException("Cancelled", "AbortError");
       }
       if (speed === 1) {
-        const timelineT = span.start + (sample.timestamp - span.sourceIn);
+        // The first sample is the frame showing at the in point, which may have begun before it (the in point need
+        // not sit on the frame grid): it enters at the span's start for what is left of it, or is skipped when almost
+        // nothing is left. Placed where it began, it would come before the previous span's last frame.
+        const lead = Math.max(0, span.sourceIn - sample.timestamp);
+        const timelineT = span.start + Math.max(0, sample.timestamp - span.sourceIn);
+        const shown = (sample.duration || frameDur) - lead;
+        if ((lead > 0 && shown < frameDur * 0.5) || timelineT <= lastFrameT) {
+          sample.close();
+          continue;
+        }
         await compose(sample, timelineT);
-        await videoSource.add(timelineT - offset, sample.duration || frameDur);
+        await addFrame(timelineT, Math.max(shown, frameDur * 0.25));
         progress(sample.timestamp);
       } else {
         // This source frame is on screen until its successor's timeline time; emit every output tick that falls inside.
@@ -1299,8 +1319,10 @@ async function exportWithPulse(
             span.sourceIn) /
             speed;
         while (nextTick < shownUntil - 1e-6 && nextTick < span.end - 1e-6) {
-          await compose(sample, nextTick);
-          await videoSource.add(nextTick - offset, frameDur);
+          if (nextTick > lastFrameT) {
+            await compose(sample, nextTick);
+            await addFrame(nextTick, frameDur);
+          }
           nextTick += frameDur;
           tracker.frame(written + (nextTick - span.start));
           emit();

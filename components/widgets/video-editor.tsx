@@ -195,6 +195,9 @@ const HOLD_MS = 250;
 /** Browsers refuse playback rates above 16× on a video element, and silence the sound above 4×. */
 const MAX_PREVIEW_RATE = 16;
 const PREVIEW_SPEEDS = [0.25, 0.5, 1, 1.5, 2, 4, 8, 12, 16];
+/** Tests can watch every frame time the export hands to the encoder (see window.__benchVideo.traceFrames). */
+let frameTrace: ((timelineT: number) => void) | null = null;
+
 /** YouTube wants 1280×720 thumbnails under 2 MB; the frame is scaled to this height (never upscaled). */
 const THUMB_HEIGHT = 720;
 type FrameKind = "thumb" | "jpeg" | "png";
@@ -1575,6 +1578,10 @@ export function VideoEditorWidget() {
       overrideFreeSpace,
       missing: () => store.missing(Object.keys(project.media)),
       getProject: () => project,
+      setProject: (fn: (p: Project) => Project) => setProject(fn),
+      traceFrames: (fn: ((timelineT: number) => void) | null) => {
+        frameTrace = fn;
+      },
       audioState: () => ({ ctx: audioCtxRef.current?.state ?? null, nodes: musicNodes.current.size, buffers: musicBuffers.current.size, video: videoRef.current ? { muted: videoRef.current.muted, volume: videoRef.current.volume, paused: videoRef.current.paused } : null }),
     };
   });
@@ -1668,6 +1675,7 @@ export function VideoEditorWidget() {
         priors: loadPriors(profile, `${outH}p ${project.export.codec.toUpperCase()}`),
         whilePaused: () => (pauseRef.current.paused ? new Promise<void>((r) => pauseRef.current.waiters.push(r)) : undefined),
         onWriteBlocked,
+        onFrame: (t) => frameTrace?.(t),
         onProgress: (progress) => {
           setJob((j) => (j ? { ...j, fraction: progress.fraction, progress } : j));
           if (!lowSpaceRef.current) document.title = `${(progress.fraction * 100).toFixed(1)}% · ${progress.paused ? "Paused" : "Exporting"} · Bench`;
@@ -1735,6 +1743,7 @@ export function VideoEditorWidget() {
         signal: abort.signal,
         whilePaused: () => (pauseRef.current.paused ? new Promise<void>((r) => pauseRef.current.waiters.push(r)) : undefined),
         onWriteBlocked,
+        onFrame: (t) => frameTrace?.(t),
         onProgress: (progress) => {
           setJob((j) => (j ? { ...j, fraction: progress.fraction, progress } : j));
           if (!lowSpaceRef.current) document.title = `${(progress.fraction * 100).toFixed(1)}% · Rendering preview · Bench`;
