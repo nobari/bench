@@ -192,6 +192,38 @@
   border-color: color-mix(in srgb, currentColor 38%, var(--color-edge));
 }
 
+/* With colour on, anything that belongs to a category ([data-cat], with --cat set inline to that category's hue:
+   a tool page, a category page, a sidebar block, a tool card) takes the hue as its accent. Mixing with the ink
+   darkens it on light and lightens it on dark and wood, so text and fills keep their contrast; --on-cat is the
+   text colour on a filled button, set per theme below. The site chrome outside keeps the app accent. */
+:root[data-color="on"] [data-cat] {
+  --color-accent: color-mix(in srgb, var(--cat) 72%, var(--color-ink));
+  --color-accent-fill: color-mix(in srgb, var(--cat) 72%, var(--color-ink));
+  --color-accent-hover: color-mix(in srgb, var(--cat) 58%, var(--color-ink));
+  --color-accent-soft: color-mix(in srgb, var(--cat) 14%, var(--color-base));
+  --color-on-accent: var(--on-cat, #ffffff);
+  --color-signal: var(--color-accent);
+  --color-signal-dim: var(--color-accent-hover);
+  --accent: var(--color-accent);
+}
+:root[data-color="on"] { --on-cat: #ffffff; }
+@media (prefers-color-scheme: dark) {
+  :root[data-color="on"]:not([data-theme="light"]):not([data-theme="wood"]) { --on-cat: #0e0e10; }
+}
+:root[data-color="on"][data-theme="dark"] { --on-cat: #0e0e10; }
+:root[data-color="on"][data-theme="wood"] { --on-cat: #2a1a0f; }
+/* Category names take their hue where they head a block. */
+:root[data-color="on"] [data-cat] .cat-name { color: var(--color-accent); }
+/* A tool card lights up in its hue. */
+:root[data-color="on"] a.tool-card:hover { background-color: color-mix(in srgb, var(--cat) 10%, var(--color-base)); }
+/* Icons in buttons take the accent at rest; on hover the button's own colour (accent, ink or danger) shows through.
+   Filled buttons and buttons showing a status keep their colour. */
+:root[data-color="on"] .panel button:not(.bg-accent):not(:hover):not(.text-positive):not(.text-danger):not(.text-warn) > svg:first-child,
+:root[data-color="on"] .panel label > svg:first-child,
+:root[data-color="on"] .panel .readout > svg:first-child {
+  color: var(--accent);
+}
+
 /* bg-accent is the near-black fill; text/border/ring-accent stay on the deep
    gray. Unlayered on purpose: Tailwind's own .bg-accent lives in
    @layer utilities, and an unlayered rule always wins over a layered one. */

@@ -1,5 +1,6 @@
 "use client";
 
+import type { CSSProperties } from "react";
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import Link from "next/link";
@@ -57,7 +58,7 @@ function NavList({ pathname, onNavigate }: { pathname: string; onNavigate?: () =
         const open = here || !closed.includes(cat.slug);
         const grouped = tree.length > 1;
         return (
-          <div key={cat.slug} className="mb-1" data-nav-category={cat.slug} data-open={open ? "true" : "false"}>
+          <div key={cat.slug} className="mb-1" data-nav-category={cat.slug} data-open={open ? "true" : "false"} data-cat={cat.slug} style={{ "--cat": `var(${cat.accentVar})` } as CSSProperties}>
             <div className={cn("flex items-center rounded-[var(--radius-sm)]", catActive ? "bg-raised" : "hover:bg-raised")}>
               <button
                 type="button"
@@ -77,7 +78,7 @@ function NavList({ pathname, onNavigate }: { pathname: string; onNavigate?: () =
                 className={cn("flex min-w-0 flex-1 items-center gap-2 py-1.5 pr-2 text-[12px] font-semibold", catActive ? "text-ink" : "text-muted hover:text-ink")}
               >
                 <Icon size={13} style={{ color: `var(${cat.accentVar})` }} />
-                <span className="truncate">{cat.name}</span>
+                <span className="cat-name truncate">{cat.name}</span>
                 <span className="ml-auto pl-2 text-[11px] font-normal tabular text-faint">{count}</span>
               </Link>
             </div>
@@ -142,6 +143,8 @@ function NavRail({ pathname }: { pathname: string }) {
             aria-label={cat.name}
             aria-current={pathname === `/${cat.slug}` ? "page" : undefined}
             className={cn("flex h-9 w-9 items-center justify-center rounded-[var(--radius-sm)]", active ? "bg-accent-soft" : "hover:bg-raised")}
+            data-cat={cat.slug}
+            style={{ "--cat": `var(${cat.accentVar})` } as CSSProperties}
           >
             <Icon size={17} style={{ color: `var(${cat.accentVar})` }} />
           </Link>

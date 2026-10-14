@@ -1,3 +1,4 @@
+import type { CSSProperties } from "react";
 import Link from "next/link";
 import { ReadMore } from "@/components/read-more";
 import { ChevronRight } from "lucide-react";
@@ -17,7 +18,7 @@ export function ToolShell({ tool }: { tool: ToolDef }) {
   const Icon = tool.icon;
 
   return (
-    <div className="px-3 py-4 sm:px-4">
+    <div className="px-3 py-4 sm:px-4" data-cat={tool.category} style={{ "--cat": `var(${cat?.accentVar})` } as CSSProperties}>
       <script type="application/ld+json" dangerouslySetInnerHTML={jsonLdScript(softwareAppJsonLd(tool))} />
       <script
         type="application/ld+json"

@@ -1,3 +1,4 @@
+import type { CSSProperties } from "react";
 import Link from "next/link";
 import type { ToolDef } from "@/lib/tools/types";
 import { toolShortTitle } from "@/lib/tools/types";
@@ -13,9 +14,11 @@ export function ToolCard({ tool, className }: { tool: ToolDef; className?: strin
     <Link
       href={`/${tool.category}/${tool.slug}`}
       className={cn(
-        "group flex items-center gap-3 rounded-[var(--radius-sm)] px-2.5 py-2 transition-colors hover:bg-raised",
+        "tool-card group flex items-center gap-3 rounded-[var(--radius-sm)] px-2.5 py-2 transition-colors hover:bg-raised",
         className,
       )}
+      data-cat={tool.category}
+      style={{ "--cat": `var(${cat?.accentVar})` } as CSSProperties}
     >
       <span
         className="cat-tile flex h-7 w-7 shrink-0 items-center justify-center rounded-[5px] border border-edge bg-surface"

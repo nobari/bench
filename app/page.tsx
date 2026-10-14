@@ -1,3 +1,4 @@
+import type { CSSProperties } from "react";
 import Link from "next/link";
 import { CATEGORIES } from "@/lib/tools/categories";
 import { TOOLS, getCategoryTree } from "@/lib/tools/registry";
@@ -30,13 +31,13 @@ export default function HomePage() {
           const grouped = tree.length > 1;
           const Icon = cat.icon;
           return (
-            <section key={cat.slug} aria-labelledby={`cat-${cat.slug}`} className="min-w-0">
+            <section key={cat.slug} aria-labelledby={`cat-${cat.slug}`} className="min-w-0" data-cat={cat.slug} style={{ "--cat": `var(${cat.accentVar})` } as CSSProperties}>
               <h2
                 id={`cat-${cat.slug}`}
                 className="flex items-center gap-2 border-b border-edge pb-2 text-[13px] font-semibold text-ink"
               >
                 <Icon size={14} style={{ color: `var(${cat.accentVar})` }} />
-                <Link href={`/${cat.slug}`} className="hover:text-accent">
+                <Link href={`/${cat.slug}`} className="cat-name hover:text-accent">
                   {cat.name}
                 </Link>
                 <span className="ml-auto text-[12px] font-normal tabular text-faint">{count}</span>

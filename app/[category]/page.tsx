@@ -1,3 +1,4 @@
+import type { CSSProperties } from "react";
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
@@ -45,7 +46,7 @@ export default async function CategoryPage({ params }: { params: Promise<Params>
   const Icon = cat.icon;
 
   return (
-    <div className="px-4 py-5 sm:px-5 lg:px-8">
+    <div className="px-4 py-5 sm:px-5 lg:px-8" data-cat={cat.slug} style={{ "--cat": `var(${cat.accentVar})` } as CSSProperties}>
       <script
         type="application/ld+json"
         dangerouslySetInnerHTML={jsonLdScript(
@@ -72,7 +73,7 @@ export default async function CategoryPage({ params }: { params: Promise<Params>
         >
           <Icon size={17} />
         </span>
-        <h1 className="text-[22px] font-semibold leading-tight text-ink">{cat.name}</h1>
+        <h1 className="cat-name text-[22px] font-semibold leading-tight text-ink">{cat.name}</h1>
         <span className="text-[13px] tabular text-faint">
           {tools.length} {tools.length === 1 ? "tool" : "tools"}
         </span>
