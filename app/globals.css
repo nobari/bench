@@ -538,6 +538,18 @@ html[data-nav="hidden"] .tool-nav {
   .md-panel[data-fill], .md-panel:fullscreen { background: var(--color-base); }
   .md-panel:fullscreen { display: flex; flex-direction: column; overflow: hidden; }
 
+  /* annotations: highlighted stretches in four colours, each ending in a numbered marker */
+  .md-preview .md-ann, .md-preview .md-ann-n { --mark: rgba(250, 204, 21, 0.42); --mark-solid: #facc15; }
+  .md-preview .md-ann[data-color="red"], .md-preview .md-ann-n[data-color="red"] { --mark: rgba(248, 113, 113, 0.42); --mark-solid: #f87171; }
+  .md-preview .md-ann[data-color="green"], .md-preview .md-ann-n[data-color="green"] { --mark: rgba(74, 222, 128, 0.42); --mark-solid: #4ade80; }
+  .md-preview .md-ann[data-color="blue"], .md-preview .md-ann-n[data-color="blue"] { --mark: rgba(96, 165, 250, 0.42); --mark-solid: #60a5fa; }
+  .md-preview .md-ann { background: var(--mark); color: inherit; border-radius: 2px; padding: 0.04em 0; box-decoration-break: clone; -webkit-box-decoration-break: clone; cursor: pointer; transition: filter 0.15s; }
+  .md-preview .md-ann:hover { filter: saturate(1.4); }
+  .md-preview .md-ann[data-done] { background: color-mix(in srgb, var(--mark) 45%, transparent); text-decoration: line-through; text-decoration-color: var(--color-faint); }
+  .md-preview .md-ann[data-selected] { box-shadow: 0 0 0 2px var(--accent); }
+  .md-preview .md-ann-n { display: inline-block; margin-left: 0.15em; min-width: 1.4em; padding: 0 0.3em; border-radius: 999px; background: var(--mark-solid); color: #1e2419; font-size: 0.62em; font-weight: 600; line-height: 1.5; text-align: center; vertical-align: super; cursor: pointer; user-select: none; }
+  .md-preview .md-ann-n[data-selected] { box-shadow: 0 0 0 2px var(--accent); }
+
   /* highlight.js token colours, on the same palette as the JSON viewer */
   .hljs-comment, .hljs-quote { color: var(--tok-null, #6e7781); font-style: italic; }
   .hljs-keyword, .hljs-selector-tag, .hljs-literal, .hljs-built_in, .hljs-doctag { color: #6639ba; }

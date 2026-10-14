@@ -13,6 +13,7 @@ import {
   Eye,
   Heading1,
   Heading2,
+  Highlighter,
   Image as ImageIcon,
   Italic,
   Link2,
@@ -43,6 +44,9 @@ import {
   wrapSelection,
   type Edit,
 } from "@/lib/tools/text/markdown";
+import { annotationsHtml, annotationsMarkdown, makeAnnotation, placeAnnotations, reanchor, sanitizeAnnotations, type MarkColor, type MdAnnotation, type Placed } from "@/lib/tools/text/annotations";
+import { rangeOffsets, textRuns, unwrapMarks, wrapMarks } from "@/lib/tools/text/annotate-dom";
+import { AnnotationEditor, AnnotationsPanel, CreateAnnotationPopover, clampPos, type PopoverPos } from "@/components/widgets/markdown-annotations";
 import { CopyButton } from "@/components/copy-button";
 import { SHARE_SYNC_EVENT } from "@/components/share-button";
 import { readShareState, useShareState } from "@/lib/share-state";
@@ -51,6 +55,28 @@ import { cn } from "@/lib/utils";
 
 const VIEWS = ["edit", "split", "preview"] as const;
 const DRAFT_KEY = "bench:markdown:draft";
+const ANN_DRAFT_KEY = "bench:markdown:annotations";
+
+/** A fingerprint of a placement, so the panel re-renders only when something about it changed. */
+const placementKey = (l: Placed[]) => l.map((p) => [p.id, p.n, p.at ? `${p.at.start}-${p.at.end}` : "x", p.color, p.done ? 1 : 0, p.note].join("\u0001")).join("\u0002");
+/** Annotations from a draft (plain JSON); anything unreadable is simply none. */
+function parseAnnotations(json: string | null): MdAnnotation[] {
+  if (!json) return [];
+  try {
+    return sanitizeAnnotations(JSON.parse(json));
+  } catch {
+    return [];
+  }
+}
+/** Annotations from a link's compressed `a` parameter. */
+function linkAnnotations(a: string | null): MdAnnotation[] {
+  if (!a) return [];
+  try {
+    return parseAnnotations(decompressFromEncodedURIComponent(a));
+  } catch {
+    return [];
+  }
+}
 
 /** Drawn diagrams by theme and source: typing anywhere else leaves every diagram as it is. */
 const mermaidCache = new Map<string, string>();
@@ -74,28 +100,28 @@ if (typeof window !== "undefined") {
 }
 const sanitize = (html: string) => DOMPurify.sanitize(html, { ADD_ATTR: ["target"] });
 
-/** Document source: compressed hash (Share) → `i` query → local draft → sample. */
-function readInitial(): { text: string; source: "link" | "draft" | "sample" } {
-  if (typeof window === "undefined") return { text: SAMPLE, source: "sample" };
+/** Document source: compressed hash (Share, with its annotations) → `i` query → local draft (with its annotations) → sample. */
+function readInitial(): { text: string; annotations: MdAnnotation[]; source: "link" | "draft" | "sample" } {
+  if (typeof window === "undefined") return { text: SAMPLE, annotations: [], source: "sample" };
   const hash = new URLSearchParams(window.location.hash.replace(/^#/, ""));
   const h = hash.get("d");
   if (h) {
     try {
       const v = decompressFromEncodedURIComponent(h);
-      if (v) return { text: v, source: "link" };
+      if (v) return { text: v, annotations: linkAnnotations(hash.get("a")), source: "link" };
     } catch {
       /* ignore */
     }
   }
   const q = new URLSearchParams(window.location.search).get("i");
-  if (q !== null) return { text: q, source: "link" };
+  if (q !== null) return { text: q, annotations: [], source: "link" };
   try {
     const draft = localStorage.getItem(DRAFT_KEY);
-    if (draft) return { text: draft, source: "draft" };
+    if (draft) return { text: draft, annotations: parseAnnotations(localStorage.getItem(ANN_DRAFT_KEY)), source: "draft" };
   } catch {
     /* storage unavailable */
   }
-  return { text: SAMPLE, source: "sample" };
+  return { text: SAMPLE, annotations: [], source: "sample" };
 }
 
 const TOOL =
@@ -111,7 +137,17 @@ export function MarkdownEditorWidget() {
   // How the link's reader looked at it, applied softly: only values still understood are taken.
   const [outline, setOutline] = useState(() => readShareState<{ outline: unknown }>("markdown")?.outline === true);
   const [fill, setFill] = useState(() => readShareState<{ fill: unknown }>("markdown")?.fill === true);
-  useShareState("markdown", { outline, fill });
+  const [showMarks, setShowMarks] = useState(() => readShareState<{ marks: unknown }>("markdown")?.marks !== false);
+  const [notesOpen, setNotesOpen] = useState(() => readShareState<{ notes: unknown }>("markdown")?.notes === true);
+  useShareState("markdown", { outline, fill, marks: showMarks, notes: notesOpen });
+  // Annotations are part of the document's data: they ride in the link's `a` parameter and in the local draft.
+  const [annotations, setAnnotations] = useState<MdAnnotation[]>(initial.annotations);
+  const [placed, setPlaced] = useState<Placed[]>([]);
+  const [selectedAnn, setSelectedAnn] = useState<string | null>(null);
+  const [annFocus, setAnnFocus] = useState(false);
+  const [markColor, setMarkColor] = useState<MarkColor>("yellow");
+  const [draftSel, setDraftSel] = useState<{ start: number; end: number; pos: PopoverPos } | null>(null);
+  const [editorPos, setEditorPos] = useState<PopoverPos | null>(null);
   const [fullscreen, setFullscreen] = useState(false);
   const [themeTick, setThemeTick] = useState(0);
   const taRef = useRef<HTMLTextAreaElement | null>(null);
@@ -133,23 +169,26 @@ export function MarkdownEditorWidget() {
       try {
         if (text.trim()) localStorage.setItem(DRAFT_KEY, text);
         else localStorage.removeItem(DRAFT_KEY);
+        if (annotations.length) localStorage.setItem(ANN_DRAFT_KEY, JSON.stringify(annotations));
+        else localStorage.removeItem(ANN_DRAFT_KEY);
         setSavedAt(Date.now());
       } catch {
         /* storage unavailable */
       }
     }, 500);
     return () => clearTimeout(id);
-  }, [text]);
+  }, [text, annotations]);
 
   useEffect(() => {
     const sync = () => {
       const h = new URLSearchParams();
       if (text.trim()) h.set("d", compressToEncodedURIComponent(text));
+      if (text.trim() && annotations.length) h.set("a", compressToEncodedURIComponent(JSON.stringify(annotations)));
       window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}#${h}`);
     };
     window.addEventListener(SHARE_SYNC_EVENT, sync);
     return () => window.removeEventListener(SHARE_SYNC_EVENT, sync);
-  }, [text]);
+  }, [text, annotations]);
 
   useEffect(() => {
     const urls = urlsRef.current;
@@ -218,10 +257,143 @@ export function MarkdownEditorWidget() {
     };
   }, [rendered.html, themeTick, fill, fullscreen]);
 
-  // Copy buttons on code blocks (the preview is plain HTML, so one listener on the container serves them all).
+  // Annotations: the preview's text is read, every annotation found in it (at its remembered place, else by its
+  // quote), the marks painted, and places that moved written back so the link and the draft carry them.
+  useEffect(() => {
+    let active = true;
+    const root = previewRef.current?.querySelector<HTMLElement>(".md-preview");
+    if (!root) {
+      queueMicrotask(() => active && setPlaced((p) => (p.length ? [] : p)));
+      return () => {
+        active = false;
+      };
+    }
+    // The DOM is painted at once (no flash of unmarked text); the derived state follows in a microtask.
+    unwrapMarks(root);
+    const { text: previewText } = textRuns(root);
+    const next = placeAnnotations(previewText, annotations);
+    if (showMarks) wrapMarks(root, next.filter((p) => p.at).map((p) => ({ id: p.id, start: p.at!.start, end: p.at!.end, color: p.color, n: p.n, done: p.done })));
+    queueMicrotask(() => {
+      if (!active) return;
+      setPlaced((prev) => (placementKey(prev) === placementKey(next) ? prev : next));
+      const re = reanchor(previewText, annotations, next);
+      if (re !== annotations) setAnnotations(re);
+    });
+    return () => {
+      active = false;
+    };
+  }, [rendered.html, annotations, showMarks]);
+
+  // The selected annotation is ringed and its editor sits under its last mark.
+  useEffect(() => {
+    const box = previewRef.current;
+    const root = box?.querySelector<HTMLElement>(".md-preview");
+    if (!box || !root) return;
+    for (const el of Array.from(root.querySelectorAll<HTMLElement>("[data-selected]"))) delete el.dataset.selected;
+    const marks = selectedAnn ? Array.from(root.querySelectorAll<HTMLElement>(`.md-ann[data-ann="${selectedAnn}"], .md-ann-n[data-ann="${selectedAnn}"]`)) : [];
+    for (const m of marks) m.dataset.selected = "true";
+    // Measured once layout has settled, in a frame callback.
+    const frame = requestAnimationFrame(() => {
+      if (!selectedAnn) return setEditorPos(null);
+      const last = marks.filter((m) => m.classList.contains("md-ann")).at(-1);
+      if (!last) return setEditorPos(clampPos({ top: 8, left: box.clientWidth / 2 }, 320, box.clientWidth));
+      const r = last.getBoundingClientRect(), b = box.getBoundingClientRect();
+      setEditorPos(clampPos({ top: r.bottom - b.top + box.scrollTop + 8, left: r.left + r.width / 2 - b.left + box.scrollLeft }, 320, box.clientWidth));
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [selectedAnn, placed, showMarks, rendered.html]);
+
+  // A selection inside the preview offers a highlight or a comment, once the pointer is up.
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let pointerDown = false;
+    const read = () => {
+      const box = previewRef.current;
+      const root = box?.querySelector<HTMLElement>(".md-preview");
+      const sel = document.getSelection();
+      if (pointerDown || !box || !root || !sel || sel.rangeCount === 0 || sel.isCollapsed || !root.contains(sel.anchorNode) || !root.contains(sel.focusNode)) {
+        if (!pointerDown) setDraftSel(null);
+        return;
+      }
+      const range = sel.getRangeAt(0);
+      const off = rangeOffsets(root, range, textRuns(root).runs);
+      if (!off) {
+        setDraftSel(null);
+        return;
+      }
+      const r = range.getBoundingClientRect(), b = box.getBoundingClientRect();
+      setDraftSel({ ...off, pos: clampPos({ top: r.bottom - b.top + box.scrollTop + 8, left: r.left + r.width / 2 - b.left + box.scrollLeft }, 230, box.clientWidth) });
+    };
+    const schedule = () => {
+      clearTimeout(timer);
+      timer = setTimeout(read, 120);
+    };
+    const onDown = (e: PointerEvent) => {
+      if (previewRef.current?.contains(e.target as Node)) pointerDown = true;
+    };
+    const onUp = () => {
+      pointerDown = false;
+      schedule();
+    };
+    document.addEventListener("selectionchange", schedule);
+    window.addEventListener("pointerdown", onDown);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
+    return () => {
+      clearTimeout(timer);
+      document.removeEventListener("selectionchange", schedule);
+      window.removeEventListener("pointerdown", onDown);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
+    };
+  }, []);
+
+  const createAnnotation = (color: MarkColor, withNote: boolean) => {
+    const root = previewRef.current?.querySelector<HTMLElement>(".md-preview");
+    if (!root || !draftSel) return;
+    const a = makeAnnotation(textRuns(root).text, draftSel.start, draftSel.end, color);
+    if (!a.quote.trim()) return;
+    setAnnotations((l) => [...l, a]);
+    setMarkColor(color);
+    setShowMarks(true);
+    setDraftSel(null);
+    document.getSelection()?.removeAllRanges();
+    setSelectedAnn(withNote ? a.id : null);
+    setAnnFocus(withNote);
+  };
+  const patchAnnotation = (id: string, p: Partial<MdAnnotation>) => setAnnotations((l) => l.map((a) => (a.id === id ? { ...a, ...p } : a)));
+  const deleteAnnotation = (id: string) => {
+    setAnnotations((l) => l.filter((a) => a.id !== id));
+    setSelectedAnn((s) => (s === id ? null : s));
+  };
+  const selectAnnotation = (id: string) => {
+    setSelectedAnn(id);
+    setAnnFocus(false);
+    requestAnimationFrame(() => previewRef.current?.querySelector(`.md-ann[data-ann="${id}"]`)?.scrollIntoView({ block: "center", behavior: "smooth" }));
+  };
+  const clearAnnotations = () => {
+    setAnnotations([]);
+    setSelectedAnn(null);
+  };
+  const selectedData = selectedAnn ? annotations.find((a) => a.id === selectedAnn) : undefined;
+  const selectedPlaced = selectedAnn ? placed.find((p) => p.id === selectedAnn) : undefined;
+
+  // Clicks in the preview: a mark or its number selects that annotation, a copy button copies its code block, and
+  // anything else (outside the popovers) drops the selection. The preview is plain HTML, so one listener serves all.
   const onPreviewClick = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
-    const btn = (e.target as HTMLElement).closest<HTMLButtonElement>(".md-copy");
-    if (!btn) return;
+    const target = e.target as HTMLElement;
+    if (target.closest("[data-ann-popover]")) return;
+    const mark = target.closest<HTMLElement>(".md-ann, .md-ann-n");
+    if (mark?.dataset.ann) {
+      setSelectedAnn(mark.dataset.ann);
+      setAnnFocus(false);
+      return;
+    }
+    const btn = target.closest<HTMLButtonElement>(".md-copy");
+    if (!btn) {
+      setSelectedAnn(null);
+      return;
+    }
     const code = btn.closest(".md-code")?.querySelector("pre code")?.textContent ?? "";
     void navigator.clipboard.writeText(code).then(() => {
       btn.textContent = "Copied";
@@ -233,20 +405,35 @@ export function MarkdownEditorWidget() {
     });
   }, []);
 
-  // Fill the window (Esc leaves it) and real full screen on the preview panel.
+  // Fill the window and real full screen on the preview panel.
   useEffect(() => {
     if (!fill) return;
     const prev = document.body.style.overflow;
     document.body.style.overflow = "hidden";
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && !document.fullscreenElement) setFill(false);
-    };
-    window.addEventListener("keydown", onKey);
     return () => {
       document.body.style.overflow = prev;
-      window.removeEventListener("keydown", onKey);
     };
   }, [fill]);
+  // Esc closes the annotation editor, else drops the selection offer, else leaves the fill mode; Delete removes the
+  // selected annotation when no text field has the focus.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const inField = !!(e.target as HTMLElement | null)?.closest?.("input, textarea, select, [contenteditable]");
+      if (e.key === "Escape") {
+        if (selectedAnn) setSelectedAnn(null);
+        else if (draftSel) {
+          setDraftSel(null);
+          document.getSelection()?.removeAllRanges();
+        } else if (fill && !document.fullscreenElement) setFill(false);
+      } else if ((e.key === "Delete" || e.key === "Backspace") && selectedAnn && !inField) {
+        e.preventDefault();
+        setAnnotations((l) => l.filter((a) => a.id !== selectedAnn));
+        setSelectedAnn(null);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [fill, selectedAnn, draftSel]);
   useEffect(() => {
     const onChange = () => setFullscreen(document.fullscreenElement === previewPanelRef.current && !!previewPanelRef.current);
     document.addEventListener("fullscreenchange", onChange);
@@ -256,8 +443,8 @@ export function MarkdownEditorWidget() {
     if (document.fullscreenElement) void document.exitFullscreen();
     else void previewPanelRef.current?.requestFullscreen?.().catch(() => setFill(true));
   };
-  /** The preview as it stands — diagrams drawn, copy bars gone — for files and printing. */
-  const exportHtml = () => exportableHtml(previewRef.current?.querySelector(".md-preview")?.innerHTML ?? rendered.html);
+  /** The preview as it stands — diagrams drawn, copy bars gone, marks kept and listed — for files and printing. */
+  const exportHtml = () => exportableHtml(previewRef.current?.querySelector(".md-preview")?.innerHTML ?? rendered.html) + (showMarks && placed.length ? annotationsHtml(placed) : "");
 
   const apply = (fn: (t: string, s: number, e: number) => Edit) => {
     const ta = taRef.current;
@@ -414,11 +601,11 @@ export function MarkdownEditorWidget() {
             <div className="flex items-center justify-between border-b border-edge px-3 py-2">
               <span className="readout">Markdown</span>
               <div className="flex items-center gap-2">
-                <button onClick={() => setText(SAMPLE)} className="text-[12px] text-faint hover:text-ink">
+                <button onClick={() => { setText(SAMPLE); clearAnnotations(); }} className="text-[12px] text-faint hover:text-ink">
                   Load sample
                 </button>
                 {text && (
-                  <button onClick={() => setText("")} className="inline-flex items-center gap-1 text-[12px] text-faint hover:text-danger">
+                  <button onClick={() => { setText(""); clearAnnotations(); }} className="inline-flex items-center gap-1 text-[12px] text-faint hover:text-danger">
                     <X size={12} /> Clear
                   </button>
                 )}
@@ -454,6 +641,9 @@ export function MarkdownEditorWidget() {
                     <ListTree size={13} /> Outline
                   </button>
                 )}
+                <button onClick={() => setNotesOpen((o) => !o)} className={cn(GHOST, notesOpen && "border-accent text-accent")} title="Highlight stretches of the preview and comment on them" data-notes-toggle>
+                  <Highlighter size={13} /> Annotate{annotations.length ? ` (${annotations.length})` : ""}
+                </button>
                 {!fullscreen && (
                   <button onClick={() => setFill((f) => !f)} className={cn(GHOST, fill && "border-accent text-accent")} title={fill ? "Back to the page (Esc)" : "Fill the browser window with the preview"} data-fill-toggle>
                     {fill ? <Minimize2 size={13} /> : <Expand size={13} />} {fill ? "Exit" : "Fill window"}
@@ -477,11 +667,25 @@ export function MarkdownEditorWidget() {
                 </ul>
               </nav>
             )}
-            <div ref={previewRef} onScroll={onPreviewScroll} onClick={onPreviewClick} className={cn("overflow-auto p-4 sm:p-6", fill || fullscreen ? "min-h-0 flex-1" : "h-[560px]")}>
+            {notesOpen && <AnnotationsPanel placed={placed} selected={selectedAnn} show={showMarks} onShow={setShowMarks} onSelect={selectAnnotation} onClear={clearAnnotations} markdown={annotationsMarkdown(placed)} />}
+            <div ref={previewRef} onScroll={onPreviewScroll} onClick={onPreviewClick} className={cn("relative overflow-auto p-4 sm:p-6", fill || fullscreen ? "min-h-0 flex-1" : "h-[560px]")}>
               {text.trim() ? (
                 <div className={cn("md-preview", (fill || fullscreen) && "mx-auto max-w-3xl")} dangerouslySetInnerHTML={previewHtml} />
               ) : (
                 <p className="text-[13px] text-faint">The preview appears here as you type.</p>
+              )}
+              {draftSel && !selectedAnn && <CreateAnnotationPopover pos={draftSel.pos} color={markColor} onCreate={createAnnotation} />}
+              {selectedAnn && selectedData && editorPos && (
+                <AnnotationEditor
+                  pos={editorPos}
+                  annotation={selectedData}
+                  number={selectedPlaced?.n ?? annotations.length}
+                  lost={!!selectedPlaced && !selectedPlaced.at}
+                  autoFocus={annFocus}
+                  onChange={(p) => patchAnnotation(selectedAnn, p)}
+                  onDelete={() => deleteAnnotation(selectedAnn)}
+                  onClose={() => setSelectedAnn(null)}
+                />
               )}
             </div>
           </div>

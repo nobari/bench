@@ -236,11 +236,20 @@ img{max-width:100%}hr{border:0;border-top:1px solid #d6dccb;margin:2em 0}input[t
 .md-mermaid{text-align:center;margin:0 0 1em}.md-mermaid svg{max-width:100%;height:auto}.md-mermaid-src{text-align:left}
 .hljs-comment,.hljs-quote{color:#6e7781;font-style:italic}.hljs-keyword,.hljs-selector-tag,.hljs-literal,.hljs-built_in{color:#6639ba}.hljs-string,.hljs-regexp,.hljs-addition{color:#116329}.hljs-number,.hljs-meta{color:#953800}
 .hljs-title,.hljs-name,.hljs-section,.hljs-attr,.hljs-attribute,.hljs-variable,.hljs-template-variable{color:#0550ae}.hljs-type,.hljs-symbol,.hljs-bullet{color:#b45309}.hljs-deletion{color:#c0392b}.hljs-emphasis{font-style:italic}.hljs-strong{font-weight:600}
-@media print{main{padding:0}}`;
+.md-ann{background:rgba(250,204,21,.45);border-radius:2px;box-decoration-break:clone;-webkit-box-decoration-break:clone}.md-ann[data-color=red]{background:rgba(248,113,113,.45)}.md-ann[data-color=green]{background:rgba(74,222,128,.45)}.md-ann[data-color=blue]{background:rgba(96,165,250,.45)}.md-ann[data-done]{text-decoration:line-through;opacity:.75}
+.md-ann-n,.md-notes-n{display:inline-block;min-width:1.4em;padding:0 .3em;border-radius:999px;background:#facc15;color:#1e2419;font-size:.62em;font-weight:600;line-height:1.5;text-align:center;vertical-align:super;margin-left:.15em}
+.md-ann-n[data-color=red],[data-color=red]>.md-notes-n{background:#f87171}.md-ann-n[data-color=green],[data-color=green]>.md-notes-n{background:#4ade80}.md-ann-n[data-color=blue],[data-color=blue]>.md-notes-n{background:#60a5fa}
+.md-notes{margin-top:2.5em;border-top:1px solid #d6dccb;padding-top:1em;font-size:.95em}.md-notes h2{border:0;font-size:1.2em;margin-top:0}.md-notes ol{list-style:none;padding:0}.md-notes li{margin:.6em 0;padding-left:2.2em;position:relative}
+.md-notes-n{position:absolute;left:0;top:.15em;font-size:.8em;vertical-align:baseline;margin:0}.md-notes q{font-style:italic;color:#5c6854}.md-notes-text{display:block;white-space:pre-wrap}.md-notes-state{color:#8a8f99;font-size:.9em}.md-notes-done q{text-decoration:line-through}
+@media print{main{padding:0}.md-ann,.md-ann-n,.md-notes-n{-webkit-print-color-adjust:exact;print-color-adjust:exact}}`;
 
-/** Preview HTML made fit for a file: the copy bars go, drawn diagrams stay (their source is dropped once drawn). */
+/**
+ * Preview HTML made fit for a file: the copy bars go, drawn diagrams stay (their source is dropped once drawn), and the
+ * selection ring on an annotation is not part of the document.
+ */
 export function exportableHtml(html: string): string {
   return html
+    .replace(/ data-selected="true"/g, "")
     .replace(/<div class="md-code-bar">[\s\S]*?<\/div>/g, "")
     .replace(/<a class="md-anchor"[^>]*>#<\/a>/g, "")
     .replace(/(<div class="md-mermaid"[^>]*data-state="done"[^>]*>)<pre class="md-mermaid-src">[\s\S]*?<\/pre>/g, "$1");
