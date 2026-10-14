@@ -70,6 +70,22 @@
   --cat-math: #6f6a58;
   --cat-web: #5a6270;
 
+  /* Code editor syntax colours (CodeMirror highlight style reads these). */
+  --code-keyword: #6639ba;
+  --code-string: #116329;
+  --code-number: #953800;
+  --code-comment: #6e7781;
+  --code-type: #0550ae;
+  --code-function: #8250df;
+  --code-variable: #1f2328;
+  --code-constant: #0550ae;
+  --code-operator: #cf222e;
+  --code-tag: #116329;
+  --code-attribute: #0550ae;
+  --code-property: #0550ae;
+  --code-heading: #0550ae;
+  --code-invalid: #cf222e;
+
   /* Page accent — actions always use the app accent, never a category hue. */
   --accent: var(--color-accent);
 
@@ -118,6 +134,20 @@ html[data-nav="hidden"] .tool-nav {
     --color-ink: #ededf0;
     --color-muted: #a3a3ac;
     --color-faint: #85858f;
+  --code-keyword: #c0a8ff;
+  --code-string: #e0c08a;
+  --code-number: #ffce6b;
+  --code-comment: #7d8790;
+  --code-type: #7fb0ff;
+  --code-function: #d2a8ff;
+  --code-variable: #e6edf3;
+  --code-constant: #79c0ff;
+  --code-operator: #ff7b72;
+  --code-tag: #7ee787;
+  --code-attribute: #79c0ff;
+  --code-property: #79c0ff;
+  --code-heading: #79c0ff;
+  --code-invalid: #ff7b72;
 
     --color-accent: #e4e4e8;
     --color-accent-fill: #e6e6ea;
@@ -162,6 +192,20 @@ html[data-nav="hidden"] .tool-nav {
   --color-ink: #ededf0;
   --color-muted: #a3a3ac;
   --color-faint: #85858f;
+  --code-keyword: #c0a8ff;
+  --code-string: #e0c08a;
+  --code-number: #ffce6b;
+  --code-comment: #7d8790;
+  --code-type: #7fb0ff;
+  --code-function: #d2a8ff;
+  --code-variable: #e6edf3;
+  --code-constant: #79c0ff;
+  --code-operator: #ff7b72;
+  --code-tag: #7ee787;
+  --code-attribute: #79c0ff;
+  --code-property: #79c0ff;
+  --code-heading: #79c0ff;
+  --code-invalid: #ff7b72;
 
   --color-accent: #e4e4e8;
   --color-accent-fill: #e6e6ea;
@@ -206,6 +250,20 @@ html[data-nav="hidden"] .tool-nav {
   --color-ink: #f6ecdb;
   --color-muted: #e4d3b8;
   --color-faint: #d4c1a5;
+  --code-keyword: #e3bdff;
+  --code-string: #f0d39a;
+  --code-number: #ffd27a;
+  --code-comment: #b7a48a;
+  --code-type: #9fc4ff;
+  --code-function: #dcb6ff;
+  --code-variable: #f6ecdb;
+  --code-constant: #9fd0ff;
+  --code-operator: #ff9a8b;
+  --code-tag: #a4e9a0;
+  --code-attribute: #9fd0ff;
+  --code-property: #9fd0ff;
+  --code-heading: #9fd0ff;
+  --code-invalid: #ff9a8b;
 
   --color-accent: #f2d8b0;
   --color-accent-fill: #ead0a6;
@@ -535,6 +593,44 @@ html[data-nav="hidden"] .tool-nav {
   .md-preview .md-mermaid[data-state="done"] .md-mermaid-src { display: none; }
   .md-preview .md-mermaid-error { text-align: left; color: var(--color-danger); font-size: 0.9em; margin: 0 0 0.4em; }
   /* the preview filling the window or the screen */
+  /* Code editor (CodeMirror): the panel's own chrome; colours come from the tokens above. */
+  .code-panel[data-fill], .code-panel:fullscreen { background: var(--color-base); }
+  .code-panel:fullscreen { display: flex; flex-direction: column; overflow: hidden; }
+  .code-panel .cm-editor { height: 100%; font-size: 13px; }
+  .code-panel .cm-editor.cm-focused { outline: none; }
+  .code-panel .cm-scroller { overflow: auto; font-family: var(--font-mono); line-height: 1.6; }
+  .code-panel .cm-content { caret-color: var(--color-ink); padding: 8px 0; }
+  .code-panel .cm-gutters { background: var(--color-base-2); color: var(--color-faint); border-right: 1px solid var(--color-edge); }
+  .code-panel .cm-activeLine { background: color-mix(in srgb, var(--color-raised) 55%, transparent); }
+  .code-panel .cm-activeLineGutter { background: color-mix(in srgb, var(--color-raised) 75%, transparent); color: var(--color-muted); }
+  .code-panel .cm-selectionBackground, .code-panel .cm-editor.cm-focused .cm-selectionBackground, .code-panel .cm-content ::selection { background: var(--color-accent-soft) !important; }
+  .code-panel .cm-cursor, .code-panel .cm-dropCursor { border-left-color: var(--color-ink); }
+  .code-panel .cm-matchingBracket, .code-panel .cm-editor.cm-focused .cm-matchingBracket { background: color-mix(in srgb, var(--color-accent) 18%, transparent); outline: 1px solid var(--color-edge-bright); }
+  .code-panel .cm-selectionMatch { background: color-mix(in srgb, var(--color-accent) 14%, transparent); }
+  .code-panel .cm-searchMatch { background: color-mix(in srgb, var(--color-warn) 35%, transparent); outline: 1px solid var(--color-warn); }
+  .code-panel .cm-searchMatch.cm-searchMatch-selected { background: color-mix(in srgb, var(--color-warn) 60%, transparent); }
+  .code-panel .cm-panels { background: var(--color-base-2); color: var(--color-ink); border-color: var(--color-edge); }
+  .code-panel .cm-panels.cm-panels-top { border-bottom: 1px solid var(--color-edge); }
+  .code-panel .cm-panel.cm-search { font-size: 12px; }
+  .code-panel .cm-panel.cm-search input, .code-panel .cm-panel.cm-search button { font: inherit; background: var(--color-base); color: var(--color-ink); border: 1px solid var(--color-edge); border-radius: 4px; padding: 2px 6px; }
+  .code-panel .cm-panel.cm-search label { color: var(--color-muted); }
+  .code-panel .cm-tooltip { background: var(--color-surface); color: var(--color-ink); border: 1px solid var(--color-edge); border-radius: var(--radius-sm); box-shadow: var(--shadow-pop); }
+  .code-panel .cm-tooltip.cm-tooltip-autocomplete > ul > li[aria-selected] { background: var(--color-raised); color: var(--color-ink); }
+  .code-panel .cm-tooltip-lint { padding: 2px 0; }
+  .code-panel .cm-diagnostic { padding: 3px 8px; border-left: 4px solid var(--color-danger); }
+  .code-panel .cm-diagnostic-warning { border-left-color: var(--color-warn); }
+  .code-panel .cm-lintRange-error { background-image: none; text-decoration: underline wavy var(--color-danger); text-decoration-skip-ink: none; text-underline-offset: 3px; }
+  .code-panel .cm-lintRange-warning { background-image: none; text-decoration: underline wavy var(--color-warn); }
+  .code-panel .cm-lint-marker-error { content: none; }
+  .code-panel .cm-gutter-lint .cm-lint-marker { width: 0.7em; height: 0.7em; border-radius: 50%; margin-top: 0.45em; }
+  .code-panel .cm-gutter-lint .cm-lint-marker-error { background: var(--color-danger); }
+  .code-panel .cm-gutter-lint .cm-lint-marker-warning { background: var(--color-warn); }
+  .code-panel .cm-gutter-lint .cm-lint-marker > svg { display: none; }
+  .code-panel .cm-foldPlaceholder { background: var(--color-raised); color: var(--color-muted); border: 0; padding: 0 6px; }
+  .code-panel .cm-foldGutter .cm-gutterElement { cursor: pointer; }
+  .code-panel .cm-placeholder { color: var(--color-faint); font-style: italic; }
+  .code-panel[data-dragging] .cm-editor { outline: 2px dashed var(--accent); outline-offset: -2px; }
+
   .md-panel[data-fill], .md-panel:fullscreen { background: var(--color-base); }
   .md-panel:fullscreen { display: flex; flex-direction: column; overflow: hidden; }
 

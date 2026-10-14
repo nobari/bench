@@ -88,6 +88,7 @@ export type WidgetKey =
   | "text-compress"
   | "markdown-editor"
   | "mermaid-editor"
+  | "code-editor"
   | "archive-extract"
   | "archive-create"
   | "date-converter"

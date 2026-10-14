@@ -53,6 +53,7 @@ import {
   Volume2,
   Wallet,
   Workflow,
+  SquareCode,
 } from "lucide-react";
 import { toolId, type CategorySlug, type ToolDef, type ToolGroup } from "./types";
 import { getCategory } from "./categories";
@@ -1872,6 +1873,36 @@ export const TOOLS: ToolDef[] = [
     ],
     related: ["text/transform", "text/base64"],
     aliases: ["ascii chart", "character code converter", "text to hex"],
+  },
+  {
+    slug: "code",
+    category: "web",
+    group: "editors",
+    title: "Code Editor",
+    short: "Code editor",
+    tagline: "Write, prettify and syntax-check code in 90 languages, in the browser",
+    description:
+      "A code editor in the browser for 90 languages: syntax highlighting, folding, bracket matching, autocomplete, search and replace, multiple cursors, Prettier formatting for JavaScript, TypeScript, JSON, HTML, Vue, CSS, SCSS, Less, Markdown, YAML, GraphQL and Handlebars, SQL formatting for eight dialects, live syntax checking with problems listed by line, file open and drop, download, drafts and share links. Nothing is uploaded.",
+    keywords: ["online code editor", "code formatter", "prettier online", "javascript formatter", "typescript formatter", "json formatter", "html formatter", "css beautifier", "sql formatter", "yaml formatter", "syntax checker", "code beautifier", "browser code editor", "codemirror"],
+    icon: SquareCode,
+    status: "stable",
+    widget: "code-editor",
+    howItWorks:
+      "Pick a language from the list of 90 (or press Detect to guess it from the text; opening or dropping a file picks it from the name) and the editor highlights as you type, with line numbers, code folding, bracket matching, autocomplete, search and replace (⌘F), multiple cursors and the usual editor keys. Prettify runs Prettier on JavaScript, JSX, TypeScript, TSX, JSON, HTML, Vue, Angular templates, Handlebars, CSS, SCSS, Less, Markdown, MDX, YAML and GraphQL, and sql-formatter on SQL, MySQL, MariaDB, PostgreSQL, SQLite, T-SQL, PL/SQL and BigQuery, at the indentation and line width you choose (Shift+Alt+F or ⌘⇧F). Syntax checking runs as you type: those same parsers report the first error with its line, column and message, JSON and XML are checked by purpose-built parsers, and every other language with a real grammar (Python, Go, Rust, Java, C, C++, C#, PHP, Kotlin, Swift and more) is checked through the editor's own parse tree, with problems underlined in the text, marked in the gutter and listed under the editor; click one to jump there. Open loads a file from your device, Download saves the text with the language's extension (⌘S), Copy copies it, and the draft is kept in your browser between visits. Share carries the code compressed in the link, together with the language and your view settings. Everything runs locally; nothing is uploaded.",
+    faq: [
+      { q: "Which languages can it format?", a: "JavaScript, JSX, TypeScript, TSX, JSON, HTML, Vue, Angular templates, Handlebars, CSS, SCSS, Less, Markdown, MDX, YAML and GraphQL through Prettier 3, and SQL, MySQL, MariaDB, PostgreSQL, SQLite, T-SQL, PL/SQL and BigQuery through sql-formatter. Languages marked ✦ in the list can be formatted; for the others Prettify explains that no formatter is available, and highlighting and checking still work." },
+      { q: "How does syntax checking work?", a: "For languages with a formatter, the formatter's parser is run on the text and the first error is reported with its line and column; JSON is checked with a scanner that explains the error in plain words, and XML with the browser's XML parser. For Python, Go, Rust, Java, C, C++, C#, PHP, Kotlin, Swift, Ruby, Lua and the other languages with a real grammar in the editor, the parse tree's error nodes are reported instead, each with the text it tripped on. A handful of languages only have simple highlighting and are not checked; the status says so." },
+      { q: "Does the Prettier output match my project's config?", a: "It follows the indentation and line width chosen in the toolbar and Prettier's defaults for everything else (double quotes, semicolons, trailing commas where valid). It is not reading a .prettierrc, so for a project with its own options run Prettier there; this is for quick formatting of snippets and files." },
+      { q: "Is my code uploaded?", a: "No. Highlighting, formatting and checking all run in your browser; the formatters are downloaded as code the first time they are needed and nothing you type leaves the page. The draft is kept in your browser's local storage, and a share link carries the text compressed inside the URL." },
+      { q: "What are the keyboard shortcuts?", a: "Shift+Alt+F or ⌘⇧F (Ctrl+Shift+F) prettifies, ⌘S (Ctrl+S) downloads, ⌘F finds and ⌘H replaces, Tab and Shift+Tab indent and outdent, ⌘/ toggles a comment, ⌘D selects the next match for multiple cursors, Alt+↑/↓ moves lines, ⌘Z / ⌘⇧Z undo and redo, and Esc leaves the fill-window mode." },
+    ],
+    examples: [
+      { label: "Format JSON", query: "l=json&i=" + encodeURIComponent('{"name":"Ada","tags":["math","code"],"born":1815}') },
+      { label: "Format SQL", query: "l=postgresql&i=" + encodeURIComponent("select u.id, count(o.id) as orders from users u left join orders o on o.user_id = u.id where u.active group by u.id order by orders desc") },
+      { label: "Check TypeScript", query: "l=typescript&i=" + encodeURIComponent("function greet(name: string): string {\n  return `Hello, ${name}`\n}\nconst n: number = 'oops'") },
+    ],
+    related: ["web/markdown", "json/viewer", "web/diff", "text/transform"],
+    aliases: ["code editor", "prettier", "beautifier", "formatter", "syntax check", "ide online", "javascript editor", "sql formatter"],
   },
   {
     slug: "mermaid",
