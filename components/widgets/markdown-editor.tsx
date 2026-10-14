@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useQueryState, parseAsStringLiteral } from "nuqs";
 import DOMPurify from "dompurify";
 import { compressToEncodedURIComponent, decompressFromEncodedURIComponent } from "lz-string";
@@ -482,17 +482,25 @@ export function MarkdownEditorWidget() {
   /** The preview as it stands — diagrams drawn, copy bars gone, marks kept and listed — for files and printing. */
   const exportHtml = () => exportableHtml(previewRef.current?.querySelector(".md-preview")?.innerHTML ?? rendered.html) + (showMarks && placed.length ? annotationsHtml(placed) : "");
 
+  // A toolbar edit replaces the textarea's value, which moves the caret to the end and scrolls the box to the
+  // bottom; the selection and the scroll position are put back before the browser paints the new value.
+  const pendingEdit = useRef<{ start: number; end: number; scrollTop: number } | null>(null);
   const apply = (fn: (t: string, s: number, e: number) => Edit) => {
     const ta = taRef.current;
     const s = ta?.selectionStart ?? text.length;
     const e = ta?.selectionEnd ?? text.length;
     const edit = fn(text, s, e);
+    pendingEdit.current = { start: edit.start, end: edit.end, scrollTop: ta?.scrollTop ?? 0 };
     setText(edit.text);
-    requestAnimationFrame(() => {
-      ta?.focus();
-      ta?.setSelectionRange(edit.start, edit.end);
-    });
   };
+  useLayoutEffect(() => {
+    const ta = taRef.current, edit = pendingEdit.current;
+    if (!ta || !edit) return;
+    pendingEdit.current = null;
+    ta.focus({ preventScroll: true });
+    ta.setSelectionRange(edit.start, edit.end);
+    ta.scrollTop = edit.scrollTop;
+  }, [text]);
 
   const actions = {
     bold: () => apply((t, s, e) => wrapSelection(t, s, e, "**", "**", "bold")),
