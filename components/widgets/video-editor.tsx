@@ -16,6 +16,7 @@ import { parseTemplateImport, videoTemplate } from "@/lib/tools/video/template";
 import { useUnsavedWork } from "@/lib/unsaved-work";
 import { useKeepAwake } from "@/lib/keep-awake";
 import { ENOUGH_SPACE, LOW_SPACE, estimateFree, overrideFreeSpace } from "@/lib/tools/video/space";
+import { PART_SECONDS } from "@/lib/tools/video/engine";
 
 const SEL = "h-8 rounded-[var(--radius-sm)] border border-edge bg-base px-2 pr-7 text-[13px] text-ink outline-none focus:border-accent";
 const INPUT = "h-8 w-full rounded-[var(--radius-sm)] border border-edge bg-base px-2 text-[13px] text-ink outline-none focus:border-accent";
@@ -57,6 +58,8 @@ interface Job {
   /** Export only: written in parts that survive a stop, and where this run picked up. */
   partsMode?: boolean;
   resumedFrom?: number;
+  /** Export only: how the parts are being joined into the file. */
+  join?: import("@/lib/tools/video/engine").JoinInfo;
 }
 
 /**
@@ -203,7 +206,7 @@ const PREVIEW_SPEEDS = [0.25, 0.5, 1, 1.5, 2, 4, 8, 12, 16];
 /** Tests can watch every frame time the export hands to the encoder (see window.__benchVideo.traceFrames). */
 let frameTrace: ((timelineT: number) => void) | null = null;
 /** Tests can shorten the parts (window.__benchVideo.exportOptions). */
-const testExportOptions: { partSeconds?: number } = {};
+const testExportOptions: { partSeconds?: number; joinMode?: "keep" | "remove"; failJoinAfter?: number } = {};
 
 /** YouTube wants 1280×720 thumbnails under 2 MB; the frame is scaled to this height (never upscaled). */
 const THUMB_HEIGHT = 720;
@@ -526,7 +529,7 @@ export function VideoEditorWidget() {
         const manifest = JSON.parse(text) as ExportManifest;
         if (manifest.version !== 1 || !Array.isArray(manifest.parts)) continue;
         let bytes = 0;
-        for (const part of manifest.parts) bytes += (await store.fileIn(part.file, folder))?.size ?? 0;
+        for (const part of manifest.parts) if (!part.consumed) bytes += (await store.fileIn(part.file, folder))?.size ?? 0;
         setResumable({ manifest, folder, bytes });
         return;
       } catch {
@@ -1709,9 +1712,11 @@ export function VideoEditorWidget() {
     const partsFolder = resume ? resume.folder : `${name.replace(/\.mp4$/, "")}.parts`;
     const exportSeconds = range ? range.to - range.from : duration;
     const manifest: ExportManifest = resume ? resume.manifest : { version: 1, fingerprint, name, total: exportSeconds, parts: [], skipped: [], updatedAt: 0 };
-    const resumedFrom = manifest.parts.length ? manifest.parts[manifest.parts.length - 1].end : 0;
-    // The parts and the joined file exist together for a moment, so the file's full size is needed on top of the rest.
-    if (!(await spaceWarning(estimate.bytes * (1 - resumedFrom / Math.max(1e-6, exportSeconds)) + (resumedFrom ? estimate.bytes : 0)))) return;
+    const live = manifest.parts.filter((p) => !p.consumed);
+    const covered = live.reduce((a, p) => a + (p.end - p.start), 0);
+    const resumedFrom = live.length ? Math.max(...live.map((p) => p.end)) : 0;
+    // What this run still has to encode; the join at the end frees each part as it goes in when room is short.
+    if (!(await spaceWarning(estimate.bytes * (1 - covered / Math.max(1e-6, exportSeconds)) + estimate.bytes * (PART_SECONDS / Math.max(PART_SECONDS, exportSeconds))))) return;
     notifyAt.current = 0;
     const abort = new AbortController();
     pauseRef.current = { paused: false, waiters: [] };
@@ -1743,7 +1748,15 @@ export function VideoEditorWidget() {
         whilePaused: () => (pauseRef.current.paused ? new Promise<void>((r) => pauseRef.current.waiters.push(r)) : undefined),
         onWriteBlocked,
         onFrame: (t) => frameTrace?.(t),
-        parts: { store: partStore, manifest, seconds: testExportOptions.partSeconds },
+        parts: {
+          store: partStore,
+          manifest,
+          seconds: testExportOptions.partSeconds,
+          freeSpace: estimateFree,
+          onJoin: (join) => setJob((j) => (j ? { ...j, join } : j)),
+          testJoinMode: testExportOptions.joinMode,
+          testFailJoinAfter: testExportOptions.failJoinAfter,
+        },
         onFault: askAboutFault,
         onProgress: (progress) => {
           setJob((j) => (j ? { ...j, fraction: progress.fraction, progress } : j));
@@ -1762,14 +1775,18 @@ export function VideoEditorWidget() {
       const skippedNote = result.skipped.length
         ? ` · ${result.skipped.length} stretch${result.skipped.length === 1 ? "" : "es"} skipped (${result.skipped.reduce((a, k) => a + (k.to - k.from), 0).toFixed(2)} s in all, at ${result.skipped.map((k) => fmtTime(k.from)).join(", ")})`
         : "";
-      const howNote = result.resumedFrom ? ` (resumed from ${fmtTime(result.resumedFrom)}; ${result.parts} parts joined)` : result.parts > 1 ? ` (${result.parts} parts joined)` : "";
+      const joinNote = result.join?.mode === "remove" ? ", each removed as it went in" : "";
+      const redone = covered > 0 && !result.resumedFrom ? `${fmtTime(Math.max(0, Math.round(exportSeconds - covered)))} exported again; ` : "";
+      const howNote = result.resumedFrom ? ` (resumed from ${fmtTime(result.resumedFrom)}; ${result.parts} parts joined${joinNote})` : result.parts > 1 ? ` (${redone}${result.parts} parts joined${joinNote})` : "";
       setStatus(
         `Exported ${name}${howNote} — ${fmtBytes(result.bytesWritten)} in ${fmtDuration(result.activeMs)}${result.pausedMs > 500 ? ` plus ${fmtDuration(result.pausedMs)} paused` : ""} (${(result.seconds / Math.max(0.001, result.activeMs / 1000)).toFixed(2)}× realtime) · prepare ${fmtDuration(stepMs("prepare"))} · video ${fmtDuration(stepMs("video"))} · audio ${fmtDuration(stepMs("audio"))} · finish ${fmtDuration(stepMs("finalize"))}${skippedNote}`,
       );
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
-      const kept = manifest.parts.length ? manifest.parts[manifest.parts.length - 1].end : 0;
-      const parts = `${manifest.parts.length} part${manifest.parts.length === 1 ? "" : "s"}`;
+      const keptParts = manifest.parts.filter((p) => !p.consumed);
+      const kept = keptParts.length ? Math.max(...keptParts.map((p) => p.end)) : 0;
+      const consumed = manifest.parts.length - keptParts.length;
+      const parts = `${keptParts.length} part${keptParts.length === 1 ? "" : "s"}${consumed ? `; ${consumed} already joined into the unfinished file will be exported again` : ""}`;
       if ((e as DOMException).name === "AbortError") {
         setStatus(kept > 0 ? `Export stopped at ${fmtTime(kept)} of ${fmtTime(exportSeconds)} — ${parts} kept. Resume continues from there; Discard removes them.` : "Export cancelled.");
       } else {
@@ -3345,9 +3362,12 @@ export function VideoEditorWidget() {
                       <Play size={14} className="shrink-0 text-accent" />
                       <span className="min-w-0 flex-1 text-muted">
                         <span className="font-medium text-ink">
-                          An export of {resumable.manifest.name} stopped at {fmtTime(resumable.manifest.parts.length ? resumable.manifest.parts[resumable.manifest.parts.length - 1].end : 0)} of {fmtTime(resumable.manifest.total)}
+                          An export of {resumable.manifest.name} stopped at {fmtTime(resumable.manifest.parts.filter((p) => !p.consumed).length ? Math.max(...resumable.manifest.parts.filter((p) => !p.consumed).map((p) => p.end)) : 0)} of {fmtTime(resumable.manifest.total)}
                         </span>{" "}
-                        — {resumable.manifest.parts.length} part{resumable.manifest.parts.length === 1 ? "" : "s"} ({fmtBytes(resumable.bytes)}) kept in {resumable.folder}.
+                        — {resumable.manifest.parts.filter((p) => !p.consumed).length} part{resumable.manifest.parts.filter((p) => !p.consumed).length === 1 ? "" : "s"} ({fmtBytes(resumable.bytes)}) kept in {resumable.folder}.
+                        {resumable.manifest.parts.some((p) => p.consumed)
+                          ? ` ${resumable.manifest.parts.filter((p) => p.consumed).length} part${resumable.manifest.parts.filter((p) => p.consumed).length === 1 ? " was" : "s were"} already joined into a file that did not finish; Resume exports ${fmtTime(resumable.manifest.parts.filter((p) => p.consumed).reduce((a, p) => a + (p.end - p.start), 0))} of them again.`
+                          : ""}
                         {resumable.manifest.fingerprint === fingerprint
                           ? " Resume carries on from there, then joins the parts into the file (a copy, no re-encoding)."
                           : " The project has changed since, so these parts cannot be continued; discard them and export again."}
@@ -3751,7 +3771,8 @@ function ExportPanel({ job, onPause, onResume, onCancel }: { job: Job; onPause: 
             {p ? ` · step ${Math.min(steps.length, doneSteps + 1)} of ${steps.length}` : ""}
             {job.paused ? " · resume to continue — keep this tab open, the file stays open while paused" : ""}
             {job.resumedFrom ? ` · resumed from ${fmtTime(job.resumedFrom)}` : ""}
-            {job.partsMode ? " · written in parts: a stop or a failure keeps what is finished" : ""}
+            {job.partsMode && !job.join ? " · written in parts: a stop or a failure keeps what is finished" : ""}
+            {job.join ? ` · joining ${job.join.parts} parts (${fmtBytes(job.join.bytes)}) into the file${job.join.mode === "remove" ? `, each removed as it goes in — the disk has ${job.join.free != null ? fmtBytes(job.join.free) : "little"} free, so the file takes no extra room beyond one part` : ", the parts kept until the file is closed"}` : ""}
           </div>
         </div>
         <span className="font-mono text-[26px] font-semibold tabular text-ink" data-export-pct>

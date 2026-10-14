@@ -904,7 +904,17 @@ export interface ExportOptions {
    * 180 by default, and whatever was done when the export stops) and into the manifest; the file is joined from
    * the parts at the end. A manifest with parts in it continues from where they end.
    */
-  parts?: { store: PartStore; manifest: ExportManifest; seconds?: number };
+  parts?: {
+    store: PartStore;
+    manifest: ExportManifest;
+    seconds?: number;
+    /** Free space on the disk as the browser reports it; with less than the file needs, parts are removed as they go in. */
+    freeSpace?: () => Promise<number | null>;
+    onJoin?: (info: JoinInfo) => void;
+    /** Tests only: force the join mode, and fail the join after this many parts. */
+    testJoinMode?: "keep" | "remove";
+    testFailJoinAfter?: number;
+  };
   /**
    * A frame failed. Answer "skip" to leave that stretch out and carry on (the export waits for the answer), or
    * "stop" to end with what is done. Without this, the error ends the export.
@@ -918,6 +928,8 @@ export interface ExportPart {
   start: number;
   end: number;
   frames: number;
+  /** Already copied into a file that was not finished, and removed to make room: the stretch is exported again. */
+  consumed?: boolean;
 }
 
 export interface ExportManifest {
@@ -931,7 +943,18 @@ export interface ExportManifest {
   parts: ExportPart[];
   /** Stretches of the export's time left out on the user's say-so after a frame failed. */
   skipped: { from: number; to: number; message: string }[];
+  /** Number of the next part file, so names stay unique across runs. */
+  nextPart?: number;
   updatedAt: number;
+}
+
+export interface JoinInfo {
+  /** "remove": each part is removed as soon as it is in the file, so the file needs no extra room beyond one part. */
+  mode: "keep" | "remove";
+  /** Bytes in the parts, and free space as reported, when the join began. */
+  bytes: number;
+  free: number | null;
+  parts: number;
 }
 
 /** Where a resumable export keeps its parts and manifest. */
@@ -1052,6 +1075,16 @@ export interface ExportResult {
   parts: number;
   /** Where this run started in the export's time (0 unless it continued earlier parts). */
   resumedFrom: number;
+  join?: JoinInfo;
+}
+
+/** The spans inside [from, to), cut to fit. */
+function trimSpansTo(list: ExportSpan[], from: number, to: number): ExportSpan[] {
+  return trimSpans(list, from).flatMap((s) => {
+    const e0 = Math.min(s.end, to);
+    if (e0 - s.start <= 1e-6) return [];
+    return e0 === s.end ? [s] : [{ ...s, sourceOut: s.sourceOut - (s.end - e0) * (s.speed || 1), end: e0 }];
+  });
 }
 
 export async function exportProject(
@@ -1090,10 +1123,29 @@ async function exportWithPulse(
   const parts = opts.parts ?? null;
   const manifest = parts?.manifest ?? null;
   const partSeconds = parts?.seconds ?? PART_SECONDS;
-  // Continuing earlier parts: this run covers what comes after them.
-  const resumeFrom = manifest?.parts.length ? manifest.parts[manifest.parts.length - 1].end : 0;
-  const spans = trimSpans(spansAll, offset + resumeFrom);
-  const remaining = Math.max(0, total - resumeFrom);
+  // Continuing earlier parts: this run covers the gaps between them — normally just the tail after the last part, but
+  // also any stretch whose part was consumed by a join that did not finish.
+  if (manifest) manifest.parts = manifest.parts.filter((p) => !p.consumed).sort((a, b) => a.start - b.start);
+  const gaps: { from: number; to: number; before: number }[] = [];
+  {
+    let pos = 0, before = 0;
+    for (const p of manifest?.parts ?? []) {
+      if (p.start > pos + 1e-3) {
+        gaps.push({ from: pos, to: p.start, before });
+        before += p.start - pos;
+      }
+      pos = Math.max(pos, p.end);
+    }
+    if (total - pos > 1e-3) gaps.push({ from: pos, to: total, before });
+  }
+  const resumeFrom = gaps.length && gaps[0].from === 0 && gaps.length === 1 ? 0 : (manifest?.parts.length ? Math.max(...manifest.parts.map((p) => p.end)) : 0);
+  const spans = gaps.flatMap((g) => trimSpansTo(spansAll, offset + g.from, offset + g.to));
+  const remaining = gaps.reduce((a, g) => a + (g.to - g.from), 0);
+  /** Work finished before export time t, for the progress bar: the gaps before it plus the way into its own. */
+  const progressAt = (t: number) => {
+    const g = gaps.find((x) => t < x.to + 1e-6) ?? gaps[gaps.length - 1];
+    return g ? g.before + Math.max(0, Math.min(t, g.to) - g.from) : 0;
+  };
   const needsFileLut = project.clips.some((c) => isFileLutKind(c.grade.lut));
   const lutsToLoad = [
     needsFileLut ? "DJI's conversion file" : "",
@@ -1281,7 +1333,9 @@ async function exportWithPulse(
     await parts!.store.remove(seg.file).catch(() => undefined);
   };
   const openSegment = async (startT: number) => {
-    const file = `part-${String(manifest!.parts.length + 1).padStart(4, "0")}.mp4`;
+    const n = manifest!.nextPart ?? manifest!.parts.length + 1;
+    manifest!.nextPart = n + 1;
+    const file = `part-${String(n).padStart(4, "0")}.mp4`;
     const writable = await parts!.store.createWritable(file);
     const seg: Segment = {
       file,
@@ -1316,12 +1370,15 @@ async function exportWithPulse(
       return false;
     }
     manifest!.parts.push({ file: seg.file, start: seg.start, end: seg.end, frames: seg.frames });
+    manifest!.parts.sort((a, b) => a.start - b.start);
     manifest!.updatedAt = Date.now();
+    runCursor = Math.max(runCursor, seg.end);
     await parts!.store.save(manifest!);
     return true;
   };
-  /** Export time reached by the finished parts. */
-  const doneUntil = () => (manifest?.parts.length ? manifest.parts[manifest.parts.length - 1].end : resumeFrom);
+  /** Export time this run has finished work up to (the end of the last part it closed). */
+  let runCursor = gaps[0]?.from ?? 0;
+  const doneUntil = () => runCursor;
 
   // The timeline time of the last frame handed to an encoder: frames must only ever go forward, whatever the spans
   // and the footage's frame grid do, or the file would carry a frame before its predecessor (and the muxer refuses
@@ -1340,7 +1397,7 @@ async function exportWithPulse(
       seg.end = t + duration;
     } else await videoSource!.add(t, duration);
     lastFrameT = timelineT;
-    tracker.frame(t - resumeFrom);
+    tracker.frame(progressAt(t));
     emit();
     opts.onFrame?.(timelineT);
   };
@@ -1541,9 +1598,10 @@ async function exportWithPulse(
     return { timelineT: t, sourceT, clipName: c.clipName, message, count, stretch: Math.min(stretch, Math.max(c.frameDur, c.span.end - t)) };
   };
 
+  let joinInfo: JoinInfo | undefined;
   const isAbort = (e: unknown) => (e as DOMException)?.name === "AbortError";
   const isPartError = (e: unknown) => (e as Error)?.name === "PartError";
-  let cursor = resumeFrom;
+  let cursor = gaps[0]?.from ?? 0;
   let faults = 0;
   let lastFaultT = -1,
     sameFault = 0;
@@ -1626,11 +1684,28 @@ async function exportWithPulse(
       await output.start();
       tracker.beginStep("finalize");
       emit(true);
-      let first = true;
-      for (const part of manifest!.parts) {
+      // The parts must cover the export end to end before any of them is touched.
+      const ordered = [...manifest!.parts].sort((a, b) => a.start - b.start);
+      let pos = 0;
+      const files: File[] = [];
+      for (const part of ordered) {
+        if (Math.abs(part.start - pos) > 0.05) throw new Error(`The parts leave a gap at ${pos.toFixed(2)} s; resume the export to fill it.`);
         const f = await parts.store.file(part.file);
         if (!f) throw new Error(`Part ${part.file} is missing from the parts folder. Discard the parts and export again.`);
-        const inp = new Input({ source: new BlobSource(f), formats: ALL_FORMATS });
+        files.push(f);
+        pos = part.end;
+      }
+      if (Math.abs(pos - total) > 0.05) throw new Error(`The parts end at ${pos.toFixed(2)} s of ${total.toFixed(2)}; resume the export to finish them.`);
+      // With less room than the file needs on top of the parts, each part goes as soon as it is in the file.
+      const partBytes = files.reduce((a, f) => a + f.size, 0);
+      const audioBytes = ((project.export.audioBitrateKbps * 1000) / 8) * total;
+      const free = parts.freeSpace ? await parts.freeSpace() : null;
+      const mode: JoinInfo["mode"] = parts.testJoinMode ?? (free !== null && free < partBytes + audioBytes + 1e9 ? "remove" : "keep");
+      joinInfo = { mode, bytes: partBytes, free, parts: ordered.length };
+      parts.onJoin?.(joinInfo);
+      let first = true;
+      for (const [index, part] of ordered.entries()) {
+        const inp = new Input({ source: new BlobSource(files[index]), formats: ALL_FORMATS });
         const track = await inp.getPrimaryVideoTrack();
         if (!track) throw new Error(`Part ${part.file} holds no video. Discard the parts and export again.`);
         const config = first ? await track.getDecoderConfig() : null;
@@ -1640,6 +1715,14 @@ async function exportWithPulse(
           await copied.add(packet.clone({ timestamp: packet.timestamp + part.start }), first && config ? { decoderConfig: config } : undefined);
           first = false;
         }
+        if (mode === "remove") {
+          // Its bytes are in the file now; should the file not get finished, this stretch is exported again.
+          part.consumed = true;
+          manifest!.updatedAt = Date.now();
+          await parts.store.save(manifest!);
+          await parts.store.remove(part.file);
+        }
+        if (parts.testFailJoinAfter !== undefined && index + 1 >= parts.testFailJoinAfter) throw new Error("Test: the join was interrupted.");
         emit(true);
       }
       copied.close();
@@ -1676,6 +1759,7 @@ async function exportWithPulse(
     skipped: skips,
     parts: manifest?.parts.length ?? 0,
     resumedFrom: resumeFrom,
+    join: joinInfo,
   };
 }
 
