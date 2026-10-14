@@ -74,11 +74,11 @@ export default function RootLayout({
   return (
     <html lang="en" className={`${sans.variable} ${mono.variable} h-full`} suppressHydrationWarning>
       <head>
-        {/* Applies the remembered theme and sidebar state before first paint (globals.css reads data-theme and data-nav). */}
+        {/* Applies the remembered theme, the colour switch (or the one a share link carries) and the sidebar state before first paint (globals.css reads data-theme, data-color and data-nav). */}
         <script
           dangerouslySetInnerHTML={{
             __html:
-              "try{var t=localStorage.getItem('bench:theme');if(t==='light'||t==='wood'||t==='dark'){document.documentElement.dataset.theme=t;var c={light:'#fafafa',wood:'#4a3827',dark:'#141416'}[t];var ms=document.querySelectorAll('meta[name=theme-color]');for(var i=0;i<ms.length;i++)ms[i].content=c}}catch(e){}try{var m=localStorage.getItem('bench:nav');if(m==='hidden')document.documentElement.dataset.nav='hidden';else if(m==='rail'||(!m&&localStorage.getItem('bench:nav-collapsed')==='1'))document.documentElement.dataset.nav='collapsed'}catch(e){}",
+              "try{var t=localStorage.getItem('bench:theme');if(t==='light'||t==='wood'||t==='dark'){document.documentElement.dataset.theme=t;var c={light:'#fafafa',wood:'#4a3827',dark:'#141416'}[t];var ms=document.querySelectorAll('meta[name=theme-color]');for(var i=0;i<ms.length;i++)ms[i].content=c}}catch(e){}try{var c=localStorage.getItem('bench:color');var sm=/(?:^|[#&])s=([^&]*)/.exec(location.hash);if(sm){var j=JSON.parse(atob(decodeURIComponent(sm[1]).replace(/-/g,'+').replace(/_/g,'/')));if(j&&j.ui&&j.ui.color===true)c='on'}if(c==='on')document.documentElement.dataset.color='on'}catch(e){}try{var m=localStorage.getItem('bench:nav');if(m==='hidden')document.documentElement.dataset.nav='hidden';else if(m==='rail'||(!m&&localStorage.getItem('bench:nav-collapsed')==='1'))document.documentElement.dataset.nav='collapsed'}catch(e){}",
           }}
         />
       </head>

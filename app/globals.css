@@ -95,6 +95,103 @@
   --checker-a: #d8d8dc;
 }
 
+/* Colour on (data-color="on", the palette button in the header): the same surfaces, with real colour for
+   actions, links, rings, status and the category hues. Each theme keeps its own contrast: deep blue on light,
+   sky blue on dark, amber on wood. Declared after the theme blocks so the combined selectors win. */
+:root[data-color="on"] {
+  --color-accent: #2457d6;
+  --color-accent-fill: #2a5bd7;
+  --color-accent-hover: #1e4bc0;
+  --color-accent-soft: #dfe8ff;
+  --color-on-accent: #ffffff;
+  --color-positive: #1a7f4b;
+  --color-warn: #b4650a;
+  --color-danger: #d1342c;
+  --cat-text: #d9643a;
+  --cat-json: #d59a1c;
+  --cat-media: #c74f8f;
+  --cat-audio: #8e5fd6;
+  --cat-files: #2f8fc9;
+  --cat-crypto: #2aa391;
+  --cat-gen: #6f63e0;
+  --cat-time: #3b82d9;
+  --cat-color: #e0484f;
+  --cat-math: #9a9420;
+  --cat-web: #5e7ac9;
+}
+@media (prefers-color-scheme: dark) {
+  :root[data-color="on"]:not([data-theme="light"]):not([data-theme="wood"]) {
+    --color-accent: #8fb3ff;
+    --color-accent-fill: #5b8def;
+    --color-accent-hover: #79a3ff;
+    --color-accent-soft: #1e2a44;
+    --color-on-accent: #0b1020;
+    --color-positive: #4ade80;
+    --color-warn: #fbbf24;
+    --color-danger: #f87171;
+    --cat-text: #ff9a6e;
+    --cat-json: #ffc857;
+    --cat-media: #ff7ac2;
+    --cat-audio: #c4a6ff;
+    --cat-files: #6ec1ff;
+    --cat-crypto: #5fe0c8;
+    --cat-gen: #a8a0ff;
+    --cat-time: #7ab8ff;
+    --cat-color: #ff7b84;
+    --cat-math: #d7d35a;
+    --cat-web: #9fb5ff;
+  }
+}
+:root[data-color="on"][data-theme="dark"] {
+  --color-accent: #8fb3ff;
+  --color-accent-fill: #5b8def;
+  --color-accent-hover: #79a3ff;
+  --color-accent-soft: #1e2a44;
+  --color-on-accent: #0b1020;
+  --color-positive: #4ade80;
+  --color-warn: #fbbf24;
+  --color-danger: #f87171;
+  --cat-text: #ff9a6e;
+  --cat-json: #ffc857;
+  --cat-media: #ff7ac2;
+  --cat-audio: #c4a6ff;
+  --cat-files: #6ec1ff;
+  --cat-crypto: #5fe0c8;
+  --cat-gen: #a8a0ff;
+  --cat-time: #7ab8ff;
+  --cat-color: #ff7b84;
+  --cat-math: #d7d35a;
+  --cat-web: #9fb5ff;
+}
+:root[data-color="on"][data-theme="wood"] {
+  --color-accent: #ffcc80;
+  --color-accent-fill: #f0a84a;
+  --color-accent-hover: #ffbe6a;
+  --color-accent-soft: #6b4a2a;
+  --color-on-accent: #2a1a0f;
+  --color-positive: #9ad58a;
+  --color-warn: #f3c969;
+  --color-danger: #ff8f80;
+  --cat-text: #ffa57a;
+  --cat-json: #ffd06a;
+  --cat-media: #ff8fcb;
+  --cat-audio: #d2b6ff;
+  --cat-files: #85ccff;
+  --cat-crypto: #7fe6d0;
+  --cat-gen: #b8b0ff;
+  --cat-time: #93c5ff;
+  --cat-color: #ff9196;
+  --cat-math: #e3df78;
+  --cat-web: #b2c3ff;
+}
+
+/* With colour on, an icon tile (.cat-tile, coloured by its category hue through currentColor) sits on a tint of
+   that hue instead of a plain surface. */
+:root[data-color="on"] .cat-tile {
+  background-color: color-mix(in srgb, currentColor 13%, var(--color-surface));
+  border-color: color-mix(in srgb, currentColor 38%, var(--color-edge));
+}
+
 /* bg-accent is the near-black fill; text/border/ring-accent stay on the deep
    gray. Unlayered on purpose: Tailwind's own .bg-accent lives in
    @layer utilities, and an unlayered rule always wins over a layered one. */

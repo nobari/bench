@@ -55,7 +55,7 @@ export function ToolShell({ tool }: { tool: ToolDef }) {
           </nav>
           <div className="mt-2 flex items-center gap-3">
             <span
-              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[6px] border border-edge bg-surface"
+              className="cat-tile flex h-8 w-8 shrink-0 items-center justify-center rounded-[6px] border border-edge bg-surface"
               style={{ color: `var(${cat?.accentVar})` }}
             >
               <Icon size={17} />

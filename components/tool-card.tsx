@@ -18,7 +18,7 @@ export function ToolCard({ tool, className }: { tool: ToolDef; className?: strin
       )}
     >
       <span
-        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-[5px] border border-edge bg-surface"
+        className="cat-tile flex h-7 w-7 shrink-0 items-center justify-center rounded-[5px] border border-edge bg-surface"
         style={{ color: `var(${cat?.accentVar})` }}
       >
         <Icon size={15} />

@@ -53,3 +53,49 @@ export function subscribeTheme(listener: (theme: Theme) => void): () => void {
   window.addEventListener(EVENT, on);
   return () => window.removeEventListener(EVENT, on);
 }
+
+/*
+ * Colour is a second, independent switch on top of the theme: off, the site is its neutral graphite self; on,
+ * actions, links, status and category hues take real colour (data-color="on" on <html>, read by globals.css).
+ * It is remembered per browser, and a share link carries it softly (see lib/share-state.ts: `ui.color`), so a
+ * reader sees the page the way it was shared without their own choice being overwritten.
+ */
+export const COLOR_KEY = "bench:color";
+const COLOR_EVENT = "bench:color";
+
+/** The stored choice, or null when none was made. */
+export function readStoredColor(): boolean | null {
+  try {
+    const v = localStorage.getItem(COLOR_KEY);
+    return v === "on" ? true : v === "off" ? false : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Whether colour is showing now (the attribute the pre-paint script or a link set, else the stored choice). */
+export function currentColor(): boolean {
+  if (typeof document !== "undefined" && document.documentElement.dataset.color !== undefined) return document.documentElement.dataset.color === "on";
+  return readStoredColor() ?? false;
+}
+
+export function applyColor(on: boolean) {
+  if (on) document.documentElement.dataset.color = "on";
+  else delete document.documentElement.dataset.color;
+}
+
+export function setColor(on: boolean) {
+  try {
+    localStorage.setItem(COLOR_KEY, on ? "on" : "off");
+  } catch {
+    /* storage unavailable */
+  }
+  applyColor(on);
+  window.dispatchEvent(new CustomEvent(COLOR_EVENT, { detail: on }));
+}
+
+export function subscribeColor(listener: (on: boolean) => void): () => void {
+  const handler = (e: Event) => listener((e as CustomEvent<boolean>).detail);
+  window.addEventListener(COLOR_EVENT, handler);
+  return () => window.removeEventListener(COLOR_EVENT, handler);
+}

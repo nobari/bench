@@ -121,7 +121,7 @@ Reuse these utilities (defined in `app/globals.css`) so the tool looks native:
   category — never hard-code a category color in a widget.
 - Primary action buttons: `bg-accent text-on-accent font-medium` (a near-black fill with white text; `text-accent` is the deep gray for links and outlines).
 
-There are three themes — light, wood (a warm walnut mid-tone) and dark — chosen in the header and applied as `data-theme` on `<html>`; with no choice the system preference picks light or dark. Only ever use the tokens above, never literal colours, so a widget looks right in all three.
+There are three themes — light, wood (a warm walnut mid-tone) and dark — chosen in the header and applied as `data-theme` on `<html>`; with no choice the system preference picks light or dark. A separate colour switch (the palette button next to them, `data-color="on"` on `<html>`) swaps the accent, status and category tokens for real colour; off, the site is neutral graphite. Only ever use the tokens above, never literal colours, so a widget looks right in all three themes with colour on or off.
 
 Reusable components: `CopyButton` (`@/components/copy-button`), `ShareButton`
 (`@/components/share-button`, copies the current URL), and the `Button`
