@@ -206,7 +206,7 @@ const PREVIEW_SPEEDS = [0.25, 0.5, 1, 1.5, 2, 4, 8, 12, 16];
 /** Tests can watch every frame time the export hands to the encoder (see window.__benchVideo.traceFrames). */
 let frameTrace: ((timelineT: number) => void) | null = null;
 /** Tests can shorten the parts (window.__benchVideo.exportOptions). */
-const testExportOptions: { partSeconds?: number; joinMode?: "keep" | "remove"; failJoinAfter?: number } = {};
+const testExportOptions: { partSeconds?: number; joinMode?: "keep" | "remove"; failJoinAfter?: number; noParts?: boolean } = {};
 
 /** YouTube wants 1280×720 thumbnails under 2 MB; the frame is scaled to this height (never upscaled). */
 const THUMB_HEIGHT = 720;
@@ -1748,15 +1748,17 @@ export function VideoEditorWidget() {
         whilePaused: () => (pauseRef.current.paused ? new Promise<void>((r) => pauseRef.current.waiters.push(r)) : undefined),
         onWriteBlocked,
         onFrame: (t) => frameTrace?.(t),
-        parts: {
-          store: partStore,
-          manifest,
-          seconds: testExportOptions.partSeconds,
-          freeSpace: estimateFree,
-          onJoin: (join) => setJob((j) => (j ? { ...j, join } : j)),
-          testJoinMode: testExportOptions.joinMode,
-          testFailJoinAfter: testExportOptions.failJoinAfter,
-        },
+        parts: testExportOptions.noParts
+          ? undefined
+          : {
+              store: partStore,
+              manifest,
+              seconds: testExportOptions.partSeconds,
+              freeSpace: estimateFree,
+              onJoin: (join) => setJob((j) => (j ? { ...j, join } : j)),
+              testJoinMode: testExportOptions.joinMode,
+              testFailJoinAfter: testExportOptions.failJoinAfter,
+            },
         onFault: askAboutFault,
         onProgress: (progress) => {
           setJob((j) => (j ? { ...j, fraction: progress.fraction, progress } : j));

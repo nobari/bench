@@ -1208,12 +1208,15 @@ async function exportWithPulse(
     throw new Error(
       `This browser can't encode ${codec.toUpperCase()} at ${outW}×${outH}. Try the other codec or a lower resolution.`,
     );
-  // Count what reaches a file: every chunk passes through here on its way to the folder.
+  // Count what reaches a file: every chunk passes through here on its way to the folder. The tracker sees every
+  // byte (parts included, for its rates); the result reports the file's own.
+  let fileBytes = 0;
   const countedStream = (target: WritableStream<StreamTargetChunk>, isFinal: boolean) => {
     const fileWriter = target.getWriter();
     return new WritableStream<StreamTargetChunk>({
       write: async (chunk) => {
         tracker.addBytes(chunk.data.byteLength);
+        if (isFinal) fileBytes += chunk.data.byteLength;
         emit();
         for (;;) {
           try {
@@ -1750,7 +1753,7 @@ async function exportWithPulse(
   }
   const done = tracker.snapshot();
   return {
-    bytesWritten: tracker.bytes,
+    bytesWritten: fileBytes,
     seconds: total,
     activeMs: done.elapsedMs,
     pausedMs: done.pausedMs,
