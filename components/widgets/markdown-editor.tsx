@@ -8,6 +8,7 @@ import {
   AppWindow,
   Bold,
   BookOpen,
+  ChevronDown,
   Code,
   Columns2,
   Download,
@@ -34,7 +35,6 @@ import {
   X,
 } from "lucide-react";
 import {
-  SAMPLE,
   documentTitle,
   exportableHtml,
   indentLines,
@@ -51,6 +51,7 @@ import { rangeOffsets, textRuns, unwrapMarks, wrapMarks } from "@/lib/tools/text
 import { AnnotationEditor, AnnotationsPanel, CreateAnnotationPopover, clampPos, type PopoverPos } from "@/components/widgets/markdown-annotations";
 import { EmbedPicker } from "@/components/widgets/markdown-embed-picker";
 import { markdownGuide } from "@/lib/tools/text/markdown-guide";
+import { SAMPLES, WELCOME } from "@/lib/tools/text/markdown-samples";
 import { TOOLS } from "@/lib/tools/registry";
 import { EMBED_HEIGHT_MESSAGE } from "@/components/embed-shell";
 import { CopyButton } from "@/components/copy-button";
@@ -116,7 +117,7 @@ const toolAt = (path: string) => {
 
 /** Document source: compressed hash (Share, with its annotations) → `i` query → local draft (with its annotations) → sample. */
 function readInitial(): { text: string; annotations: MdAnnotation[]; source: "link" | "draft" | "sample" } {
-  if (typeof window === "undefined") return { text: SAMPLE, annotations: [], source: "sample" };
+  if (typeof window === "undefined") return { text: WELCOME, annotations: [], source: "sample" };
   const hash = new URLSearchParams(window.location.hash.replace(/^#/, ""));
   const h = hash.get("d");
   if (h) {
@@ -135,7 +136,7 @@ function readInitial(): { text: string; annotations: MdAnnotation[]; source: "li
   } catch {
     /* storage unavailable */
   }
-  return { text: SAMPLE, annotations: [], source: "sample" };
+  return { text: WELCOME, annotations: [], source: "sample" };
 }
 
 const TOOL =
@@ -412,6 +413,15 @@ export function MarkdownEditorWidget() {
     return () => window.removeEventListener("message", onMessage);
   }, []);
   const [picking, setPicking] = useState(false);
+  const [samplesOpen, setSamplesOpen] = useState(false);
+  useEffect(() => {
+    if (!samplesOpen) return;
+    const close = (e: MouseEvent) => {
+      if (!(e.target as HTMLElement).closest("[data-samples-menu], [data-samples-button]")) setSamplesOpen(false);
+    };
+    window.addEventListener("mousedown", close);
+    return () => window.removeEventListener("mousedown", close);
+  }, [samplesOpen]);
   const guide = useMemo(() => markdownGuide(), []);
 
   // Clicks in the preview: a mark or its number selects that annotation, a copy button copies its code block, and
@@ -661,9 +671,31 @@ export function MarkdownEditorWidget() {
             <div className="flex items-center justify-between border-b border-edge px-3 py-2">
               <span className="readout">Markdown</span>
               <div className="flex items-center gap-2">
-                <button onClick={() => { setText(SAMPLE); clearAnnotations(); }} className="text-[12px] text-faint hover:text-ink">
-                  Load sample
-                </button>
+                <div className="relative">
+                  <button onClick={() => setSamplesOpen((o) => !o)} className={cn("inline-flex items-center gap-1 text-[12px] text-faint hover:text-ink", samplesOpen && "text-ink")} aria-haspopup="menu" aria-expanded={samplesOpen} data-samples-button>
+                    Samples <ChevronDown size={11} />
+                  </button>
+                  {samplesOpen && (
+                    <div className="absolute right-0 top-full z-30 mt-1 w-80 rounded-[var(--radius)] border border-edge bg-base p-1 shadow-[0_8px_24px_rgba(0,0,0,0.18)]" role="menu" data-samples-menu>
+                      {SAMPLES.map((sample) => (
+                        <button
+                          key={sample.id}
+                          role="menuitem"
+                          onClick={() => {
+                            setText(sample.text);
+                            clearAnnotations();
+                            setSamplesOpen(false);
+                          }}
+                          className="block w-full rounded-[var(--radius-sm)] px-2.5 py-1.5 text-left hover:bg-raised"
+                          data-sample={sample.id}
+                        >
+                          <span className="block text-[13px] font-medium text-ink">{sample.title}</span>
+                          <span className="block text-[12px] text-muted">{sample.blurb}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
                 {text && (
                   <button onClick={() => { setText(""); clearAnnotations(); }} className="inline-flex items-center gap-1 text-[12px] text-faint hover:text-danger">
                     <X size={12} /> Clear
