@@ -258,7 +258,7 @@ export function titlesTemplate(p: Project): Record<string, unknown> {
   return {
     format: "bench-video-titles/1",
     instructions: [
-      "Fill the titles array with the on-screen text for this driving video, then save this file and import it in the Titles tab of the Bench video editor (Import JSON).",
+      "Fill the titles array with the on-screen text for this video, then save this file and import it in the Titles tab of the Bench video editor (Import JSON).",
       "Each title has: kind — intro (a full-screen card on black, usually at 0 s), title (text over the picture), or lowerThird (a small caption such as a place name, usually in a corner with a dark box); text; subtitle (optional, smaller line under the text); start and duration in seconds; fade in seconds (fade in and out); position — tl tc tr ml mc mr bl bc br meaning top/middle/bottom × left/centre/right; color as #rrggbb; background — empty string for none, rgba(0,0,0,0.55) for a dark box, rgba(255,255,255,0.85) for a light box, or #rrggbb; font — sans, serif, mono, rounded, or any font family name installed on the editing machine (e.g. Avenir Next); size — text height as a fraction of the frame height, 0.02 to 0.16.",
       "Styling, all optional: weight 300–800 (600 default); italic true/false; letterSpacing in em (0 default, up to 0.5); shadow — none, soft, hard or outline, with shadowColor (rgba or #rrggbb); align — auto (follows the position), left, center or right; padding, radius and borderWidth as multiples of the text size (0.4, 0.15 and 0 by default; a border draws even without a background) with borderColor.",
       "Keep every title inside 0 to durationSeconds, and inside the clip it belongs to where that matters (clips lists each recording with its start and end on the timeline). Titles may overlap in time only if they use different positions. Lower thirds for locations typically last 5 to 8 seconds at bl; an intro typically starts at 0 for 4 seconds.",
@@ -286,9 +286,9 @@ export function titlesTemplate(p: Project): Record<string, unknown> {
     titles: p.titles.length
       ? p.titles.map(strip)
       : [
-          { kind: "intro", text: p.name, subtitle: "<date or route, e.g. Tokyo → Yokohama, 9 Oct 2026>", start: 0, duration: 4, fade: 1, position: "mc", color: "#ffffff", background: "", font: "sans", size: 0.07 },
-          { kind: "lowerThird", text: "<Place name>", subtitle: "<road, district or landmark>", start: 12, duration: 6, fade: 1, position: "bl", color: "#ffffff", background: "rgba(0,0,0,0.55)", font: "sans", size: 0.04 },
-          { kind: "title", text: "<A short remark shown mid-drive>", subtitle: "", start: 40, duration: 5, fade: 1, position: "tc", color: "#ffffff", background: "", font: "sans", size: 0.05 },
+          { kind: "intro", text: p.name, subtitle: "<date or place, e.g. Tokyo, 9 Oct 2026>", start: 0, duration: 4, fade: 1, position: "mc", color: "#ffffff", background: "", font: "sans", size: 0.07 },
+          { kind: "lowerThird", text: "<Place name>", subtitle: "<district, venue or landmark>", start: 12, duration: 6, fade: 1, position: "bl", color: "#ffffff", background: "rgba(0,0,0,0.55)", font: "sans", size: 0.04 },
+          { kind: "title", text: "<A short remark shown mid-video>", subtitle: "", start: 40, duration: 5, fade: 1, position: "tc", color: "#ffffff", background: "", font: "sans", size: 0.05 },
         ],
   };
 }
@@ -442,15 +442,15 @@ export interface Transition {
 export type TransitionSettings = Transition;
 /** What a new cut gets: a 2 s cross dissolve, centred on the cut. */
 export const DEFAULT_TRANSITION: Transition = { kind: "dissolve", duration: 2 };
-/** Transitions that suit road footage, in the order the menu shows them. */
+/** Transitions, in the order the menu shows them. */
 export const TRANSITIONS: { kind: TransitionKind; name: string; hint: string }[] = [
-  { kind: "dissolve", name: "Cross dissolve", hint: "A soft blend — the classic for continuous driving." },
-  { kind: "dipBlack", name: "Dip to black", hint: "Stops, parking and jumps in time." },
-  { kind: "dipWhite", name: "Flash to white", hint: "Tunnel exits and driving into the sun." },
-  { kind: "zoom", name: "Drive through", hint: "The shot accelerates into the cut; the next one arrives close and settles." },
-  { kind: "blur", name: "Speed blur", hint: "A blur washes over the cut and clears on the new road." },
-  { kind: "wipe", name: "Road wipe", hint: "The new road sweeps in from the left behind a soft edge." },
-  { kind: "push", name: "Overtake", hint: "The next clip slides in from the right and pushes the old one out." },
+  { kind: "dissolve", name: "Cross dissolve", hint: "A soft blend — the classic for continuous footage." },
+  { kind: "dipBlack", name: "Dip to black", hint: "Pauses, scene changes and jumps in time." },
+  { kind: "dipWhite", name: "Flash to white", hint: "Bright moments: stepping into daylight, turning into the sun." },
+  { kind: "zoom", name: "Zoom through", hint: "The shot accelerates into the cut; the next one arrives close and settles." },
+  { kind: "blur", name: "Speed blur", hint: "A blur washes over the cut and clears on the new shot." },
+  { kind: "wipe", name: "Soft wipe", hint: "The new shot sweeps in from the left behind a soft edge." },
+  { kind: "push", name: "Push", hint: "The next clip slides in from the right and pushes the old one out." },
 ];
 
 export interface TransitionWindow {
@@ -729,7 +729,7 @@ export function exportRange(p: Project): { from: number; to: number } | null {
 
 export const newId = () => Math.random().toString(36).slice(2, 10);
 
-export function newProject(name = "Untitled drive"): Project {
+export function newProject(name = "Untitled project"): Project {
   const now = Date.now();
   return { version: 1, id: newId(), name, createdAt: now, updatedAt: now, media: {}, clips: [], music: [], titles: [], watermark: { media: null, corner: "br", size: 0.08, opacity: 0.85, margin: 0.03 }, export: { ...DEFAULT_EXPORT }, preview: { ...DEFAULT_PREVIEW }, transition: { ...DEFAULT_TRANSITION }, intro: { ...DEFAULT_INTRO, card: { ...DEFAULT_INTRO.card } }, proxies: {}, stops: null };
 }

@@ -11,11 +11,11 @@ export function SiteFooter() {
     <footer className="mt-16 border-t border-edge px-5 py-6 text-[13px] text-muted lg:px-8">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <p className="max-w-xl">
-          {SITE.name} is open source. Every tool runs in your browser; only the{" "}
+          {SITE.name} is open source and runs entirely in your browser. It stores nothing about you; the one exception is the{" "}
           <Link href="/web/short-url" className="text-ink underline decoration-edge-bright underline-offset-2 hover:decoration-ink">
             URL shortener
-          </Link>{" "}
-          stores anything on a server.
+          </Link>
+          , which keeps only the destination of each short link you create.
         </p>
         <nav aria-label="Site" className="flex items-center gap-4">
           {sha ? (

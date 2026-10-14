@@ -611,5 +611,5 @@ export function describeIntro(project: Project): string | null {
   const sceneLen = region.scenes.reduce((a, c) => a + (c.end - c.start), 0);
   const parts = [`${scenes} scene${scenes === 1 ? "" : "s"} (${sceneLen.toFixed(1)} s)`];
   if (region.card) parts.push(`title card ${(region.card.end - region.card.start).toFixed(1)} s`);
-  return `${style.name}: ${parts.join(" + ")} = ${region.end.toFixed(1)} s before the drive`;
+  return `${style.name}: ${parts.join(" + ")} = ${region.end.toFixed(1)} s before the main video`;
 }

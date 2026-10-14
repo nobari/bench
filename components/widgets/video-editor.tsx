@@ -91,7 +91,7 @@ const SHORTCUTS: [string, string][] = [
   ["Control (held)", "Skim the cuts: 3 s before and after each"],
   ["← / →", "Step one frame (⇧ for a second)"],
   ["↑ / ↓", "Jump to the previous or next cut"],
-  ["Home / End", "Start or end of the drive"],
+  ["Home / End", "Start or end of the timeline"],
   ["M", "Mute the preview"],
   ["S", "Save a thumbnail of the frame (⇧S full-size JPEG, ⌥S PNG)"],
   ["⌫", "Remove the selected transition"],
@@ -1405,7 +1405,7 @@ export function VideoEditorWidget() {
     const maxH = Math.max(0, ...main.map((c) => project.media[c.media]?.height ?? 0));
     if (proxied) return { perWindow: 5, hint: "Scanned from the proxies, five candidates per scene — quick." };
     if (maxH <= 2160) return { perWindow: 3, hint: "No proxies yet: three candidates per scene are decoded from the recordings." };
-    return { perWindow: 1, hint: "Without proxies, 8K recordings are too slow to scan, so the scenes are spaced evenly across the drive. Render proxies (in the preview's size menu) and make the intro again to pick the lively moments." };
+    return { perWindow: 1, hint: "Without proxies, 8K recordings are too slow to scan, so the scenes are spaced evenly across the footage. Render proxies (in the preview's size menu) and make the intro again to pick the lively moments." };
   }, [placed, project.proxies, project.media]);
   /** Replace the clips through an intro operation; titles and the export range move with the drive. */
   const applyIntro = (fn: (p: Project) => Clip[] | null, failure?: string) => {
@@ -1517,7 +1517,7 @@ export function VideoEditorWidget() {
     setPlayhead(0);
     setSeekToken((x) => x + 1);
     setTab("intro");
-    setStatus(`Intro: ${moments.length} scenes ${perWindow > 1 ? "picked for motion and contrast" : "spaced evenly across the drive"}, ${introStyle(base.intro.style).name} look — swap, reorder or retime them below.`);
+    setStatus(`Intro: ${moments.length} scenes ${perWindow > 1 ? "picked for motion and contrast" : "spaced evenly across the footage"}, ${introStyle(base.intro.style).name} look — swap, reorder or retime them below.`);
   };
   const previewIntro = () => {
     if (!introReg) return;
@@ -2130,8 +2130,8 @@ export function VideoEditorWidget() {
             {!project.clips.length && (
               <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 p-6 text-center text-[13.5px] text-white/80">
                 <Clapperboard size={28} />
-                <span className="text-[15px] font-medium">Drop your drive recordings here</span>
-                <span className="max-w-sm text-[12.5px] text-white/60">8K at the original frame rate. Consecutive DJI files are joined in order. Choose a project folder first so proxies and autosaves have somewhere to live.</span>
+                <span className="text-[15px] font-medium">Drop your recordings here</span>
+                <span className="max-w-sm text-[12.5px] text-white/60">Up to 8K at the original frame rate. Consecutive recordings from one camera are joined in order. Choose a project folder first so proxies and autosaves have somewhere to live.</span>
               </div>
             )}
           </div>
@@ -2357,7 +2357,7 @@ export function VideoEditorWidget() {
                     </span>
                   </div>
                   <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[12.5px] text-muted">
-                    Stood still for at least
+                    Still for at least
                     <input type="number" min={0.5} step={0.5} value={stopMin} onChange={(e) => setStopSettings({ minSeconds: Math.max(0.5, Number(e.target.value) || 0.5) })} className={cn(INPUT, "w-16 font-mono")} aria-label="Minimum stop in seconds" />
                     s · keep
                     <input type="number" min={0} step={0.25} value={stopMargin} onChange={(e) => setStopSettings({ margin: Math.max(0, Number(e.target.value) || 0) })} className={cn(INPUT, "w-16 font-mono")} aria-label="Seconds kept at each end" />
@@ -2394,7 +2394,7 @@ export function VideoEditorWidget() {
                       })}
                     </ul>
                   )}
-                  <p className="text-[12px] text-faint">Red lights, queues, crossings: while the car stands the picture barely changes, so every stretch stiller than the drive&apos;s own baseline counts. Scanning decodes the proxies when there are any and is many times faster with them; 8K originals take a while. The margin keeps the car halting and pulling away on either side of each cut.</p>
+                  <p className="text-[12px] text-faint">Where the picture stands still — a paused talk, an idle camera, a red light — it barely changes from frame to frame, so every stretch stiller than the recording&apos;s own baseline counts. Scanning decodes the proxies when there are any and is many times faster with them; 8K originals take a while. The margin keeps the picture settling and moving again on either side of each cut.</p>
                 </div>
                 <div className={cn("space-y-2 rounded-[var(--radius-sm)] border p-2", selectedWindow ? "border-accent" : "border-edge")} data-transition-box>
                   <div className="flex items-center justify-between text-[12.5px]">
@@ -2476,14 +2476,14 @@ export function VideoEditorWidget() {
                     </button>
                   </span>
                   <button type="button" onClick={() => void makeIntro()} disabled={!placed.length || !!job} className={PRIMARY} data-make-intro>
-                    <Sparkles size={14} /> {introReg ? "Make it again" : "Make an intro from this drive"}
+                    <Sparkles size={14} /> {introReg ? "Make it again" : "Make an intro from this video"}
                   </button>
                   {introReg && (
                     <>
                       <button type="button" onClick={previewIntro} className={GHOST} data-preview-intro>
                         <Play size={12} /> Preview intro
                       </button>
-                      <button type="button" onClick={() => applyIntro((p) => addSceneAt(p, playhead), "Move the playhead into the drive, after the intro, to lift a scene from there.")} className={GHOST} data-add-scene title="Lift a scene from the frame under the playhead">
+                      <button type="button" onClick={() => applyIntro((p) => addSceneAt(p, playhead), "Move the playhead past the intro, into the main video, to lift a scene from there.")} className={GHOST} data-add-scene title="Lift a scene from the frame under the playhead">
                         + Use this moment
                       </button>
                       <button type="button" onClick={() => applyIntro((p) => removeIntro(p.clips))} className={cn(GHOST, "ml-auto hover:border-danger hover:text-danger")} data-remove-intro>
@@ -2492,7 +2492,7 @@ export function VideoEditorWidget() {
                     </>
                   )}
                 </div>
-                {!introReg && <p className="text-muted">A cold open: a few of the drive’s liveliest moments cut together in a look, ending on a title card, before the video proper starts. One click builds a starter from the footage; then swap scenes, reorder them, retime them or change the look.</p>}
+                {!introReg && <p className="text-muted">A cold open: a few of the video’s liveliest moments cut together in a look, ending on a title card, before the video proper starts. One click builds a starter from the footage; then swap scenes, reorder them, retime them or change the look.</p>}
                 <div className="grid grid-cols-2 gap-2 text-[12px] text-muted">
                   <label>
                     Scenes
@@ -2522,7 +2522,7 @@ export function VideoEditorWidget() {
                 {introReg && (
                   <>
                     <p className="text-[12px] text-faint" data-intro-summary>
-                      {describeIntro(project)}. Titles and the export range moved with the drive; music stays where it is and plays under the intro.
+                      {describeIntro(project)}. Titles and the export range moved with the main video; music stays where it is and plays under the intro.
                     </p>
                     <div className="space-y-1" data-intro-scenes>
                       {[...introReg.scenes, ...(introReg.card ? [introReg.card] : [])].map((c, i) => {
@@ -2576,7 +2576,7 @@ export function VideoEditorWidget() {
                         </label>
                       </div>
                       <input value={project.intro.card.text} onChange={(e) => setIntro({ card: { ...project.intro.card, text: e.target.value } })} placeholder={project.name} className={INPUT} aria-label="Card title" />
-                      <input value={project.intro.card.subtitle} onChange={(e) => setIntro({ card: { ...project.intro.card, subtitle: e.target.value } })} placeholder="Subtitle (optional): the route, the date" className={INPUT} aria-label="Card subtitle" />
+                      <input value={project.intro.card.subtitle} onChange={(e) => setIntro({ card: { ...project.intro.card, subtitle: e.target.value } })} placeholder="Subtitle (optional): a place, a date" className={INPUT} aria-label="Card subtitle" />
                       <label className="flex items-center gap-1.5">
                         <input type="checkbox" checked={project.intro.keepAudio} onChange={(e) => setIntro({ keepAudio: e.target.checked })} className="accent-[var(--accent)]" /> keep the scenes’ own sound (otherwise they play quiet under the music)
                       </label>
@@ -2687,7 +2687,7 @@ export function VideoEditorWidget() {
                 </div>
                 <p className="text-[12px] text-faint">Grading re-encodes that clip on export; with no grade, rotation or crop the clip is copied without re-encoding.</p>
               </>
-            ) : <p className="text-muted">Select a clip to grade it. Apply the LUT once, then copy the look to every clip for a consistent drive.</p>)}
+            ) : <p className="text-muted">Select a clip to grade it. Apply the LUT once, then copy the look to every clip so the whole edit matches.</p>)}
             {tab === "audio" && (
               <>
                 <div className="flex flex-wrap items-center gap-1.5">
@@ -2731,7 +2731,7 @@ export function VideoEditorWidget() {
                       <button type="button" onClick={() => update(current.id, { gainDb: DEFAULT_CLIP_GAIN_DB })} className={GHOST}>
                         Reset to {DEFAULT_CLIP_GAIN_DB} dB
                       </button>
-                      <span className="text-[12px] text-faint">New clips start at {DEFAULT_CLIP_GAIN_DB} dB so road noise sits under the music.</span>
+                      <span className="text-[12px] text-faint">New clips start at {DEFAULT_CLIP_GAIN_DB} dB so the original sound sits under the music.</span>
                     </div>
                   </>
                 )}
@@ -2846,7 +2846,7 @@ export function VideoEditorWidget() {
                     )}
                   </span>
                 </div>
-                <p className="text-[12px] text-faint">Download the template (one file for the intro and the titles), give it to an LLM with your route notes (places, roads, dates), then import the JSON it returns: every title with its timing, position, colours, font and size arrives populated.</p>
+                <p className="text-[12px] text-faint">Download the template (one file for the intro and the titles), give it to an LLM with your notes (places, people, dates), then import the JSON it returns: every title with its timing, position, colours, font and size arrives populated.</p>
                 {project.titles.length > 0 && <p className="text-[12px] text-faint">In time order. Open one to edit it; titles that overlap in time are all drawn, so give them different positions.</p>}
                 {[...project.titles]
                   .sort((a, b) => a.start - b.start)
@@ -3071,7 +3071,7 @@ export function VideoEditorWidget() {
                     )}
                   </div>
                   {project.export.range && !range && <p className="text-[12px] text-danger">From must come before To (inside the timeline), or the whole timeline is exported.</p>}
-                  <p className="text-[12px] text-faint">Export just a part of the drive — to check a grade quickly, or to cut one section for a short.</p>
+                  <p className="text-[12px] text-faint">Export just a part of the timeline — to check a grade quickly, or to cut one section for a short.</p>
                 </div>
                 <div className="grid grid-cols-2 gap-2">
                   <label className="text-[12.5px] text-muted">
@@ -3162,7 +3162,7 @@ export function VideoEditorWidget() {
                   </button>
                   <p className="text-[12px] text-faint">Runs the real export — the same spans, grades, transitions, intro effects, titles and steady lights — at {previewOpts.height}p into the browser&apos;s private storage, then plays it in the preview box so you can check cuts frame by frame before the full export. The live preview is close, but this is exact.</p>
                 </div>
-                <p className="text-[12px] text-faint">Traffic lights, brake lights and LED signs pulse faster than the shutter and blink on camera. Steady lights keeps every bright or strongly coloured light at its brightest over the last two or three frames, so a light that drops out for a frame or two stays lit; the preview shows it while playing. Fast-moving lights at night can leave a short trail — prefer the 2-frame setting if they do.</p>
+                <p className="text-[12px] text-faint">LED lights — signs, displays, traffic and vehicle lights — pulse faster than the shutter and blink on camera. Steady lights keeps every bright or strongly coloured light at its brightest over the last two or three frames, so a light that drops out for a frame or two stays lit; the preview shows it while playing. Fast-moving lights at night can leave a short trail — prefer the 2-frame setting if they do.</p>
                 <div className="rounded-[var(--radius-sm)] bg-base p-2 text-[12.5px]">
                   <div className="flex flex-wrap gap-x-4 gap-y-1">
                     <span>
@@ -3228,7 +3228,7 @@ export function VideoEditorWidget() {
                 <button type="button" onClick={() => void runExport()} disabled={!project.clips.length || !!job} className={PRIMARY}>
                   <Download size={14} /> Export to project folder
                 </button>
-                <p className="text-[12px] text-faint">Upload the file to YouTube as-is: HEVC in MP4 at 80–160 Mbps is what YouTube recommends for 8K. You can switch tabs or minimise the window while it runs: the page holds a lock so the browser does not freeze it, keeps the display awake while it is visible, and the tab title carries the progress.</p>
+                <p className="text-[12px] text-faint">The file is ready for YouTube or anywhere else: HEVC in MP4 at 80–160 Mbps is what YouTube recommends for 8K. You can switch tabs or minimise the window while it runs: the page holds a lock so the browser does not freeze it, keeps the display awake while it is visible, and the tab title carries the progress.</p>
               </>
             )}
           </div>
@@ -3245,7 +3245,7 @@ export function VideoEditorWidget() {
             Zoom
             <input type="range" min={1} max={ZOOM_MAX} step={1} value={zoom} onChange={(e) => zoomTo(Number(e.target.value))} className={cn(RANGE, "w-28 max-sm:w-16")} aria-label="Timeline zoom" title="Zoom (⌘/Ctrl + wheel over the timeline zooms around the pointer)" />
           </label>
-          <button type="button" onClick={() => zoomTo(1)} disabled={zoom === 1} className={cn(GHOST, "h-7 px-2 text-[12px]")} title="Fit the whole drive in view">
+          <button type="button" onClick={() => zoomTo(1)} disabled={zoom === 1} className={cn(GHOST, "h-7 px-2 text-[12px]")} title="Fit the whole timeline in view">
             Fit
           </button>
           <button type="button" onClick={() => setShortcutsOpen(true)} className={cn(GHOST, "h-7 px-2 text-[12px]")} title="Every keyboard shortcut (?)" aria-label="Keyboard shortcuts" data-shortcuts>

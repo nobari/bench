@@ -25,15 +25,16 @@ export default function AboutPage() {
         <section>
           <h2 className="text-[15px] font-semibold text-ink">How it works</h2>
           <p className="mt-2">
-            Every tool runs in your browser. Your text, files and images are processed on your device
-            and never uploaded — the pages are static and there is no account, no quota and no tracking of
-            what you paste. The one exception is the{" "}
+            Every tool runs in your browser, so your text, files and images stay on your device and are
+            never uploaded. The pages are static: there is no account, no quota and nothing you paste is
+            tracked. The one exception is the{" "}
             <Link href="/web/short-url" className="text-accent hover:underline">
               URL shortener
             </Link>
-            , which has to store the destination on a server; it says so on its page. Page views are
-            counted anonymously with Google Analytics — without query strings, so your inputs never reach
-            it, and not at all for browsers that send Do Not Track or Global Privacy Control.
+            , which keeps only the destination of each short link you create so the link can work for
+            whoever opens it — and it says so on its page. Page views are counted anonymously with Google
+            Analytics, without query strings so your inputs never reach it, and not at all for browsers
+            that send Do Not Track or Global Privacy Control.
           </p>
           <p className="mt-2">
             The state of a tool lives in its URL, so the Share button on any page gives you a link that
