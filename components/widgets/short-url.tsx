@@ -13,7 +13,7 @@ import { cn } from "@/lib/utils";
 
 /**
  * The long URL is deliberately NOT mirrored into the query string (it can be
- * 10,000 characters and may be private). `?i=` is read once for deep links and
+ * 200,000 characters and may be private). `?i=` is read once for deep links and
  * `?missing=` is set by /s/<code> when a link is unknown or has been evicted.
  */
 function readInitial(): { input: string; missing: string | null } {

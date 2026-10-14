@@ -16,7 +16,8 @@ export const SHORTEN_SHARE_ABOVE = 128;
  */
 export const SHARE_SYNC_EVENT = "bench:share";
 
-export type ShareResult = "full" | "short";
+/** short: a short link; full: the link was short enough as it was; long: beyond the shortener's limit; failed: the shortener did not answer. */
+export type ShareResult = "full" | "short" | "long" | "failed";
 
 async function shorten(url: string): Promise<string | null> {
   try {
@@ -43,10 +44,10 @@ export async function copyShareLink(url: string, opts: { forceFull?: boolean } =
   const wantShort = !opts.forceFull && url.length > SHORTEN_SHARE_ABOVE && url.length <= MAX_URL_LENGTH;
   if (!wantShort) {
     await navigator.clipboard.writeText(url);
-    return "full";
+    return !opts.forceFull && url.length > MAX_URL_LENGTH ? "long" : "full";
   }
 
-  let result: ShareResult = "full";
+  let result: ShareResult = "failed";
   const text = shorten(url).then((short) => {
     if (short) result = "short";
     return short ?? url;
@@ -86,13 +87,13 @@ export function ShareButton({ className, variant = "primary" }: Props) {
     try {
       const result = await copyShareLink(href, { forceFull });
       setState(result);
-      setTimeout(() => setState("idle"), 2000);
+      setTimeout(() => setState("idle"), result === "long" || result === "failed" ? 4500 : 2000);
     } catch {
       setState("idle");
     }
   };
 
-  const done = state === "full" || state === "short";
+  const done = state === "full" || state === "short" || state === "long" || state === "failed";
   const label =
     state === "busy"
       ? "Shortening…"
@@ -100,7 +101,11 @@ export function ShareButton({ className, variant = "primary" }: Props) {
         ? "Short link copied"
         : state === "full"
           ? "Link copied"
-          : "Share link";
+          : state === "long"
+            ? `Full link copied — over ${Math.round(MAX_URL_LENGTH / 1000)}k characters, too long to shorten`
+            : state === "failed"
+              ? "Full link copied — the shortener did not answer"
+              : "Share link";
 
   return (
     <button

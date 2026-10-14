@@ -2035,9 +2035,9 @@ export const TOOLS: ToolDef[] = [
     group: "dev",
     title: "URL Shortener",
     short: "URL shortener",
-    tagline: "Turn a URL of up to 10,000 characters into a short link — best-effort, made for handing off, not forever",
+    tagline: "Turn a URL of up to 200,000 characters into a short link — best-effort, made for handing off, not forever",
     description:
-      "Shorten very long URLs (up to 10,000 characters) into a short bench.bozmoz.com link. Links are stored on Vercel's free tier and cleared oldest-and-largest first when space runs out — ideal for sharing a huge URL briefly, not for permanent references.",
+      "Shorten very long URLs (up to 200,000 characters) into a short bench.bozmoz.com link. Links are stored on Vercel's free tier and cleared oldest-and-largest first when space runs out — ideal for sharing a huge URL briefly, not for permanent references.",
     keywords: [
       "url shortener",
       "shorten long url",
@@ -2046,6 +2046,7 @@ export const TOOLS: ToolDef[] = [
       "short link generator",
       "url shortener no signup",
       "shorten 10000 character url",
+      "shorten 100000 character url",
       "temporary short link",
       "tinyurl alternative",
     ],
@@ -2053,10 +2054,10 @@ export const TOOLS: ToolDef[] = [
     status: "beta",
     widget: "short-url",
     howItWorks:
-      "Paste any http(s) URL up to 10,000 characters and press Shorten. This is the one Bench tool that talks to a server: the destination is saved in a private Vercel Blob store (the code is a fingerprint of the URL, so the same URL always gets the same link) and /s/<code> answers with a 302 redirect. Storage is capped well inside Vercel's free allowance; when the cap is reached, links are evicted first-in-first-out weighted by size — an old, large link is cleared before a recent, small one. There is no guarantee that any link lives forever; that is the trade-off for a free, no-signup shortener. Use it to hand a giant URL to someone today, not as a permanent reference. The long URL never enters this page's address bar, and nothing is logged beyond what Vercel keeps for the request.",
+      "Paste any http(s) URL up to 200,000 characters and press Shorten. This is the one Bench tool that talks to a server: the destination is saved in a private Vercel Blob store (the code is a fingerprint of the URL, so the same URL always gets the same link) and /s/<code> answers with a 302 redirect — or, for a destination longer than a redirect header can carry (about 6,000 characters, as with a share link holding a whole document), with a small page that sends the browser on. Storage is capped well inside Vercel's free allowance; when the cap is reached, links are evicted first-in-first-out weighted by size — an old, large link is cleared before a recent, small one. There is no guarantee that any link lives forever; that is the trade-off for a free, no-signup shortener. Use it to hand a giant URL to someone today, not as a permanent reference. The long URL never enters this page's address bar, and nothing is logged beyond what Vercel keeps for the request.",
     faq: [
-      { q: "How long does a short link last?", a: "As long as there is room. The store is capped below Vercel's free Blob quota; once it fills, links are removed oldest-and-largest first (ranked by bytes × age). A small link may live a long time, a 10,000-character link will go sooner. Nothing is guaranteed — do not rely on these links in published documents or code." },
-      { q: "Why the 10,000-character limit?", a: "Most browsers and servers handle URLs of around 2,000 characters comfortably and start failing somewhere between 8,000 and 32,000. A 10,000-character ceiling covers huge query strings, data-heavy deep links and share URLs from other Bench tools while keeping every stored link small." },
+      { q: "How long does a short link last?", a: "As long as there is room. The store is capped below Vercel's free Blob quota; once it fills, links are removed oldest-and-largest first (ranked by bytes × age). A small link may live a long time, a 100,000-character link will go sooner. Nothing is guaranteed — do not rely on these links in published documents or code." },
+      { q: "How long can the URL be?", a: "Up to 200,000 characters — enough for a share link that carries a whole Markdown document with embedded tools. Browsers open such URLs fine, but a redirect header cannot carry them, so a destination over about 6,000 characters is served as a small page whose script (or, without script, a meta refresh) sends the browser on; shorter destinations get a plain 302 redirect. Either way the short link is the same seven characters." },
       { q: "Is it private?", a: "The destination URL is stored server-side in a private Vercel Blob store — it is not publicly listable, but anyone holding the short link can follow it. Do not shorten URLs that contain secrets or tokens you would not paste into a chat." },
       { q: "What happens if I shorten the same URL twice?", a: "You get the same short link. The code is derived from a SHA-256 fingerprint of the URL, so repeating a request never creates duplicates." },
       { q: "Why does the redirect use 302?", a: "Because links can expire. A temporary (302) redirect tells browsers and crawlers not to cache the mapping permanently, and the redirect responses are marked noindex." },

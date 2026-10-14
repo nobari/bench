@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { CODE_RE } from "@/lib/tools/web/shortlink";
+import { CODE_RE, HEADER_REDIRECT_MAX, redirectPage } from "@/lib/tools/web/shortlink";
 import { resolveShortLink, storageConfigured } from "@/lib/server/shortlinks";
 
 export const dynamic = "force-dynamic";
@@ -22,12 +22,13 @@ export async function GET(req: Request, ctx: { params: Promise<{ code: string }>
     return NextResponse.redirect(back, { status: 302, headers: { "Cache-Control": "no-store" } });
   }
 
-  return NextResponse.redirect(target, {
-    status: 302,
-    headers: {
-      // Short CDN cache keeps popular links cheap; an evicted link lingers a few minutes at most.
-      "Cache-Control": "public, max-age=0, s-maxage=300, stale-while-revalidate=600",
-      "X-Robots-Tag": "noindex, nofollow",
-    },
-  });
+  // Short CDN cache keeps popular links cheap; an evicted link lingers a few minutes at most.
+  const headers = {
+    "Cache-Control": "public, max-age=0, s-maxage=300, stale-while-revalidate=600",
+    "X-Robots-Tag": "noindex, nofollow",
+  };
+  // A destination longer than a redirect header can safely carry (a share link holding a whole document, say)
+  // goes through a small page that sends the browser on.
+  if (target.length > HEADER_REDIRECT_MAX) return new NextResponse(redirectPage(target), { status: 200, headers: { ...headers, "Content-Type": "text/html; charset=utf-8" } });
+  return NextResponse.redirect(target, { status: 302, headers });
 }

@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { CODE_RE } from "@/lib/tools/web/shortlink";
+import { CODE_RE, HEADER_REDIRECT_MAX, redirectPage } from "@/lib/tools/web/shortlink";
 import { resolveShortLink, storageConfigured } from "@/lib/server/shortlinks";
 
 export const dynamic = "force-dynamic";
@@ -28,8 +28,8 @@ export async function GET(req: Request, ctx: { params: Promise<{ code: string }>
   embed.pathname = `/embed${url.pathname.replace(/\/$/, "")}`;
   embed.search = url.search;
   embed.hash = url.hash;
-  return NextResponse.redirect(embed, {
-    status: 302,
-    headers: { "Cache-Control": "public, max-age=0, s-maxage=300, stale-while-revalidate=600", "X-Robots-Tag": "noindex, nofollow" },
-  });
+  const headers = { "Cache-Control": "public, max-age=0, s-maxage=300, stale-while-revalidate=600", "X-Robots-Tag": "noindex, nofollow" };
+  const to = embed.toString();
+  if (to.length > HEADER_REDIRECT_MAX) return new NextResponse(redirectPage(to), { status: 200, headers: { ...headers, "Content-Type": "text/html; charset=utf-8" } });
+  return NextResponse.redirect(embed, { status: 302, headers });
 }

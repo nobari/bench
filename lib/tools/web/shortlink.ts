@@ -11,7 +11,9 @@
  */
 
 /** Longest destination URL accepted (characters). */
-export const MAX_URL_LENGTH = 10_000;
+export const MAX_URL_LENGTH = 200_000;
+/** Targets up to this long travel in a redirect header; longer ones get a small page that sends the browser on. */
+export const HEADER_REDIRECT_MAX = 6_000;
 /** Short code length range; codes are a base62 prefix of the URL's SHA-256. */
 export const MIN_CODE_LENGTH = 7;
 export const MAX_CODE_LENGTH = 12;
@@ -139,4 +141,20 @@ export interface StoreStats {
   links: number;
   bytes: number;
   capBytes: number;
+}
+
+const attr = (v: string) => v.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+/**
+ * A page that sends the browser to a long destination: redirect headers have size limits that a share link
+ * carrying a whole document can exceed, while a script or a meta refresh can carry any length.
+ */
+export function redirectPage(target: string): string {
+  const js = JSON.stringify(target).replace(/<\//g, "<\\/");
+  return `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="robots" content="noindex, nofollow"><title>Opening…</title>
+<noscript><meta http-equiv="refresh" content="0;url=${attr(target)}"></noscript>
+<script>location.replace(${js});</script>
+</head><body style="font:15px system-ui,sans-serif;padding:24px"><p>Opening the link… <a href="${attr(target)}">Continue</a> if nothing happens.</p></body></html>
+`;
 }
