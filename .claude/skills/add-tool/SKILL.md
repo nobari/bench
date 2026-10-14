@@ -283,6 +283,10 @@ any `href` in widgets that point at the moved tool.
   coexist fine; two tools in the same category can't share a slug.
 - **Unknown routes 404** — `dynamicParams = false` on the `[category]` and
   `[category]/[tool]` routes; only registered tools render.
+- **Routes live in the `(site)` group** (`app/(site)/…`), whose layout adds the
+  header, sidebar and footer. `app/embed/[category]/[tool]` renders the same
+  widget without them for Markdown `embed` blocks; every registered tool gets
+  both pages automatically. The root layout holds only the document shell.
 - **lucide brand icons were removed** (no `Github`). For brand glyphs, inline an
   SVG (see `components/icons.tsx`).
 - **Untyped worker deps** need a `types/*.d.ts` declaration.

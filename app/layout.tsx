@@ -3,9 +3,6 @@ import { IBM_Plex_Sans, IBM_Plex_Mono } from "next/font/google";
 import { Analytics } from "@vercel/analytics/next";
 import { SpeedInsights } from "@vercel/speed-insights/next";
 import { SITE, absoluteUrl, getBaseUrl } from "@/lib/site";
-import { SiteHeader } from "@/components/site-header";
-import { SiteFooter } from "@/components/site-footer";
-import { ToolNav } from "@/components/tool-nav";
 import { GoogleAnalytics } from "@/components/google-analytics";
 import { Providers } from "./providers";
 import "./globals.css";
@@ -83,16 +80,7 @@ export default function RootLayout({
         />
       </head>
       <body className="flex min-h-full flex-col">
-        <Providers>
-          <SiteHeader />
-          <div className="flex w-full flex-1">
-            <ToolNav className="hidden lg:block" />
-            <div className="flex min-w-0 flex-1 flex-col">
-              <main className="flex-1">{children}</main>
-              <SiteFooter />
-            </div>
-          </div>
-        </Providers>
+        <Providers>{children}</Providers>
         <Analytics />
         <SpeedInsights />
         <GoogleAnalytics />

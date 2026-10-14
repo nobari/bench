@@ -5,7 +5,9 @@ import { useQueryState, parseAsStringLiteral } from "nuqs";
 import DOMPurify from "dompurify";
 import { compressToEncodedURIComponent, decompressFromEncodedURIComponent } from "lz-string";
 import {
+  AppWindow,
   Bold,
+  BookOpen,
   Code,
   Columns2,
   Download,
@@ -47,6 +49,10 @@ import {
 import { annotationsHtml, annotationsMarkdown, makeAnnotation, placeAnnotations, reanchor, sanitizeAnnotations, type MarkColor, type MdAnnotation, type Placed } from "@/lib/tools/text/annotations";
 import { rangeOffsets, textRuns, unwrapMarks, wrapMarks } from "@/lib/tools/text/annotate-dom";
 import { AnnotationEditor, AnnotationsPanel, CreateAnnotationPopover, clampPos, type PopoverPos } from "@/components/widgets/markdown-annotations";
+import { EmbedPicker } from "@/components/widgets/markdown-embed-picker";
+import { markdownGuide } from "@/lib/tools/text/markdown-guide";
+import { TOOLS } from "@/lib/tools/registry";
+import { EMBED_HEIGHT_MESSAGE } from "@/components/embed-shell";
 import { CopyButton } from "@/components/copy-button";
 import { SHARE_SYNC_EVENT } from "@/components/share-button";
 import { readShareState, useShareState } from "@/lib/share-state";
@@ -96,9 +102,17 @@ let mermaidSeq = 0;
 if (typeof window !== "undefined") {
   DOMPurify.addHook("afterSanitizeAttributes", (node) => {
     if (node.tagName === "A" && node.getAttribute("target") === "_blank") node.setAttribute("rel", "noopener noreferrer");
+    // Frames are allowed for one thing only: a Bench tool's embed page on this site.
+    if (node.tagName === "IFRAME" && !/^\/embed\/(?:[a-z0-9-]+\/[a-z0-9-]+|s\/[0-9A-Za-z]{6,16})(?:[?#]|$)/.test(node.getAttribute("src") ?? "")) node.remove();
   });
 }
-const sanitize = (html: string) => DOMPurify.sanitize(html, { ADD_ATTR: ["target"] });
+const sanitize = (html: string) => DOMPurify.sanitize(html, { ADD_TAGS: ["iframe"], ADD_ATTR: ["target", "sandbox", "allow", "loading", "referrerpolicy", "title"] });
+/** The tool at a path, for embed blocks. */
+const toolAt = (path: string) => {
+  const [, category, slug] = path.split("/");
+  const t = TOOLS.find((x) => x.category === category && x.slug === slug);
+  return t ? { title: t.title } : null;
+};
 
 /** Document source: compressed hash (Share, with its annotations) → `i` query → local draft (with its annotations) → sample. */
 function readInitial(): { text: string; annotations: MdAnnotation[]; source: "link" | "draft" | "sample" } {
@@ -157,7 +171,12 @@ export function MarkdownEditorWidget() {
   const urlsRef = useRef<string[]>([]);
 
   const deferred = useDeferredValue(text);
-  const rendered = useMemo(() => renderMarkdown(deferred, sanitize), [deferred]);
+  // Embeds frame other tools; a document shown inside a frame already (an embedded editor) shows them as cards.
+  const [nested] = useState(() => typeof window !== "undefined" && window.self !== window.top);
+  const rendered = useMemo(
+    () => renderMarkdown(deferred, sanitize, { embed: { hosts: typeof window !== "undefined" ? [window.location.host] : [], tool: toolAt, frames: !nested } }),
+    [deferred, nested],
+  );
   // React 19 resets innerHTML whenever it is handed a new object, so the preview's markup is kept as one object per
   // render result: unrelated state changes (autosave time, outline, copy feedback) leave the preview DOM alone.
   const previewHtml = useMemo(() => ({ __html: rendered.html }), [rendered.html]);
@@ -378,6 +397,23 @@ export function MarkdownEditorWidget() {
   const selectedData = selectedAnn ? annotations.find((a) => a.id === selectedAnn) : undefined;
   const selectedPlaced = selectedAnn ? placed.find((p) => p.id === selectedAnn) : undefined;
 
+  // Embedded tools report their height; frames without a fixed height follow it.
+  useEffect(() => {
+    const onMessage = (e: MessageEvent) => {
+      const data = e.data as { type?: unknown; height?: unknown } | null;
+      if (!data || data.type !== EMBED_HEIGHT_MESSAGE || typeof data.height !== "number") return;
+      const root = previewRef.current;
+      if (!root) return;
+      for (const frame of Array.from(root.querySelectorAll<HTMLIFrameElement>("iframe.md-embed-frame[data-auto]"))) {
+        if (frame.contentWindow === e.source) frame.style.height = `${Math.min(1400, Math.max(200, Math.ceil(data.height) + 2))}px`;
+      }
+    };
+    window.addEventListener("message", onMessage);
+    return () => window.removeEventListener("message", onMessage);
+  }, []);
+  const [picking, setPicking] = useState(false);
+  const guide = useMemo(() => markdownGuide(), []);
+
   // Clicks in the preview: a mark or its number selects that annotation, a copy button copies its code block, and
   // anything else (outside the popovers) drops the selection. The preview is plain HTML, so one listener serves all.
   const onPreviewClick = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
@@ -535,6 +571,15 @@ export function MarkdownEditorWidget() {
 
   return (
     <div className="space-y-3">
+      {picking && (
+        <EmbedPicker
+          onPick={(block) => {
+            setPicking(false);
+            apply((t, s, e) => insertBlock(t, s, e, block));
+          }}
+          onClose={() => setPicking(false)}
+        />
+      )}
       {/* control bar */}
       <div className="panel flex flex-wrap items-center gap-2 p-2">
         <div className="flex rounded-[var(--radius-sm)] border border-edge p-0.5">
@@ -577,6 +622,8 @@ export function MarkdownEditorWidget() {
             <button onClick={actions.code} title="Code (inline for a selection on one line, block otherwise)" className={TOOL}><Code size={15} /></button>
             <button onClick={actions.table} title="Table" className={TOOL}><Table size={15} /></button>
             <button onClick={actions.hr} title="Horizontal rule" className={TOOL}><Minus size={15} /></button>
+            <span className="mx-1 h-5 w-px bg-edge" />
+            <button onClick={() => setPicking(true)} title="Embed another Bench tool, live, in the state its link carries" className={TOOL} data-embed-button><AppWindow size={15} /></button>
           </div>
         )}
 
@@ -591,6 +638,11 @@ export function MarkdownEditorWidget() {
           </button>
           <button onClick={print} className={GHOST} title="Print, or save as PDF from the print dialog">
             <Printer size={13} /> Print / PDF
+          </button>
+          <span className="mx-0.5 h-5 w-px bg-edge" />
+          <CopyButton value={guide} label="LLM guide" className="h-7 px-2 text-[12px]" />
+          <button onClick={() => download("bench-markdown-guide.md", guide, "text/markdown")} className={GHOST} title="Download the guide for a language model: what this editor renders, its alerts, diagrams and embedded tools, with a working link for every tool" data-guide-download>
+            <BookOpen size={13} /> .md
           </button>
         </div>
       </div>

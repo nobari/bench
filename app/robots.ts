@@ -8,6 +8,8 @@ export default function robots(): MetadataRoute.Robots {
         // Explicitly welcome search crawlers and AI answer engines (GEO).
         userAgent: "*",
         allow: "/",
+        // Embed pages are tools without the site around them, meant for frames, not for search.
+        disallow: ["/embed/"],
       },
     ],
     sitemap: absoluteUrl("/sitemap.xml"),

@@ -8,7 +8,7 @@
 import type { MarkColor } from "@/lib/tools/text/annotations";
 
 /** Parts of the preview whose text is not the document's. */
-const SKIP = ".md-code-bar, .md-anchor, .md-mermaid, .md-ann-n";
+const SKIP = ".md-code-bar, .md-anchor, .md-mermaid, .md-ann-n, .md-embed";
 export const MARK_CLASS = "md-ann";
 export const MARKER_CLASS = "md-ann-n";
 

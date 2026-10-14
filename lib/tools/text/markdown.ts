@@ -82,6 +82,10 @@ const marked = new Marked({
       // A Mermaid fence becomes a diagram in the browser; the source stays inside until it is drawn (and for exports).
       // (The source rides only in the <pre>: in an attribute, Mermaid's "-->" arrows would be stripped as unsafe markup.)
       if (language === "mermaid") return `<div class="md-mermaid" data-diagram="mermaid"><pre class="md-mermaid-src"><code>${escapeHtml(text)}</code></pre></div>\n`;
+      if (language === "embed") {
+        const embed = renderEmbed(text, embedOptions);
+        if (embed) return embed;
+      }
       const out = highlight(language, text);
       const cls = `hljs${language ? ` language-${escapeHtml(language)}` : ""}`;
       return `<div class="md-code"><div class="md-code-bar"><span class="md-lang">${escapeHtml(language || "code")}</span><button type="button" class="md-copy" data-copy aria-label="Copy this code">Copy</button></div><pre><code class="${cls}">${out}</code></pre></div>\n`;
@@ -129,10 +133,118 @@ export interface Rendered {
   headings: HeadingInfo[];
 }
 
+/* ------------------------------------------------------------------ embeds */
+
+/**
+ * An `embed` fence frames another Bench tool in the preview, in whatever state its share link carries:
+ *
+ *     ```embed
+ *     https://bench.bozmoz.com/json/schema?m=design#s=…
+ *     height: 640
+ *     title: Ingot record schema
+ *     ```
+ *
+ * Only links to a tool on a Bench host (or a short link) are framed; anything else stays a code block.
+ */
+export interface EmbedOptions {
+  /** Hosts whose links count as Bench, besides the production host. */
+  hosts?: string[];
+  /** The tool at a path (`/json/schema`), or null when there is none. */
+  tool?: (path: string) => { title: string } | null;
+  /** Whether to put the frame in; without it the block is a card with the link (inside a frame already, say). */
+  frames?: boolean;
+}
+export const BENCH_HOST = "bench.bozmoz.com";
+export const EMBED_MIN_HEIGHT = 200;
+export const EMBED_MAX_HEIGHT = 2000;
+export const EMBED_DEFAULT_HEIGHT = 480;
+let embedOptions: EmbedOptions = {};
+
+export interface EmbedBlock {
+  url: string;
+  title: string;
+  /** Pixels, or null for auto (the frame reports its height). */
+  height: number | null;
+}
+
+/** The block's lines: the link, then `key: value` lines. */
+export function parseEmbedBlock(text: string): EmbedBlock | null {
+  let url = "";
+  let title = "";
+  let height: number | null = null;
+  for (const raw of text.split("\n")) {
+    const line = raw.trim();
+    if (!line) continue;
+    const kv = /^([a-z]+)\s*:\s*(.+)$/i.exec(line);
+    if (kv && !/^https?:$/i.test(kv[1] + ":")) {
+      const key = kv[1].toLowerCase(), value = kv[2].trim();
+      if (key === "url" || key === "src" || key === "link") url = value;
+      else if (key === "title") title = value.slice(0, 160);
+      else if (key === "height") {
+        const n = parseInt(value, 10);
+        height = /^auto$/i.test(value) || !Number.isFinite(n) ? null : Math.min(EMBED_MAX_HEIGHT, Math.max(EMBED_MIN_HEIGHT, n));
+      }
+      continue;
+    }
+    if (!url) url = line;
+  }
+  return url ? { url, title, height } : null;
+}
+
+export interface EmbedTarget {
+  /** The tool page with its state, origin-relative. */
+  href: string;
+  /** The embed page with the same state, origin-relative. */
+  src: string;
+  toolTitle: string;
+}
+
+/** Where a link points, when it is a Bench tool or short link; null otherwise. */
+export function embedTarget(url: string, opts: EmbedOptions = {}): EmbedTarget | null {
+  let u: URL;
+  try {
+    u = new URL(/^https?:\/\//i.test(url) ? url : `https://${url}`);
+  } catch {
+    return null;
+  }
+  const hosts = new Set([BENCH_HOST, `www.${BENCH_HOST}`, ...(opts.hosts ?? [])]);
+  if (!hosts.has(u.host.toLowerCase())) return null;
+  const path = u.pathname.replace(/\/+$/, "") || "/";
+  const short = /^\/s\/([0-9A-Za-z]{6,16})$/.exec(path);
+  if (short) return { href: `${path}${u.search}${u.hash}`, src: `/embed${path}${u.search}${u.hash}`, toolTitle: "Bench" };
+  if (!/^\/[a-z0-9-]+\/[a-z0-9-]+$/.test(path) || path.startsWith("/embed/")) return null;
+  const tool = opts.tool ? opts.tool(path) : { title: path.slice(1) };
+  if (!tool) return null;
+  return { href: `${path}${u.search}${u.hash}`, src: `/embed${path}${u.search}${u.hash}`, toolTitle: tool.title };
+}
+
+const SANDBOX = "allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-downloads allow-modals";
+
+function renderEmbed(text: string, opts: EmbedOptions): string | null {
+  const block = parseEmbedBlock(text);
+  if (!block) return null;
+  const target = embedTarget(block.url, opts);
+  if (!target) return null;
+  const title = block.title || target.toolTitle;
+  const height = block.height ?? EMBED_DEFAULT_HEIGHT;
+  const frame =
+    opts.frames === false
+      ? ""
+      : `<iframe class="md-embed-frame" src="${escapeHtml(target.src)}" title="${escapeHtml(title)}" loading="lazy" sandbox="${SANDBOX}" allow="clipboard-read; clipboard-write" referrerpolicy="same-origin" style="height:${height}px"${block.height === null ? ' data-auto="1"' : ""}></iframe>`;
+  return (
+    `<figure class="md-embed" data-embed="${escapeHtml(target.href)}">` +
+    `<figcaption class="md-embed-bar"><span class="md-embed-title">${escapeHtml(title)}</span>${block.title && block.title !== target.toolTitle ? `<span class="md-embed-tool">${escapeHtml(target.toolTitle)}</span>` : ""}<a class="md-embed-open" href="${escapeHtml(target.href)}" target="_blank" rel="noopener noreferrer">Open in Bench ↗</a></figcaption>` +
+    frame +
+    `<a class="md-embed-link" href="${escapeHtml(target.href)}">${escapeHtml(title)} — ${escapeHtml(target.toolTitle)} on Bench</a>` +
+    `</figure>\n`
+  );
+}
+
 /** Render GFM to HTML. Pass a sanitiser (DOMPurify in the browser) — raw HTML in the source is passed through otherwise. */
-export function renderMarkdown(md: string, sanitize?: (html: string) => string): Rendered {
+export function renderMarkdown(md: string, sanitize?: (html: string) => string, opts: { embed?: EmbedOptions } = {}): Rendered {
   slugCounts = new Map();
   collected = [];
+  embedOptions = opts.embed ?? {};
   const raw = marked.parse(md, { async: false }) as string;
   const headings = collected;
   return { html: sanitize ? sanitize(raw) : raw, headings };
@@ -241,7 +353,8 @@ img{max-width:100%}hr{border:0;border-top:1px solid #d6dccb;margin:2em 0}input[t
 .md-ann-n[data-color=red],[data-color=red]>.md-notes-n{background:#f87171}.md-ann-n[data-color=green],[data-color=green]>.md-notes-n{background:#4ade80}.md-ann-n[data-color=blue],[data-color=blue]>.md-notes-n{background:#60a5fa}
 .md-notes{margin-top:2.5em;border-top:1px solid #d6dccb;padding-top:1em;font-size:.95em}.md-notes h2{border:0;font-size:1.2em;margin-top:0}.md-notes ol{list-style:none;padding:0}.md-notes li{margin:.6em 0;padding-left:2.2em;position:relative}
 .md-notes-n{position:absolute;left:0;top:.15em;font-size:.8em;vertical-align:baseline;margin:0}.md-notes q{font-style:italic;color:#5c6854}.md-notes-text{display:block;white-space:pre-wrap}.md-notes-state{color:#8a8f99;font-size:.9em}.md-notes-done q{text-decoration:line-through}
-@media print{main{padding:0}.md-ann,.md-ann-n,.md-notes-n{-webkit-print-color-adjust:exact;print-color-adjust:exact}}`;
+.md-embed{margin:0 0 1em;border:1px solid #d6dccb;border-radius:8px;overflow:hidden;background:#fff}.md-embed-bar{display:flex;align-items:center;gap:.6em;padding:.45em .8em;border-bottom:1px solid #d6dccb;background:#f3f5ee;font-size:.85em}.md-embed-title{font-weight:600}.md-embed-tool{color:#5c6854}.md-embed-open{margin-left:auto;white-space:nowrap}.md-embed-frame{display:block;width:100%;border:0;background:#fff}.md-embed-link{display:none;padding:.6em .8em}
+@media print{main{padding:0}.md-ann,.md-ann-n,.md-notes-n{-webkit-print-color-adjust:exact;print-color-adjust:exact}.md-embed-frame{display:none}.md-embed-link{display:block}.md-embed-open{display:none}}`;
 
 /**
  * Preview HTML made fit for a file: the copy bars go, drawn diagrams stay (their source is dropped once drawn), and the
@@ -250,6 +363,8 @@ img{max-width:100%}hr{border:0;border-top:1px solid #d6dccb;margin:2em 0}input[t
 export function exportableHtml(html: string): string {
   return html
     .replace(/ data-selected="true"/g, "")
+    .replace(/(<iframe class="md-embed-frame" src=")\//g, `$1https://${BENCH_HOST}/`)
+    .replace(/(<a class="md-embed-(?:open|link)" href=")\//g, `$1https://${BENCH_HOST}/`)
     .replace(/<div class="md-code-bar">[\s\S]*?<\/div>/g, "")
     .replace(/<a class="md-anchor"[^>]*>#<\/a>/g, "")
     .replace(/(<div class="md-mermaid"[^>]*data-state="done"[^>]*>)<pre class="md-mermaid-src">[\s\S]*?<\/pre>/g, "$1");

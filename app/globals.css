@@ -763,6 +763,20 @@ html[data-nav="hidden"] .tool-nav {
   .md-panel[data-fill], .md-panel:fullscreen { background: var(--color-base); }
   .md-panel:fullscreen { display: flex; flex-direction: column; overflow: hidden; }
 
+  /* embeds: another tool framed in the preview, with a bar naming it and a way to the full page */
+  .md-preview .md-embed { margin: 0 0 0.9em; border: 1px solid var(--color-edge); border-radius: var(--radius); overflow: hidden; background: var(--color-base); }
+  .md-preview .md-embed-bar { display: flex; align-items: center; gap: 0.6em; padding: 0.4em 0.8em; border-bottom: 1px solid var(--color-edge); background: var(--color-base-2); font-size: 0.82em; }
+  .md-preview .md-embed-title { font-weight: 600; color: var(--color-ink); }
+  .md-preview .md-embed-tool { color: var(--color-faint); }
+  .md-preview .md-embed-open { margin-left: auto; white-space: nowrap; font-size: 0.95em; }
+  .md-preview .md-embed-frame { display: block; width: 100%; border: 0; background: var(--color-base); transition: height 0.15s; }
+  .md-preview .md-embed-link { display: none; padding: 0.6em 0.8em; }
+  .md-preview .md-embed:not(:has(.md-embed-frame)) .md-embed-link { display: block; }
+  @media print {
+    .md-preview .md-embed-frame, .md-preview .md-embed-open { display: none; }
+    .md-preview .md-embed-link { display: block; }
+  }
+
   /* annotations: highlighted stretches in four colours, each ending in a numbered marker */
   .md-preview .md-ann, .md-preview .md-ann-n { --mark: rgba(250, 204, 21, 0.42); --mark-solid: #facc15; }
   .md-preview .md-ann[data-color="red"], .md-preview .md-ann-n[data-color="red"] { --mark: rgba(248, 113, 113, 0.42); --mark-solid: #f87171; }
