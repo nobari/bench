@@ -19,6 +19,7 @@ import {
   Output,
   StreamTarget,
   VideoSampleSink,
+  type InputVideoTrack,
   type VideoSample,
   canEncodeVideo,
   type StreamTargetChunk,
@@ -898,6 +899,73 @@ export interface ExportOptions {
   signal?: AbortSignal;
   /** Called with every video frame's timeline time as it is handed to the encoder (tests check they only go forward). */
   onFrame?: (timelineT: number) => void;
+  /**
+   * Resumable export: finished stretches of video go to numbered part files (one every `seconds` of timeline,
+   * 180 by default, and whatever was done when the export stops) and into the manifest; the file is joined from
+   * the parts at the end. A manifest with parts in it continues from where they end.
+   */
+  parts?: { store: PartStore; manifest: ExportManifest; seconds?: number };
+  /**
+   * A frame failed. Answer "skip" to leave that stretch out and carry on (the export waits for the answer), or
+   * "stop" to end with what is done. Without this, the error ends the export.
+   */
+  onFault?: (fault: ExportFault) => Promise<"skip" | "stop">;
+}
+
+/** A finished part of a resumable export: a video-only MP4 covering [start, end) of the export's time. */
+export interface ExportPart {
+  file: string;
+  start: number;
+  end: number;
+  frames: number;
+}
+
+export interface ExportManifest {
+  version: 1;
+  /** A hash of everything that shapes the file; a changed project cannot continue these parts. */
+  fingerprint: string;
+  /** The output file's name. */
+  name: string;
+  /** Length of the export in seconds. */
+  total: number;
+  parts: ExportPart[];
+  /** Stretches of the export's time left out on the user's say-so after a frame failed. */
+  skipped: { from: number; to: number; message: string }[];
+  updatedAt: number;
+}
+
+/** Where a resumable export keeps its parts and manifest. */
+export interface PartStore {
+  createWritable(file: string): Promise<WritableStream<StreamTargetChunk>>;
+  file(file: string): Promise<File | null>;
+  remove(file: string): Promise<void>;
+  save(manifest: ExportManifest): Promise<void>;
+}
+
+export interface ExportFault {
+  /** Timeline time of the frame that failed. */
+  timelineT: number;
+  /** Where in the footage it is. */
+  sourceT: number;
+  clipName: string;
+  message: string;
+  /** How many frames have failed in this export, this one included. */
+  count: number;
+  /** Seconds of timeline that "skip" leaves out: one frame, or up to the next keyframe when the decoder failed. */
+  stretch: number;
+}
+
+/** A part file every so often, so a crash costs minutes, not hours. */
+export const PART_SECONDS = 180;
+const MAX_FAULTS = 300;
+
+/** The spans from `from` on, the first one cut to start there. */
+function trimSpans(list: ExportSpan[], from: number): ExportSpan[] {
+  return list.flatMap((s) => {
+    const s0 = Math.max(s.start, from);
+    if (s.end - s0 <= 1e-6) return [];
+    return s0 === s.start ? [s] : [{ ...s, sourceIn: s.sourceIn + (s0 - s.start) * (s.speed || 1), start: s0 }];
+  });
 }
 
 const PRESET_LATENCY: Record<
@@ -978,6 +1046,12 @@ export interface ExportResult {
   /** Every step with its actual time, and the speeds measured, to seed the next export's estimates. */
   steps: StepProgress[];
   measured: SpeedPriors;
+  /** Stretches left out after frames failed (resumable exports remember them across runs). */
+  skipped: ExportManifest["skipped"];
+  /** Part files joined into the file (0 for a single-file export). */
+  parts: number;
+  /** Where this run started in the export's time (0 unless it continued earlier parts). */
+  resumedFrom: number;
 }
 
 export async function exportProject(
@@ -1009,8 +1083,17 @@ async function exportWithPulse(
   const fps = first.fps || 30;
   const codec: VideoCodec = project.export.codec;
   const bitrate = project.export.bitrateMbps * 1e6;
-  const spans = planExport(project);
-  const total = spans.reduce((a, s) => a + (s.end - s.start), 0);
+  const spansAll = planExport(project);
+  const total = spansAll.reduce((a, s) => a + (s.end - s.start), 0);
+  // A partial export starts its file at zero: timeline times shift back by the range start.
+  const offset = exportRange(project)?.from ?? 0;
+  const parts = opts.parts ?? null;
+  const manifest = parts?.manifest ?? null;
+  const partSeconds = parts?.seconds ?? PART_SECONDS;
+  // Continuing earlier parts: this run covers what comes after them.
+  const resumeFrom = manifest?.parts.length ? manifest.parts[manifest.parts.length - 1].end : 0;
+  const spans = trimSpans(spansAll, offset + resumeFrom);
+  const remaining = Math.max(0, total - resumeFrom);
   const needsFileLut = project.clips.some((c) => isFileLutKind(c.grade.lut));
   const lutsToLoad = [
     needsFileLut ? "DJI's conversion file" : "",
@@ -1036,16 +1119,17 @@ async function exportWithPulse(
       preset: project.export.preset,
       bitrateMbps: project.export.bitrateMbps,
     },
+    parts: parts ? (manifest?.parts.length ?? 0) + Math.max(1, Math.ceil(remaining / partSeconds)) : undefined,
   });
   const tracker = new ProgressTracker(
     () => performance.now(),
     steps,
-    total,
-    Math.round(total * fps),
+    remaining,
+    Math.round(remaining * fps),
     opts.priors,
     defaultSpeeds(first.width * first.height, outW * outH),
     Date.now(),
-    ((bitrate + project.export.audioBitrateKbps * 1000) / 8) * total,
+    ((bitrate + project.export.audioBitrateKbps * 1000) / 8) * remaining,
   );
   let lastEmit = 0;
   const emit = (force = false) => {
@@ -1072,32 +1156,34 @@ async function exportWithPulse(
     throw new Error(
       `This browser can't encode ${codec.toUpperCase()} at ${outW}×${outH}. Try the other codec or a lower resolution.`,
     );
-  // Count what reaches the file: every chunk passes through here on its way to the folder.
-  const fileWriter = opts.writable.getWriter();
-  const counted = new WritableStream<StreamTargetChunk>({
-    write: async (chunk) => {
-      tracker.addBytes(chunk.data.byteLength);
-      emit();
-      for (;;) {
-        try {
-          await fileWriter.write(chunk);
-          return;
-        } catch (e) {
-          if (!opts.onWriteBlocked || !isSpaceError(e)) throw e;
-          await opts.onWriteBlocked(e);
+  // Count what reaches a file: every chunk passes through here on its way to the folder.
+  const countedStream = (target: WritableStream<StreamTargetChunk>, isFinal: boolean) => {
+    const fileWriter = target.getWriter();
+    return new WritableStream<StreamTargetChunk>({
+      write: async (chunk) => {
+        tracker.addBytes(chunk.data.byteLength);
+        emit();
+        for (;;) {
+          try {
+            await fileWriter.write(chunk);
+            return;
+          } catch (e) {
+            if (!opts.onWriteBlocked || !isSpaceError(e)) throw e;
+            await opts.onWriteBlocked(e);
+          }
         }
-      }
-    },
-    close: async () => {
-      // Everything is written; from here the browser reads the file back to check it, then moves it into place.
-      tracker.beginClose();
-      emit(true);
-      await fileWriter.close();
-    },
-    abort: (r) => fileWriter.abort(r),
-  });
-  // A partial export starts its file at zero: timeline times shift back by the range start.
-  const offset = exportRange(project)?.from ?? 0;
+      },
+      close: async () => {
+        // Everything is written; from here the browser reads the file back to check it, then moves it into place.
+        if (isFinal) {
+          tracker.beginClose();
+          emit(true);
+        }
+        await fileWriter.close();
+      },
+      abort: (r) => fileWriter.abort(r),
+    });
+  };
   const placedAll = placeClips(project.clips);
   const windows = transitionWindows(placedAll, project.media);
   const neighbour = new NeighbourFrames((id) => openInput(id));
@@ -1110,10 +1196,6 @@ async function exportWithPulse(
     const f = c.introRole ? introFrameAt(project, placedAll, timelineT) : null;
     return f ? styledGrade(c.grade, f.style) : c.grade;
   };
-  const output = new Output({
-    format: new Mp4OutputFormat({ fastStart: false }),
-    target: new StreamTarget(counted, { chunked: true }),
-  });
   const canvas = new OffscreenCanvas(outW, outH);
   const ctx2d = canvas.getContext("2d")!;
   const grader = new Grader(outW, outH);
@@ -1134,28 +1216,38 @@ async function exportWithPulse(
       deriveLut(base, "dji-official-study"),
     );
   }
-  const videoSource = new CanvasSource(canvas, {
+  const encoderConfig = {
     codec,
     bitrate,
     keyFrameInterval: 2,
     latencyMode: PRESET_LATENCY[project.export.preset],
-    hardwareAcceleration: "prefer-hardware",
-  });
-  output.addVideoTrack(videoSource, { frameRate: fps });
+    hardwareAcceleration: "prefer-hardware" as const,
+  };
   const sampleRate = 48000;
-  const audioSource = new AudioSampleSource({
-    codec: "aac",
-    bitrate: project.export.audioBitrateKbps * 1000,
-  });
-  output.addAudioTrack(audioSource);
-  output.setMetadataTags(
-    exportTags(project, `Bench video editor ${pkg.version}`),
-  );
-  await output.start();
+  const tags = exportTags(project, `Bench video editor ${pkg.version}`);
+  const newAudioSource = () =>
+    new AudioSampleSource({
+      codec: "aac",
+      bitrate: project.export.audioBitrateKbps * 1000,
+    });
+  // Single file: one output with the video and the audio. Parts: a video-only output per part, joined at the end.
+  let output: Output | null = null;
+  let videoSource: CanvasSource | null = null;
+  let audioSource: AudioSampleSource | null = null;
+  if (!parts) {
+    output = new Output({
+      format: new Mp4OutputFormat({ fastStart: false }),
+      target: new StreamTarget(countedStream(opts.writable, true), { chunked: true }),
+    });
+    videoSource = new CanvasSource(canvas, encoderConfig);
+    output.addVideoTrack(videoSource, { frameRate: fps });
+    audioSource = newAudioSource();
+    output.addAudioTrack(audioSource);
+    output.setMetadataTags(tags);
+    await output.start();
+  }
   tracker.endStep();
   emit(true);
-  let written = 0;
-  // Video, span by span, in timeline order.
   const inputs = new Map<string, Input>();
   const openInput = async (mediaId: string) => {
     if (inputs.has(mediaId)) return inputs.get(mediaId)!;
@@ -1168,39 +1260,124 @@ async function exportWithPulse(
     inputs.set(mediaId, inp);
     return inp;
   };
-  let spanIndex = 0;
-  // The timeline time of the last frame handed to the encoder: frames must only ever go forward, whatever the spans
+
+  // Parts: the one being written now (export time, not timeline time).
+  interface Segment {
+    file: string;
+    start: number;
+    end: number;
+    frames: number;
+    output: Output;
+    source: CanvasSource;
+  }
+  let segment: Segment | null = null;
+  const partError = (message: string) => Object.assign(new Error(message), { name: "PartError" });
+  const discardSegment = async (seg: Segment) => {
+    try {
+      await seg.output.cancel();
+    } catch {
+      /* already failed */
+    }
+    await parts!.store.remove(seg.file).catch(() => undefined);
+  };
+  const openSegment = async (startT: number) => {
+    const file = `part-${String(manifest!.parts.length + 1).padStart(4, "0")}.mp4`;
+    const writable = await parts!.store.createWritable(file);
+    const seg: Segment = {
+      file,
+      start: startT,
+      end: startT,
+      frames: 0,
+      output: new Output({
+        format: new Mp4OutputFormat({ fastStart: false }),
+        target: new StreamTarget(countedStream(writable, false), { chunked: true }),
+      }),
+      source: new CanvasSource(canvas, encoderConfig),
+    };
+    seg.output.addVideoTrack(seg.source, { frameRate: fps });
+    await seg.output.start();
+    segment = seg;
+  };
+  /** Finishes the open part so it counts as done; false when it could not be finished (then it is discarded). */
+  const closeSegment = async (): Promise<boolean> => {
+    const seg = segment;
+    if (!seg) return true;
+    segment = null;
+    if (!seg.frames) {
+      await discardSegment(seg);
+      return true;
+    }
+    try {
+      seg.source.close();
+      await seg.output.finalize();
+    } catch (e) {
+      console.warn(`Part ${seg.file} could not be finished and is discarded:`, e);
+      await discardSegment(seg);
+      return false;
+    }
+    manifest!.parts.push({ file: seg.file, start: seg.start, end: seg.end, frames: seg.frames });
+    manifest!.updatedAt = Date.now();
+    await parts!.store.save(manifest!);
+    return true;
+  };
+  /** Export time reached by the finished parts. */
+  const doneUntil = () => (manifest?.parts.length ? manifest.parts[manifest.parts.length - 1].end : resumeFrom);
+
+  // The timeline time of the last frame handed to an encoder: frames must only ever go forward, whatever the spans
   // and the footage's frame grid do, or the file would carry a frame before its predecessor (and the muxer refuses
   // one that lands on a keyframe).
   let lastFrameT = -Infinity;
   const addFrame = async (timelineT: number, duration: number) => {
-    await videoSource.add(timelineT - offset, duration);
+    const t = timelineT - offset;
+    if (parts) {
+      if (!segment || t - segment.start >= partSeconds) {
+        if (segment && !(await closeSegment())) throw partError("A finished part could not be written to the parts folder.");
+        await openSegment(t);
+      }
+      const seg = segment!;
+      await seg.source.add(t - seg.start, duration);
+      seg.frames++;
+      seg.end = t + duration;
+    } else await videoSource!.add(t, duration);
     lastFrameT = timelineT;
+    tracker.frame(t - resumeFrom);
+    emit();
     opts.onFrame?.(timelineT);
   };
-  for (const span of spans) {
-    spanIndex++;
-    if (signal?.aborted) throw new DOMException("Cancelled", "AbortError");
-    tracker.beginStep(`span-${spanIndex}`);
-    emit(true);
-    const clip = project.clips.find((c) => c.id === span.clipId)!;
-    const media = project.media[clip.media];
-    const input = await openInput(clip.media);
-    const track = (await input.getPrimaryVideoTrack())!;
-    const progress = (sourceT: number) => {
-      tracker.frame(written + (sourceT - span.sourceIn));
-      emit();
-    };
-    // A copy span is only truly copyable if the encoder/container accept the source packets; we re-encode here
-    // frame-accurately instead, but skip the GPU grade (identity draw) so it is still much faster than a graded span.
-    const sink = new VideoSampleSink(track);
-    const srcW = media.width ?? track.displayWidth,
-      srcH = media.height ?? track.displayHeight;
-    const speed = span.speed || 1;
-    // At 1× every source frame becomes an output frame. At other speeds the output keeps the source frame rate: each
-    // output tick shows the source frame playing at that moment, so 2× drops every other frame and 0.5× holds each twice.
-    let nextTick = span.start;
-    const frameDur = 1 / fps;
+
+  // Stretches left out after a frame failed and the user chose to go on (export time).
+  const skips = manifest?.skipped ?? [];
+  const isSkipped = (t: number) => skips.some((k) => t >= k.from - 1e-6 && t < k.to - 1e-6);
+  let current: { span: ExportSpan; track: InputVideoTrack; clipName: string; frameDur: number } | null = null;
+  /** Export time of the frame being composed or encoded right now, when one is. */
+  let pendingT: number | null = null;
+
+  // Video, span by span, in timeline order, from `fromExport` on.
+  const runVideo = async (fromExport: number) => {
+    let spanIndex = 0;
+    for (const planned of spans) {
+      spanIndex++;
+      if (planned.end - offset <= fromExport + 1e-6) continue;
+      const [span] = trimSpans([planned], fromExport + offset);
+      if (!span) continue;
+      if (signal?.aborted) throw new DOMException("Cancelled", "AbortError");
+      tracker.beginStep(`span-${spanIndex}`);
+      emit(true);
+      const clip = project.clips.find((c) => c.id === span.clipId)!;
+      const media = project.media[clip.media];
+      const input = await openInput(clip.media);
+      const track = (await input.getPrimaryVideoTrack())!;
+      // A copy span is only truly copyable if the encoder/container accept the source packets; we re-encode here
+      // frame-accurately instead, but skip the GPU grade (identity draw) so it is still much faster than a graded span.
+      const sink = new VideoSampleSink(track);
+      const srcW = media.width ?? track.displayWidth,
+        srcH = media.height ?? track.displayHeight;
+      const speed = span.speed || 1;
+      // At 1× every source frame becomes an output frame. At other speeds the output keeps the source frame rate: each
+      // output tick shows the source frame playing at that moment, so 2× drops every other frame and 0.5× holds each twice.
+      let nextTick = span.start;
+      const frameDur = 1 / fps;
+      current = { span, track, clipName: media?.name ?? clip.media, frameDur };
     const compose = async (sample: VideoSample, timelineT: number) => {
       const tr =
         windows.length && span.kind === "encode"
@@ -1284,89 +1461,210 @@ async function exportWithPulse(
         ctx2d.drawImage(steady.canvas, 0, 0, outW, outH);
       }
     };
-    // Lights are held over frames of this span only: nothing from the footage before a cut bleeds into it.
-    steady?.reset();
-    for await (const sample of sink.samples(span.sourceIn, span.sourceOut)) {
-      if (signal?.aborted) {
-        sample.close();
-        throw new DOMException("Cancelled", "AbortError");
-      }
-      await pauseGate();
-      if (signal?.aborted) {
-        sample.close();
-        throw new DOMException("Cancelled", "AbortError");
-      }
-      if (speed === 1) {
-        // The first sample is the frame showing at the in point, which may have begun before it (the in point need
-        // not sit on the frame grid): it enters at the span's start for what is left of it, or is skipped when almost
-        // nothing is left. Placed where it began, it would come before the previous span's last frame.
-        const lead = Math.max(0, span.sourceIn - sample.timestamp);
-        const timelineT = span.start + Math.max(0, sample.timestamp - span.sourceIn);
-        const shown = (sample.duration || frameDur) - lead;
-        if ((lead > 0 && shown < frameDur * 0.5) || timelineT <= lastFrameT) {
+      // Lights are held over frames of this span only: nothing from the footage before a cut bleeds into it.
+      steady?.reset();
+      for await (const sample of sink.samples(span.sourceIn, span.sourceOut)) {
+        if (signal?.aborted) {
           sample.close();
-          continue;
+          throw new DOMException("Cancelled", "AbortError");
         }
-        await compose(sample, timelineT);
-        await addFrame(timelineT, Math.max(shown, frameDur * 0.25));
-        progress(sample.timestamp);
-      } else {
-        // This source frame is on screen until its successor's timeline time; emit every output tick that falls inside.
-        const shownUntil =
-          span.start +
-          (sample.timestamp +
-            (sample.duration || frameDur * speed) -
-            span.sourceIn) /
-            speed;
-        while (nextTick < shownUntil - 1e-6 && nextTick < span.end - 1e-6) {
-          if (nextTick > lastFrameT) {
-            await compose(sample, nextTick);
-            await addFrame(nextTick, frameDur);
+        await pauseGate();
+        if (signal?.aborted) {
+          sample.close();
+          throw new DOMException("Cancelled", "AbortError");
+        }
+        // Whatever happens to the frame (a failure included), the sample goes back to the decoder.
+        try {
+          if (speed === 1) {
+            // The first sample is the frame showing at the in point, which may have begun before it (the in point need
+            // not sit on the frame grid): it enters at the span's start for what is left of it, or is skipped when
+            // almost nothing is left. Placed where it began, it would come before the previous span's last frame.
+            const lead = Math.max(0, span.sourceIn - sample.timestamp);
+            const timelineT = span.start + Math.max(0, sample.timestamp - span.sourceIn);
+            const shown = (sample.duration || frameDur) - lead;
+            if ((lead > 0 && shown < frameDur * 0.5) || timelineT <= lastFrameT || isSkipped(timelineT - offset)) continue;
+            pendingT = timelineT - offset;
+            await compose(sample, timelineT);
+            await addFrame(timelineT, Math.max(shown, frameDur * 0.25));
+            pendingT = null;
+          } else {
+            // This source frame is on screen until its successor's timeline time; emit every output tick inside.
+            const shownUntil =
+              span.start +
+              (sample.timestamp +
+                (sample.duration || frameDur * speed) -
+                span.sourceIn) /
+                speed;
+            while (nextTick < shownUntil - 1e-6 && nextTick < span.end - 1e-6) {
+              if (nextTick > lastFrameT && !isSkipped(nextTick - offset)) {
+                pendingT = nextTick - offset;
+                await compose(sample, nextTick);
+                await addFrame(nextTick, frameDur);
+                pendingT = null;
+              }
+              nextTick += frameDur;
+            }
           }
-          nextTick += frameDur;
-          tracker.frame(written + (nextTick - span.start));
-          emit();
+        } finally {
+          sample.close();
         }
       }
-      sample.close();
+      current = null;
+      tracker.endStep();
+      emit(true);
     }
-    written += span.end - span.start;
+  };
+
+  /** What failed, where, and how much "skip" would leave out. */
+  const describeFault = async (e: unknown, count: number): Promise<ExportFault> => {
+    const c = current!;
+    const message = e instanceof Error ? e.message : String(e);
+    const speed = c.span.speed || 1;
+    if (pendingT !== null) {
+      const t = pendingT + offset;
+      pendingT = null;
+      return { timelineT: t, sourceT: c.span.sourceIn + (t - c.span.start) * speed, clipName: c.clipName, message, count, stretch: c.frameDur };
+    }
+    // The decoder failed somewhere after the last frame: leave out up to the footage's next keyframe, where decoding
+    // can start afresh.
+    const t = lastFrameT === -Infinity ? c.span.start : Math.max(c.span.start, lastFrameT + c.frameDur);
+    const sourceT = c.span.sourceIn + (t - c.span.start) * speed;
+    let stretch = c.frameDur;
+    try {
+      const psink = new EncodedPacketSink(c.track);
+      const p = await psink.getPacket(sourceT);
+      const k = p ? await psink.getNextKeyPacket(p, { verifyKeyPackets: true }) : null;
+      if (k && k.timestamp > sourceT) stretch = Math.max(c.frameDur, (k.timestamp - sourceT) / speed);
+    } catch {
+      /* one frame then */
+    }
+    return { timelineT: t, sourceT, clipName: c.clipName, message, count, stretch: Math.min(stretch, Math.max(c.frameDur, c.span.end - t)) };
+  };
+
+  const isAbort = (e: unknown) => (e as DOMException)?.name === "AbortError";
+  const isPartError = (e: unknown) => (e as Error)?.name === "PartError";
+  let cursor = resumeFrom;
+  let faults = 0;
+  let lastFaultT = -1,
+    sameFault = 0;
+  try {
+    for (;;) {
+      try {
+        await runVideo(cursor);
+        break;
+      } catch (e) {
+        const canAsk = !!current && !isAbort(e) && !isPartError(e) && !!opts.onFault;
+        const fault = canAsk ? await describeFault(e, faults + 1) : null;
+        current = null;
+        // What was done stays: the open part is finished — on a cancel too, so a stop can be continued from.
+        if (parts) await closeSegment();
+        if (!fault) throw e;
+        faults++;
+        if (Math.abs(fault.timelineT - lastFaultT) < 1e-3) sameFault++;
+        else sameFault = 0;
+        lastFaultT = fault.timelineT;
+        if (faults > MAX_FAULTS || sameFault >= 3)
+          throw new Error(`${fault.message} — ${sameFault >= 3 ? "the same frame kept failing" : `${faults} frames failed`}; the export stopped, keeping what was finished.`);
+        tracker.pause();
+        emit(true);
+        const answer = await opts.onFault!(fault);
+        tracker.resume();
+        emit(true);
+        if (answer !== "skip") throw e;
+        skips.push({ from: fault.timelineT - offset, to: fault.timelineT - offset + fault.stretch, message: fault.message });
+        if (manifest) {
+          manifest.skipped = skips;
+          manifest.updatedAt = Date.now();
+          await parts!.store.save(manifest);
+        }
+        cursor = parts ? doneUntil() : Math.max(cursor, fault.timelineT - offset);
+      }
+    }
+    if (parts && segment && !(await closeSegment())) throw partError("The last part could not be written to the parts folder.");
+    await neighbour.reset();
+
+    // Audio, mixed and encoded into whichever output takes the file.
+    const audioInto = async (src: AudioSampleSource) => {
+      tracker.beginStep("audio");
+      emit(true);
+      await mixAudio(
+        { project, getFile, sampleRate },
+        offset,
+        offset + total,
+        async (samples, timestamp) => {
+          await pauseGate();
+          if (signal?.aborted) throw new DOMException("Cancelled", "AbortError");
+          tracker.audio(timestamp - offset);
+          emit();
+          const s = new AudioSample({
+            data: samples,
+            format: "f32",
+            numberOfChannels: 2,
+            sampleRate,
+            timestamp: timestamp - offset,
+          });
+          await src.add(s);
+          s.close();
+        },
+        signal,
+      );
+      src.close();
+      tracker.endStep();
+    };
+
+    if (parts) {
+      // The file: the parts copied packet by packet (no re-encoding), each shifted to its place, then the audio.
+      output = new Output({
+        format: new Mp4OutputFormat({ fastStart: false }),
+        target: new StreamTarget(countedStream(opts.writable, true), { chunked: true }),
+      });
+      const copied = new EncodedVideoPacketSource(codec);
+      output.addVideoTrack(copied, { frameRate: fps });
+      audioSource = newAudioSource();
+      output.addAudioTrack(audioSource);
+      output.setMetadataTags(tags);
+      await output.start();
+      tracker.beginStep("finalize");
+      emit(true);
+      let first = true;
+      for (const part of manifest!.parts) {
+        const f = await parts.store.file(part.file);
+        if (!f) throw new Error(`Part ${part.file} is missing from the parts folder. Discard the parts and export again.`);
+        const inp = new Input({ source: new BlobSource(f), formats: ALL_FORMATS });
+        const track = await inp.getPrimaryVideoTrack();
+        if (!track) throw new Error(`Part ${part.file} holds no video. Discard the parts and export again.`);
+        const config = first ? await track.getDecoderConfig() : null;
+        for await (const packet of new EncodedPacketSink(track).packets()) {
+          if (signal?.aborted) throw new DOMException("Cancelled", "AbortError");
+          await pauseGate();
+          await copied.add(packet.clone({ timestamp: packet.timestamp + part.start }), first && config ? { decoderConfig: config } : undefined);
+          first = false;
+        }
+        emit(true);
+      }
+      copied.close();
+      tracker.endStep();
+      await audioInto(audioSource);
+    } else {
+      videoSource!.close();
+      await audioInto(audioSource!);
+    }
+    tracker.beginStep("finalize");
+    emit(true);
+    await output!.finalize();
     tracker.endStep();
     emit(true);
+  } catch (e) {
+    // Nothing half-written is left behind: the output being written is dropped (the finished parts stay).
+    if (parts && segment) await closeSegment();
+    await neighbour.reset().catch(() => undefined);
+    try {
+      await output?.cancel();
+    } catch {
+      /* already gone */
+    }
+    throw e;
   }
-  await neighbour.reset();
-  videoSource.close();
-  // Audio.
-  tracker.beginStep("audio");
-  emit(true);
-  await mixAudio(
-    { project, getFile, sampleRate },
-    offset,
-    offset + total,
-    async (samples, timestamp) => {
-      await pauseGate();
-      if (signal?.aborted) throw new DOMException("Cancelled", "AbortError");
-      tracker.audio(timestamp - offset);
-      emit();
-      const s = new AudioSample({
-        data: samples,
-        format: "f32",
-        numberOfChannels: 2,
-        sampleRate,
-        timestamp: timestamp - offset,
-      });
-      await audioSource.add(s);
-      s.close();
-    },
-    signal,
-  );
-  audioSource.close();
-  tracker.endStep();
-  tracker.beginStep("finalize");
-  emit(true);
-  await output.finalize();
-  tracker.endStep();
-  emit(true);
   const done = tracker.snapshot();
   return {
     bytesWritten: tracker.bytes,
@@ -1375,6 +1673,9 @@ async function exportWithPulse(
     pausedMs: done.pausedMs,
     steps: done.steps,
     measured: tracker.measured(),
+    skipped: skips,
+    parts: manifest?.parts.length ?? 0,
+    resumedFrom: resumeFrom,
   };
 }
 

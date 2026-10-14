@@ -3,11 +3,11 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { AlertTriangle, Camera, Check, ChevronDown, ChevronRight, ChevronUp, Sparkles, Circle, Clapperboard, Crop, Download, FolderOpen, Loader, Maximize2, Minimize2, Music, Pause, Play, Repeat, Save, Scissors, SkipBack, SkipForward, SlidersHorizontal, StepBack, StepForward, Trash2, Type, Upload, Volume2, VolumeX, Keyboard, Search, Shuffle, X } from "lucide-react";
-import { DEFAULT_CLIP_GAIN_DB, DEFAULT_EXPORT, NEUTRAL_GRADE, NEUTRAL_TRANSFORM, TITLE_ALIGNS, TITLE_FAMILIES, TITLE_FONTS, TITLE_POSITIONS, TITLE_SHADOWS, TITLE_WEIGHTS, TRANSITIONS, addTransitionAt, appendMusic, applyAudioTo, applyGradeTo, applyTransitionToAll, clipAt, crossfades, dbToGain, effectiveMusicEnd, estimateExport, exportRange, fmtTime, musicGainAt, musicLength, newId, newProject, newTitle, orderRecordings, placeClips, planExport, removeRange, reorderMusic, setTransition, splitClip, timelineDuration, titleLanes, transitionAt, transitionWindows, CLIP_SPEEDS, canMergeWithNext, clipLength, clipSpeed, groupOf, sourceTimeAt, mergeWithNext, moveClip, unjoin, updateClip, visibleCuts, type Clip, type MediaRef, type MusicTrack, type Project, type ProxyHeight, type Title, type TitleFont, isFileLutKind, type FileLutKind, type LutKind, type MathLutKind, type TitleAlign, type TitlePosition, type TitleShadow, type Transition, type TransitionKind, type ExportTags, type IntroSettings, reorderClip, parseTime, type SteadyLights, STEADY_FRAMES, clampMusicStart, musicUnused, shuffleFillMusic, describeWhere, type MediaWhere } from "@/lib/tools/video/project";
+import { DEFAULT_CLIP_GAIN_DB, DEFAULT_EXPORT, NEUTRAL_GRADE, NEUTRAL_TRANSFORM, TITLE_ALIGNS, TITLE_FAMILIES, TITLE_FONTS, TITLE_POSITIONS, TITLE_SHADOWS, TITLE_WEIGHTS, TRANSITIONS, addTransitionAt, appendMusic, applyAudioTo, applyGradeTo, applyTransitionToAll, clipAt, crossfades, dbToGain, effectiveMusicEnd, estimateExport, exportRange, fmtTime, musicGainAt, musicLength, newId, newProject, newTitle, orderRecordings, placeClips, planExport, removeRange, reorderMusic, setTransition, splitClip, timelineDuration, titleLanes, transitionAt, transitionWindows, CLIP_SPEEDS, canMergeWithNext, clipLength, clipSpeed, groupOf, sourceTimeAt, mergeWithNext, moveClip, unjoin, updateClip, visibleCuts, type Clip, type MediaRef, type MusicTrack, type Project, type ProxyHeight, type Title, type TitleFont, isFileLutKind, type FileLutKind, type LutKind, type MathLutKind, type TitleAlign, type TitlePosition, type TitleShadow, type Transition, type TransitionKind, type ExportTags, type IntroSettings, reorderClip, parseTime, type SteadyLights, STEADY_FRAMES, clampMusicStart, musicUnused, shuffleFillMusic, describeWhere, type MediaWhere, exportFingerprint } from "@/lib/tools/video/project";
 import { drawTransition } from "@/lib/tools/video/transitions";
 import { LUT_OPTIONS, buildDlogLut, deriveLut, fetchOfficialLut, lutToCube, parseCube, type Lut3D } from "@/lib/tools/video/lut";
 import { fmtBytes, fmtDelta, fmtDuration, fmtMs, type EstimateSource, type ExportProgress, type SpeedPriors, type StepProgress } from "@/lib/tools/video/progress";
-import { buildProxy, drawOverlays, encoderSupport, exportProject, Grader, MAX_AUDIBLE_SPEED, MIN_AUDIBLE_SPEED, probe, renderFrame, renderSceneThumbs, scanMoments, scanMotion, Steadier } from "@/lib/tools/video/engine";
+import { buildProxy, drawOverlays, encoderSupport, exportProject, Grader, MAX_AUDIBLE_SPEED, MIN_AUDIBLE_SPEED, probe, renderFrame, renderSceneThumbs, scanMoments, scanMotion, Steadier, type ExportFault, type ExportManifest, type PartStore } from "@/lib/tools/video/engine";
 import { INTRO_STYLES, addSceneAt, buildIntro, describeIntro, drawIntroFx, hasIntro, introCandidates, introFrameAt, introLength, introRegion, introStyle, mainClips, moveScene, pickMoments, removeIntro, removeScene, restyleIntro, sceneSecondsFor, scoreMoments, setSceneSeconds, shiftAfterIntro, styledGrade, sceneFootage, minSceneSeconds, introBlendAt } from "@/lib/tools/video/intro";
 import { ProjectStore, hasFileSystemAccess, AUTOSAVE_FILE, FRAMES_DIR, PROJECT_FILE, PROXY_DIR } from "@/lib/tools/video/store";
 import { cn } from "@/lib/utils";
@@ -52,6 +52,11 @@ interface Job {
   lowSpace?: boolean;
   /** Free space as the browser last reported it. */
   freeBytes?: number | null;
+  /** Export only: a frame failed and the engine waits for an answer. */
+  fault?: { fault: ExportFault; resolve: (answer: "skip" | "stop", all?: boolean) => void };
+  /** Export only: written in parts that survive a stop, and where this run picked up. */
+  partsMode?: boolean;
+  resumedFrom?: number;
 }
 
 /**
@@ -197,6 +202,8 @@ const MAX_PREVIEW_RATE = 16;
 const PREVIEW_SPEEDS = [0.25, 0.5, 1, 1.5, 2, 4, 8, 12, 16];
 /** Tests can watch every frame time the export hands to the encoder (see window.__benchVideo.traceFrames). */
 let frameTrace: ((timelineT: number) => void) | null = null;
+/** Tests can shorten the parts (window.__benchVideo.exportOptions). */
+const testExportOptions: { partSeconds?: number } = {};
 
 /** YouTube wants 1280×720 thumbnails under 2 MB; the frame is scaled to this height (never upscaled). */
 const THUMB_HEIGHT = 720;
@@ -506,6 +513,44 @@ export function VideoEditorWidget() {
   const setRange = (r: { from: number; to: number } | null) => setProject((p) => ({ ...p, export: { ...p.export, range: r } }));
   const setTags = (patch: Partial<ExportTags>) => setProject((p) => ({ ...p, export: { ...p.export, tags: { ...p.export.tags, ...patch } } }));
   const estimate = useMemo(() => estimateExport(project, spans), [project, spans]);
+  const fingerprint = useMemo(() => exportFingerprint(project), [project]);
+  // A stopped export's finished parts, found in the project folder: what the Export tab offers to resume.
+  const [resumable, setResumable] = useState<{ manifest: ExportManifest; folder: string; bytes: number } | null>(null);
+  const loadResumable = useCallback(async () => {
+    if (!store.hasFolder) return setResumable(null);
+    for (const folder of await store.subFolders()) {
+      if (!folder.endsWith(".parts")) continue;
+      const text = await store.readText("resume.json", folder);
+      if (!text) continue;
+      try {
+        const manifest = JSON.parse(text) as ExportManifest;
+        if (manifest.version !== 1 || !Array.isArray(manifest.parts)) continue;
+        let bytes = 0;
+        for (const part of manifest.parts) bytes += (await store.fileIn(part.file, folder))?.size ?? 0;
+        setResumable({ manifest, folder, bytes });
+        return;
+      } catch {
+        /* not a manifest */
+      }
+    }
+    setResumable(null);
+  }, [store]);
+  useEffect(() => {
+    if (!folder) return;
+    let active = true;
+    queueMicrotask(() => {
+      if (active) void loadResumable();
+    });
+    return () => {
+      active = false;
+    };
+  }, [folder, loadResumable]);
+  const discardParts = async () => {
+    if (!resumable) return;
+    if (!window.confirm(`Remove the ${resumable.manifest.parts.length} kept part${resumable.manifest.parts.length === 1 ? "" : "s"} (${fmtBytes(resumable.bytes)})? A later export starts from the beginning.`)) return;
+    await store.remove(null, resumable.folder);
+    setResumable(null);
+  };
   const current = selected ? project.clips.find((c) => c.id === selected) : undefined;
   const currentMusic = selectedMusic ? project.music.find((m) => m.id === selectedMusic) : undefined;
   const fades = useMemo(() => crossfades(project.music), [project.music]);
@@ -1582,6 +1627,9 @@ export function VideoEditorWidget() {
       traceFrames: (fn: ((timelineT: number) => void) | null) => {
         frameTrace = fn;
       },
+      exportOptions: (o: { partSeconds?: number }) => Object.assign(testExportOptions, o),
+      getJob: () => job,
+      getResumable: () => resumable,
       audioState: () => ({ ctx: audioCtxRef.current?.state ?? null, nodes: musicNodes.current.size, buffers: musicBuffers.current.size, video: videoRef.current ? { muted: videoRef.current.muted, volume: videoRef.current.volume, paused: videoRef.current.paused } : null }),
     };
   });
@@ -1649,21 +1697,40 @@ export function VideoEditorWidget() {
     }
     return window.confirm(`The file is expected to be about ${fmtBytes(expectedBytes)}, but the browser reports only ${fmtBytes(free)} free (it keeps a reserve, so the real figure may be a little higher).\n\nStart anyway? The export pauses itself when less than ${fmtBytes(LOW_SPACE)} remain and continues once you free space.`);
   };
-  const runExport = async () => {
+  /**
+   * Export to the project folder. The video is written in parts (one every few minutes, plus whatever was done the
+   * moment the export stops) that survive a failure or a cancel, then joined into the file; `resume` continues the
+   * parts of an earlier stopped export of the same project.
+   */
+  const runExport = async (resume: { manifest: ExportManifest; folder: string } | null = null) => {
     if (!store.hasFolder) return setError("Pick a project folder first — the export is written there.");
     if (notify && "Notification" in window && Notification.permission === "default") void Notification.requestPermission().then((perm) => setNotifyPermission(perm));
-    if (!(await spaceWarning(estimate.bytes))) return;
+    const name = resume ? resume.manifest.name : `${project.name.replace(/[^\w-]+/g, "-")}-${project.export.resolution === "source" ? "8K" : project.export.resolution + "p"}${range ? `-${Math.round(range.from)}s-${Math.round(range.to)}s` : ""}.mp4`;
+    const partsFolder = resume ? resume.folder : `${name.replace(/\.mp4$/, "")}.parts`;
+    const exportSeconds = range ? range.to - range.from : duration;
+    const manifest: ExportManifest = resume ? resume.manifest : { version: 1, fingerprint, name, total: exportSeconds, parts: [], skipped: [], updatedAt: 0 };
+    const resumedFrom = manifest.parts.length ? manifest.parts[manifest.parts.length - 1].end : 0;
+    // The parts and the joined file exist together for a moment, so the file's full size is needed on top of the rest.
+    if (!(await spaceWarning(estimate.bytes * (1 - resumedFrom / Math.max(1e-6, exportSeconds)) + (resumedFrom ? estimate.bytes : 0)))) return;
     notifyAt.current = 0;
     const abort = new AbortController();
     pauseRef.current = { paused: false, waiters: [] };
     lowSpaceRef.current = false;
+    autoSkipRef.current = false;
     const stopWatch = watchSpace();
-    const name = `${project.name.replace(/[^\w-]+/g, "-")}-${project.export.resolution === "source" ? "8K" : project.export.resolution + "p"}${range ? `-${Math.round(range.from)}s-${Math.round(range.to)}s` : ""}.mp4`;
     const outH = project.export.resolution === "source" ? (first?.height ?? 4320) : project.export.resolution;
     const outW = first?.width && first.height ? Math.round((first.width * (outH / first.height)) / 2) * 2 : Math.round((outH * 16) / 9);
     const output = { name, codec: project.export.codec.toUpperCase(), width: outW, height: outH, bitrateMbps: project.export.bitrateMbps, preset: project.export.preset, estimatedBytes: estimate.bytes };
     const profile = `${first?.height ?? 0}>${outH}:${project.export.codec}:${project.export.preset}`;
-    setJob({ kind: "export", label: "Exporting", fraction: 0, abort, output, paused: false });
+    const partStore: PartStore = {
+      createWritable: async (file) => (await store.createWritable(file, partsFolder)).writable as unknown as WritableStream<import("mediabunny").StreamTargetChunk>,
+      file: (file) => store.fileIn(file, partsFolder),
+      remove: (file) => store.remove(file, partsFolder),
+      save: (m) => store.writeText("resume.json", JSON.stringify(m), partsFolder),
+    };
+    setJob({ kind: "export", label: resumedFrom ? `Resuming from ${fmtTime(resumedFrom)}` : "Exporting", fraction: 0, abort, output, paused: false, partsMode: true, resumedFrom });
+    setError(null);
+    setResumable(null);
     try {
       const { writable } = await store.createWritable(name);
       const result = await exportProject({
@@ -1676,6 +1743,8 @@ export function VideoEditorWidget() {
         whilePaused: () => (pauseRef.current.paused ? new Promise<void>((r) => pauseRef.current.waiters.push(r)) : undefined),
         onWriteBlocked,
         onFrame: (t) => frameTrace?.(t),
+        parts: { store: partStore, manifest, seconds: testExportOptions.partSeconds },
+        onFault: askAboutFault,
         onProgress: (progress) => {
           setJob((j) => (j ? { ...j, fraction: progress.fraction, progress } : j));
           if (!lowSpaceRef.current) document.title = `${(progress.fraction * 100).toFixed(1)}% · ${progress.paused ? "Paused" : "Exporting"} · Bench`;
@@ -1683,23 +1752,59 @@ export function VideoEditorWidget() {
           maybeNotify(`Exporting ${name}`, progress);
         },
       });
+      // The parts are inside the file now.
+      await store.remove(null, partsFolder);
+      setResumable(null);
       notifyDone("Export finished", `${name} — ${fmtBytes(result.bytesWritten)} in ${fmtDuration(result.activeMs)}`, lastProgress.current ?? undefined);
       stopWatch();
       savePriors(profile, result.measured);
       const stepMs = (kind: StepProgress["kind"]) => result.steps.filter((s) => s.kind === kind).reduce((a, s) => a + s.elapsedMs, 0);
+      const skippedNote = result.skipped.length
+        ? ` · ${result.skipped.length} stretch${result.skipped.length === 1 ? "" : "es"} skipped (${result.skipped.reduce((a, k) => a + (k.to - k.from), 0).toFixed(2)} s in all, at ${result.skipped.map((k) => fmtTime(k.from)).join(", ")})`
+        : "";
+      const howNote = result.resumedFrom ? ` (resumed from ${fmtTime(result.resumedFrom)}; ${result.parts} parts joined)` : result.parts > 1 ? ` (${result.parts} parts joined)` : "";
       setStatus(
-        `Exported ${name} — ${fmtBytes(result.bytesWritten)} in ${fmtDuration(result.activeMs)}${result.pausedMs > 500 ? ` plus ${fmtDuration(result.pausedMs)} paused` : ""} (${(result.seconds / Math.max(0.001, result.activeMs / 1000)).toFixed(2)}× realtime) · prepare ${fmtDuration(stepMs("prepare"))} · video ${fmtDuration(stepMs("video"))} · audio ${fmtDuration(stepMs("audio"))} · finish ${fmtDuration(stepMs("finalize"))}`,
+        `Exported ${name}${howNote} — ${fmtBytes(result.bytesWritten)} in ${fmtDuration(result.activeMs)}${result.pausedMs > 500 ? ` plus ${fmtDuration(result.pausedMs)} paused` : ""} (${(result.seconds / Math.max(0.001, result.activeMs / 1000)).toFixed(2)}× realtime) · prepare ${fmtDuration(stepMs("prepare"))} · video ${fmtDuration(stepMs("video"))} · audio ${fmtDuration(stepMs("audio"))} · finish ${fmtDuration(stepMs("finalize"))}${skippedNote}`,
       );
     } catch (e) {
-      if ((e as DOMException).name !== "AbortError") {
-        setError(e instanceof Error ? e.message : String(e));
-        notifyDone("Export failed", e instanceof Error ? e.message : String(e), lastProgress.current ?? undefined);
+      const message = e instanceof Error ? e.message : String(e);
+      const kept = manifest.parts.length ? manifest.parts[manifest.parts.length - 1].end : 0;
+      const parts = `${manifest.parts.length} part${manifest.parts.length === 1 ? "" : "s"}`;
+      if ((e as DOMException).name === "AbortError") {
+        setStatus(kept > 0 ? `Export stopped at ${fmtTime(kept)} of ${fmtTime(exportSeconds)} — ${parts} kept. Resume continues from there; Discard removes them.` : "Export cancelled.");
+      } else {
+        setError(kept > 0 ? `Export stopped at ${fmtTime(kept)} of ${fmtTime(exportSeconds)}: ${message} Everything finished so far is kept (${parts}); press Resume to carry on from there.` : `Export failed: ${message}`);
+        notifyDone("Export stopped", kept > 0 ? `${message} Finished parts are kept — resume from ${fmtTime(kept)}.` : message, lastProgress.current ?? undefined);
       }
+      await loadResumable();
     } finally {
       stopWatch();
       document.title = pageTitleRef.current;
       setJob(null);
     }
+  };
+  /** Once the user says "skip any that fail", the rest of this export skips without asking. */
+  const autoSkipRef = useRef(false);
+  const askAboutFault = (fault: ExportFault): Promise<"skip" | "stop"> => {
+    if (autoSkipRef.current) return Promise.resolve("skip");
+    alertUser("A frame failed — the export is waiting", `${fault.clipName} at ${fmtTime(fault.timelineT)}: ${fault.message}`);
+    return new Promise((resolve) => {
+      setJob((j) =>
+        j
+          ? {
+              ...j,
+              fault: {
+                fault,
+                resolve: (answer, all) => {
+                  if (all) autoSkipRef.current = true;
+                  setJob((k) => (k ? { ...k, fault: undefined } : k));
+                  resolve(answer);
+                },
+              },
+            }
+          : j,
+      );
+    });
   };
   const lastProgress = useRef<ExportProgress | null>(null);
 
@@ -1944,7 +2049,7 @@ export function VideoEditorWidget() {
         <button type="button" onClick={() => setClearOpen(true)} className={cn(GHOST, "hover:border-danger hover:text-danger")} title="Start over: forget this project in the browser, optionally delete its files from the folder">
           <Trash2 size={13} /> Clear
         </button>
-        <span className="text-[12px] text-faint">{status}</span>
+        <span className="text-[12px] text-faint" data-status>{status}</span>
         {recovered && <span className="rounded-[var(--radius-sm)] bg-accent-soft px-2 py-0.5 text-[12px] text-accent">Recovered unsaved work from the autosave</span>}
         {!hasFileSystemAccess() && <span className="text-[12px] text-warn">Needs Chrome or Edge for folder access, proxies and 8K export.</span>}
         {support && !support.hevc && <span className="text-[12px] text-warn">No hardware HEVC 8K encoder found here — exports will use H.264 or need a lower resolution.</span>}
@@ -3234,6 +3339,31 @@ export function VideoEditorWidget() {
                     .
                   </p>
                 </div>
+                {resumable && (
+                  <div className={cn("rounded-[var(--radius-sm)] border p-3 text-[13px]", resumable.manifest.fingerprint === fingerprint ? "border-accent/60 bg-accent-soft/50" : "border-warn/50 bg-warn/10")} data-resumable>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Play size={14} className="shrink-0 text-accent" />
+                      <span className="min-w-0 flex-1 text-muted">
+                        <span className="font-medium text-ink">
+                          An export of {resumable.manifest.name} stopped at {fmtTime(resumable.manifest.parts.length ? resumable.manifest.parts[resumable.manifest.parts.length - 1].end : 0)} of {fmtTime(resumable.manifest.total)}
+                        </span>{" "}
+                        — {resumable.manifest.parts.length} part{resumable.manifest.parts.length === 1 ? "" : "s"} ({fmtBytes(resumable.bytes)}) kept in {resumable.folder}.
+                        {resumable.manifest.fingerprint === fingerprint
+                          ? " Resume carries on from there, then joins the parts into the file (a copy, no re-encoding)."
+                          : " The project has changed since, so these parts cannot be continued; discard them and export again."}
+                        {resumable.manifest.skipped.length ? ` ${resumable.manifest.skipped.length} stretch${resumable.manifest.skipped.length === 1 ? " was" : "es were"} skipped after frames failed.` : ""}
+                      </span>
+                      {resumable.manifest.fingerprint === fingerprint && (
+                        <button type="button" onClick={() => void runExport(resumable)} disabled={!!job} className={cn(PRIMARY, "h-8")} data-resume-export>
+                          <Play size={13} /> Resume export
+                        </button>
+                      )}
+                      <button type="button" onClick={() => void discardParts()} disabled={!!job} className={cn(GHOST, "h-8 hover:border-danger hover:text-danger")} data-discard-parts>
+                        <Trash2 size={13} /> Discard parts
+                      </button>
+                    </div>
+                  </div>
+                )}
                 <button type="button" onClick={() => void runExport()} disabled={!project.clips.length || !!job} className={PRIMARY}>
                   <Download size={14} /> Export to project folder
                 </button>
@@ -3587,6 +3717,28 @@ function ExportPanel({ job, onPause, onResume, onCancel }: { job: Job; onPause: 
           </span>
         </div>
       )}
+      {job.fault && (
+        <div className="flex flex-wrap items-center gap-2 rounded-[var(--radius-sm)] border border-warn/50 bg-warn/10 px-3 py-2 text-[13px]" role="alertdialog" aria-live="assertive" data-export-fault>
+          <AlertTriangle size={15} className="shrink-0 text-warn" />
+          <span className="min-w-0 flex-1">
+            <span className="font-medium text-ink">A frame failed at {fmtTime(job.fault.fault.timelineT)}</span> — {job.fault.fault.clipName} at {fmtTime(job.fault.fault.sourceT)} in the footage: {job.fault.fault.message}{" "}
+            <span className="text-muted">
+              Skip leaves out {job.fault.fault.stretch < 0.1 ? "that frame" : `${job.fault.fault.stretch.toFixed(2)} s, up to the footage's next keyframe`} (the frame before stays on screen that long) and carries on; Stop keeps the finished parts to resume from.
+            </span>
+          </span>
+          <div className="flex flex-wrap gap-1.5">
+            <button type="button" onClick={() => job.fault!.resolve("skip")} className={cn(PRIMARY, "h-8")} data-fault-skip>
+              Skip and continue
+            </button>
+            <button type="button" onClick={() => job.fault!.resolve("skip", true)} className={cn(GHOST, "h-8")} title="Skip this one and any other frame that fails, without asking again" data-fault-skip-all>
+              Skip any that fail
+            </button>
+            <button type="button" onClick={() => job.fault!.resolve("stop")} className={cn(GHOST, "h-8 hover:border-danger hover:text-danger")} data-fault-stop>
+              Stop, keep what is done
+            </button>
+          </div>
+        </div>
+      )}
       <div className="flex flex-wrap items-center gap-3">
         {job.paused ? <Pause size={18} className="text-warn" /> : <Loader size={18} className="animate-spin text-accent" />}
         <div className="min-w-0 flex-1">
@@ -3598,6 +3750,8 @@ function ExportPanel({ job, onPause, onResume, onCancel }: { job: Job; onPause: 
             {p?.span && p.phase === "video" ? ` · span ${p.spanIndex} of ${p.spanCount}${p.span.reasons.length ? ` (${p.span.reasons.join(", ")})` : ""} · ${fmtMs(p.span.start)} → ${fmtMs(p.span.end)}` : ""}
             {p ? ` · step ${Math.min(steps.length, doneSteps + 1)} of ${steps.length}` : ""}
             {job.paused ? " · resume to continue — keep this tab open, the file stays open while paused" : ""}
+            {job.resumedFrom ? ` · resumed from ${fmtTime(job.resumedFrom)}` : ""}
+            {job.partsMode ? " · written in parts: a stop or a failure keeps what is finished" : ""}
           </div>
         </div>
         <span className="font-mono text-[26px] font-semibold tabular text-ink" data-export-pct>

@@ -1093,6 +1093,22 @@ export function estimateExport(p: Project, spans: ExportSpan[], encodeFps = 30, 
   return { copySeconds, encodeSeconds, wallSeconds: (encodeSeconds * fps) / encodeFps + copyBytes / (copyGBps * 1e9) + finishSeconds, finishSeconds, bytes };
 }
 
+/**
+ * A short hash of everything that shapes an export's file — clips, media, grades, titles, music, intro, watermark,
+ * export settings — so finished parts of a stopped export can tell whether the project still matches them.
+ */
+export function exportFingerprint(p: Project): string {
+  const { updatedAt, ...rest } = p as Project & { updatedAt?: number };
+  void updatedAt;
+  const text = JSON.stringify(rest);
+  let h = 0x811c9dc5;
+  for (let i = 0; i < text.length; i++) {
+    h ^= text.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return `${h.toString(16).padStart(8, "0")}-${text.length.toString(36)}`;
+}
+
 /* --------------------------------------------------------- serialisation */
 
 export function serialize(p: Project): string {

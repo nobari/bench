@@ -118,6 +118,8 @@ export interface PlanInput {
   lutsToLoad: string[];
   audio: { clips: number; music: number; bitrateKbps: number };
   output: { codec: string; width: number; height: number; preset: string; bitrateMbps: number };
+  /** Resumable export: how many part files there will be to join at the end (those done before plus this run's). */
+  parts?: number;
 }
 
 /** The ladder of steps for an export, in order, with what each one will do. */
@@ -154,7 +156,14 @@ export function planSteps(input: PlanInput): ExportStep[] {
     units: offset,
     offset: 0,
   });
-  steps.push({ id: "finalize", kind: "finalize", title: "Finish the file", detail: "Flush the encoders, write the MP4 index (moov), then close the file: the browser reads the whole file back to check it before moving it into place, so this part grows with the file size.", units: 1, offset: 0 });
+  steps.push({
+    id: "finalize",
+    kind: "finalize",
+    title: "Finish the file",
+    detail: `${input.parts ? `Join the ${input.parts} finished part${input.parts === 1 ? "" : "s"} into the file (a copy, no re-encoding), ` : ""}Flush the encoders, write the MP4 index (moov), then close the file: the browser reads the whole file back to check it before moving it into place, so this part grows with the file size.`.replace(/, Flush/, ", flush"),
+    units: 1,
+    offset: 0,
+  });
   return steps;
 }
 

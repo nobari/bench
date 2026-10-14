@@ -373,6 +373,58 @@ export class ProjectStore {
     return { writable: await handle.createWritable(), handle };
   }
 
+  /** A file in the folder (or a sub-folder), or null when it is not there. */
+  async fileIn(name: string, sub?: string): Promise<File | null> {
+    if (!this.dir) return null;
+    try {
+      const parent = sub ? await this.dir.getDirectoryHandle(sub) : this.dir;
+      return await (await parent.getFileHandle(name)).getFile();
+    } catch {
+      return null;
+    }
+  }
+
+  async writeText(name: string, text: string, sub?: string): Promise<void> {
+    if (!this.dir) throw new Error("Pick a project folder first.");
+    const parent = sub ? await this.dir.getDirectoryHandle(sub, { create: true }) : this.dir;
+    const fh = await parent.getFileHandle(name, { create: true });
+    const w = await fh.createWritable();
+    await w.write(text);
+    await w.close();
+  }
+
+  async readText(name: string, sub?: string): Promise<string | null> {
+    const f = await this.fileIn(name, sub);
+    return f ? f.text() : null;
+  }
+
+  /** Removes a file (or, with no name, a whole sub-folder); nothing happens when it is already gone. */
+  async remove(name: string | null, sub?: string): Promise<void> {
+    if (!this.dir) return;
+    try {
+      if (name === null) {
+        if (sub) await this.dir.removeEntry(sub, { recursive: true });
+        return;
+      }
+      const parent = sub ? await this.dir.getDirectoryHandle(sub) : this.dir;
+      await parent.removeEntry(name);
+    } catch {
+      /* already gone */
+    }
+  }
+
+  /** Names of the sub-folders of the project folder. */
+  async subFolders(): Promise<string[]> {
+    if (!this.dir) return [];
+    const out: string[] = [];
+    try {
+      for await (const [name, h] of this.dir as unknown as AsyncIterable<[string, FileSystemHandle]>) if (h.kind === "directory") out.push(name);
+    } catch {
+      /* not iterable */
+    }
+    return out;
+  }
+
   async proxyFile(name: string): Promise<File | null> {
     if (!this.dir) return null;
     try {
