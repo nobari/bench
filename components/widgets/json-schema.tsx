@@ -3,19 +3,23 @@
 import { useDeferredValue, useEffect, useMemo, useState } from "react";
 import { useQueryState, parseAsStringLiteral } from "nuqs";
 import { compressToEncodedURIComponent, decompressFromEncodedURIComponent } from "lz-string";
-import { AlertTriangle, ArrowRight, Check, Plus, RotateCcw, Trash2, Wand2, X } from "lucide-react";
+import { AlertTriangle, ArrowRight, Check, ChevronDown, ChevronRight, Link2, Plus, RotateCcw, Trash2, Wand2, X } from "lucide-react";
 import {
   DRAFTS,
   NODE_TYPES,
   STRING_FORMATS,
   createNode,
+  describeConditions,
   inferNode,
+  listDefinitions,
   nodeToSchema,
   parseJsonText,
   schemaToNode,
+  summarizeSchema,
   updateNode,
   type NodeType,
   type SchemaNode,
+  type SchemaSummary,
 } from "@/lib/tools/json/schema";
 import { validateJson } from "@/lib/tools/json/validate";
 import { CopyButton } from "@/components/copy-button";
@@ -111,7 +115,27 @@ export function JsonSchemaWidget() {
     return { schema: s, data: d, result: s.ok && d.ok ? validateJson(s.value, d.value, draftPref) : null };
   }, [deferredSchema, deferredData, draftPref]);
 
-  const outputSchema = useMemo(() => JSON.stringify(nodeToSchema(root), null, 2), [root]);
+  const generated = useMemo(() => nodeToSchema(root), [root]);
+  const outputSchema = useMemo(() => JSON.stringify(generated, null, 2), [generated]);
+  const definitions = useMemo(() => listDefinitions(root), [root]);
+  const refCounts = useMemo(() => countRefs(root), [root]);
+  // Jumping to a definition from a $ref: the definition scrolls into view and is ringed for a moment.
+  const [flash, setFlash] = useState<string | null>(null);
+  const jumpTo = (pointer: string) => {
+    const el = document.querySelector<HTMLElement>(`[data-def-pointer="${CSS.escape(pointer)}"]`);
+    if (!el) return;
+    el.scrollIntoView({ block: "center", behavior: "smooth" });
+    setFlash(pointer);
+    setTimeout(() => setFlash((f) => (f === pointer ? null : f)), 1600);
+  };
+  // Expand or collapse the whole tree by remounting it with a new default.
+  const [treeKey, setTreeKey] = useState(0);
+  const [defaultOpen, setDefaultOpen] = useState(true);
+  const expandAll = (open: boolean) => {
+    setDefaultOpen(open);
+    setTreeKey((k) => k + 1);
+  };
+
   const schemaErr = report.schema.ok ? null : report.schema.error;
   const dataErr = report.data.ok ? null : report.data.error;
 
@@ -128,6 +152,7 @@ export function JsonSchemaWidget() {
   }, [mode, outputSchema, schemaText, dataText, sampleText]);
 
   const patch = (id: string, fn: (n: SchemaNode) => SchemaNode) => setRoot((r) => updateNode(r, id, fn));
+  const rowCtx: RowContext = { patch, rootSchema: generated, definitions, jumpTo, defaultOpen };
 
   const designCurrent = () => {
     const n = nodeFromText(schemaText);
@@ -346,6 +371,13 @@ export function JsonSchemaWidget() {
                 <button onClick={() => setRoot(createNode("object"))} className={GHOST} title="Start over">
                   <RotateCcw size={13} /> Reset
                 </button>
+                <span className="mx-0.5 h-5 w-px bg-edge" />
+                <button onClick={() => expandAll(true)} className={GHOST} title="Open every level">
+                  <ChevronDown size={13} /> Expand all
+                </button>
+                <button onClick={() => expandAll(false)} className={GHOST} title="Close every level">
+                  <ChevronRight size={13} /> Collapse all
+                </button>
               </div>
             </div>
 
@@ -374,8 +406,64 @@ export function JsonSchemaWidget() {
               </div>
             )}
 
-            <div className="min-w-0 overflow-x-auto p-2">
-              <NodeRow node={root} depth={0} label="root" patch={patch} />
+            <div className="min-w-0 overflow-x-auto p-2" key={treeKey}>
+              <NodeRow node={root} depth={0} label="root" ctx={rowCtx} />
+
+              {/* definitions: reusable schemas, referenced by $ref */}
+              <div className="mt-3 border-t border-edge pt-2" data-definitions>
+                <div className="flex flex-wrap items-center gap-2 px-1 py-1">
+                  <span className="readout">Definitions · {root.defsKeyword}</span>
+                  <span className="text-[11.5px] text-faint">Reusable schemas; a property of type $ref points at one and shows what it allows.</span>
+                  <button
+                    onClick={() => setRoot((r) => ({ ...r, defs: [...r.defs, { key: nextDefName(r), node: createNode("object") }] }))}
+                    className="ml-auto inline-flex h-7 items-center gap-1 rounded-[var(--radius-sm)] px-2 text-[12px] text-accent hover:bg-raised"
+                    data-add-definition
+                  >
+                    <Plus size={13} /> definition
+                  </button>
+                </div>
+                {root.defs.length === 0 && <p className="px-1 pb-1 text-[12px] text-faint">No definitions yet. Imported schemas bring theirs along ($defs or definitions).</p>}
+                {root.defs.map((d, i) => {
+                  const pointer = `#/${root.defsKeyword}/${d.key.trim()}`;
+                  const uses = refCounts.get(pointer) ?? 0;
+                  return (
+                    <div
+                      key={d.node.id}
+                      data-def={d.key}
+                      data-def-pointer={pointer}
+                      className={cn("mt-1.5 rounded-[var(--radius-sm)] border border-edge p-1.5 transition-shadow", flash === pointer && "shadow-[0_0_0_2px_var(--accent)]")}
+                    >
+                      <div className="flex flex-wrap items-center gap-1.5 pb-1">
+                        <input
+                          value={d.key}
+                          onChange={(e) => setRoot((r) => ({ ...r, defs: r.defs.map((x, j) => (j === i ? { ...x, key: e.target.value } : x)) }))}
+                          placeholder="name"
+                          spellCheck={false}
+                          className={cn(F, "w-40 font-medium")}
+                          aria-label="Definition name"
+                        />
+                        <code className="font-mono text-[11px] text-faint">{pointer}</code>
+                        <span className="text-[11px] text-faint" title="How many $ref point here">
+                          {uses === 0 ? "unused" : uses === 1 ? "used once" : `used ${uses}×`}
+                        </span>
+                        <button
+                          onClick={() => setRoot((r) => ({ ...r, defs: r.defs.filter((_, j) => j !== i) }))}
+                          aria-label="Remove definition"
+                          className="ml-auto flex h-7 w-7 items-center justify-center rounded-[var(--radius-sm)] text-faint hover:bg-raised hover:text-danger"
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      </div>
+                      <NodeRow node={d.node} depth={0} label="schema" ctx={rowCtx} />
+                    </div>
+                  );
+                })}
+              </div>
+              <datalist id="schema-definitions">
+                {definitions.map((d) => (
+                  <option key={d} value={d} />
+                ))}
+              </datalist>
             </div>
           </div>
 
@@ -448,20 +536,62 @@ function Editor({
 
 type Patch = (id: string, fn: (n: SchemaNode) => SchemaNode) => void;
 
+interface RowContext {
+  patch: Patch;
+  /** The design as a schema right now, so a $ref can show what it allows. */
+  rootSchema: Record<string, unknown>;
+  /** Pointers a $ref may name. */
+  definitions: string[];
+  jumpTo: (pointer: string) => void;
+  defaultOpen: boolean;
+}
+
+/** How often each definition pointer is referenced anywhere in the design. */
+function countRefs(root: SchemaNode): Map<string, number> {
+  const counts = new Map<string, number>();
+  const walk = (n: SchemaNode) => {
+    if (n.type === "ref" && n.ref.trim()) counts.set(n.ref.trim(), (counts.get(n.ref.trim()) ?? 0) + 1);
+    n.properties.forEach((p) => walk(p.node));
+    if (n.items) walk(n.items);
+    if (n.additionalSchema) walk(n.additionalSchema);
+    n.defs.forEach((d) => walk(d.node));
+  };
+  walk(root);
+  return counts;
+}
+
+function nextDefName(root: SchemaNode): string {
+  const taken = new Set(root.defs.map((d) => d.key));
+  for (let i = 1; ; i++) {
+    const name = i === 1 ? "definition" : `definition${i}`;
+    if (!taken.has(name)) return name;
+  }
+}
+
+const TYPE_LABELS: Record<NodeType, string> = { object: "object", array: "array", string: "string", number: "number", integer: "integer", boolean: "boolean", null: "null", any: "any", ref: "$ref" };
+/** Keywords shown as read-only chips: kept as written, edited in the JSON. */
+const CHIP_SKIP = new Set(["if", "then", "else", "oneOf", "anyOf", "allOf", "not", "dependentRequired", "$schema", "type"]);
+const compactJson = (v: unknown, max = 48) => {
+  const t = JSON.stringify(v) ?? "";
+  return t.length > max ? t.slice(0, max - 1) + "…" : t;
+};
+
 function NodeRow({
   node,
   depth,
   label,
   entry,
-  patch,
+  ctx,
 }: {
   node: SchemaNode;
   depth: number;
   label?: string;
   /** Present when this node is an object property. */
   entry?: { parentId: string; index: number; key: string; required: boolean };
-  patch: Patch;
+  ctx: RowContext;
 }) {
+  const { patch } = ctx;
+  const [open, setOpen] = useState(ctx.defaultOpen);
   const set = (fn: (n: SchemaNode) => SchemaNode) => patch(node.id, fn);
   const setEntry = (fn: (p: { key: string; required: boolean }) => { key: string; required: boolean }) => {
     if (!entry) return;
@@ -471,11 +601,41 @@ function NodeRow({
     }));
   };
   const changeType = (type: NodeType) =>
-    set((n) => ({ ...n, type, items: type === "array" ? (n.items ?? createNode("string")) : n.items }));
+    set((n) => ({
+      ...n,
+      type,
+      items: type === "array" ? (n.items ?? createNode("string")) : n.items,
+      ref: type === "ref" ? n.ref || ctx.definitions[0] || "" : n.ref,
+    }));
+  const extraMode = node.additionalSchema ? "schema" : node.additionalProperties ? "any" : "none";
+  const setExtraMode = (mode: string) =>
+    set((n) => ({
+      ...n,
+      additionalProperties: mode !== "none",
+      additionalSchema: mode === "schema" ? (n.additionalSchema ?? createNode("string")) : undefined,
+    }));
+
+  const isRef = node.type === "ref";
+  const hasChildren = (node.type === "object" && (node.properties.length > 0 || !!node.additionalSchema)) || (node.type === "array" && !!node.items) || isRef;
+  const conditions = describeConditions(node.extra);
+  const chips = Object.entries(node.extra).filter(([k]) => !CHIP_SKIP.has(k));
+  const summary = isRef && open ? summarizeSchema({ $ref: node.ref.trim() }, ctx.rootSchema) : null;
+  const refKnown = isRef && ctx.definitions.includes(node.ref.trim());
 
   return (
-    <div>
-      <div className="flex flex-wrap items-center gap-1.5 py-1" style={{ paddingLeft: depth * 16 }}>
+    <div data-node-type={node.type} data-depth={depth}>
+      <div className="flex flex-wrap items-center gap-1.5 py-1">
+        <button
+          type="button"
+          onClick={() => setOpen((o) => !o)}
+          aria-label={open ? "Collapse" : "Expand"}
+          aria-expanded={open}
+          disabled={!hasChildren}
+          className={cn("flex h-5 w-5 shrink-0 items-center justify-center rounded text-faint hover:text-ink", !hasChildren && "invisible")}
+          data-toggle
+        >
+          {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+        </button>
         {entry ? (
           <>
             <input
@@ -496,17 +656,36 @@ function NodeRow({
             </label>
           </>
         ) : (
-          <span className="w-12 text-[12px] font-medium text-muted">{label}</span>
+          <span className="min-w-12 text-[12px] font-medium text-muted">{label}</span>
         )}
 
-        <select value={node.type} onChange={(e) => changeType(e.target.value as NodeType)} className={cn(F, "pr-6")}>
+        <select value={node.type} onChange={(e) => changeType(e.target.value as NodeType)} className={cn(F, "pr-6")} aria-label="Type">
           {NODE_TYPES.map((t) => (
             <option key={t} value={t}>
-              {t}
+              {TYPE_LABELS[t]}
             </option>
           ))}
         </select>
-        {node.type !== "any" && node.type !== "null" && (
+        {isRef && (
+          <>
+            <input
+              value={node.ref}
+              onChange={(e) => set((n) => ({ ...n, ref: e.target.value }))}
+              list="schema-definitions"
+              placeholder="#/$defs/name"
+              spellCheck={false}
+              className={cn(F, "w-44", node.ref.trim() && !refKnown && !node.ref.startsWith("#") && "border-warn")}
+              aria-label="Reference"
+              data-ref-input
+            />
+            {refKnown && (
+              <button type="button" onClick={() => ctx.jumpTo(node.ref.trim())} className={cn(GHOST, "h-6 px-1.5 text-[11px]")} title="Scroll to this definition" data-jump-def>
+                <Link2 size={11} /> definition
+              </button>
+            )}
+          </>
+        )}
+        {!isRef && node.type !== "any" && node.type !== "null" && (
           <label className="flex items-center gap-1 text-[11px] text-muted" title="Also allow null">
             <input
               type="checkbox"
@@ -520,13 +699,14 @@ function NodeRow({
 
         {node.type === "string" && (
           <>
-            <select value={node.format} onChange={(e) => set((n) => ({ ...n, format: e.target.value }))} className={cn(F, "pr-6")}>
+            <select value={node.format} onChange={(e) => set((n) => ({ ...n, format: e.target.value }))} className={cn(F, "pr-6")} aria-label="Format">
               <option value="">format</option>
               {STRING_FORMATS.map((f) => (
                 <option key={f} value={f}>
                   {f}
                 </option>
               ))}
+              {node.format && !(STRING_FORMATS as readonly string[]).includes(node.format) && <option value={node.format}>{node.format}</option>}
             </select>
             <NumField value={node.minLength} onChange={(v) => set((n) => ({ ...n, minLength: v }))} placeholder="min" title="minLength" />
             <NumField value={node.maxLength} onChange={(v) => set((n) => ({ ...n, maxLength: v }))} placeholder="max" title="maxLength" />
@@ -562,67 +742,191 @@ function NodeRow({
           </>
         )}
         {node.type === "object" && (
-          <label className="flex items-center gap-1 text-[11px] text-muted" title="additionalProperties">
+          <>
+            <select value={extraMode} onChange={(e) => setExtraMode(e.target.value)} className={cn(F, "pr-6")} title="additionalProperties" aria-label="Extra keys" data-extra-keys>
+              <option value="any">extra keys: any</option>
+              <option value="none">extra keys: none</option>
+              <option value="schema">extra keys: typed</option>
+            </select>
+            <NumField value={node.minProperties} onChange={(v) => set((n) => ({ ...n, minProperties: v }))} placeholder="min keys" title="minProperties" wide />
+            <NumField value={node.maxProperties} onChange={(v) => set((n) => ({ ...n, maxProperties: v }))} placeholder="max keys" title="maxProperties" wide />
+          </>
+        )}
+        {!isRef && node.type !== "object" && node.type !== "array" && (
+          <>
             <input
-              type="checkbox"
-              checked={node.additionalProperties}
-              onChange={(e) => set((n) => ({ ...n, additionalProperties: e.target.checked }))}
-              className="accent-[var(--accent)]"
+              value={node.enum}
+              onChange={(e) => set((n) => ({ ...n, enum: e.target.value }))}
+              placeholder="enum: a, b, 3"
+              spellCheck={false}
+              className={cn(F, "w-32")}
             />
-            extra keys
-          </label>
+            <input
+              value={node.const}
+              onChange={(e) => set((n) => ({ ...n, const: e.target.value }))}
+              placeholder="const"
+              spellCheck={false}
+              title="The one allowed value, as JSON"
+              className={cn(F, "w-20")}
+            />
+          </>
         )}
-        {node.type !== "object" && node.type !== "array" && (
-          <input
-            value={node.enum}
-            onChange={(e) => set((n) => ({ ...n, enum: e.target.value }))}
-            placeholder="enum: a, b, 3"
-            spellCheck={false}
-            className={cn(F, "w-32")}
-          />
-        )}
-        <input
-          value={node.description}
-          onChange={(e) => set((n) => ({ ...n, description: e.target.value }))}
-          placeholder="description"
-          className={cn(F, "min-w-[140px] flex-1 font-sans")}
-        />
         {entry && (
           <button
             onClick={() => patch(entry.parentId, (p) => ({ ...p, properties: p.properties.filter((_, i) => i !== entry.index) }))}
             aria-label="Remove property"
-            className="flex h-7 w-7 items-center justify-center rounded-[var(--radius-sm)] text-faint hover:bg-raised hover:text-danger"
+            className="ml-auto flex h-7 w-7 items-center justify-center rounded-[var(--radius-sm)] text-faint hover:bg-raised hover:text-danger"
           >
             <Trash2 size={13} />
           </button>
         )}
       </div>
-
-      {node.type === "object" && (
-        <div>
-          {node.properties.map((p, i) => (
-            <NodeRow
-              key={p.node.id}
-              node={p.node}
-              depth={depth + 1}
-              entry={{ parentId: node.id, index: i, key: p.key, required: p.required }}
-              patch={patch}
-            />
+      <div className="pb-1 pl-7">
+        <input
+          value={node.description}
+          onChange={(e) => set((n) => ({ ...n, description: e.target.value }))}
+          placeholder="description"
+          aria-label="Description"
+          className="h-6 w-full rounded-[var(--radius-sm)] border border-transparent bg-transparent px-1.5 text-[11.5px] text-muted outline-none placeholder:text-faint hover:border-edge focus:border-accent focus:bg-base focus:text-ink"
+        />
+      </div>
+      {(conditions.length > 0 || chips.length > 0) && (
+        <div className="flex flex-wrap items-center gap-1 pb-1 pl-7" data-kept-keywords>
+          {conditions.map((c) => (
+            <span key={c} className="rounded border border-dashed border-edge-bright px-1.5 py-px text-[11px] text-muted" title="A rule kept as written; edit it in the JSON">
+              {c}
+            </span>
           ))}
-          <div style={{ paddingLeft: (depth + 1) * 16 }} className="py-1">
-            <button
-              onClick={() =>
-                set((n) => ({ ...n, properties: [...n.properties, { key: "", required: false, node: createNode("string") }] }))
-              }
-              className="inline-flex h-7 items-center gap-1 rounded-[var(--radius-sm)] px-2 text-[12px] text-accent hover:bg-raised"
-            >
-              <Plus size={13} /> property
-            </button>
-          </div>
+          {chips.map(([k, v]) => (
+            <span key={k} className="rounded border border-dashed border-edge px-1.5 py-px font-mono text-[10.5px] text-faint" title={`${k} is kept as written; edit it in the JSON`}>
+              {k}: {compactJson(v)}
+            </span>
+          ))}
         </div>
       )}
-      {node.type === "array" && node.items && <NodeRow node={node.items} depth={depth + 1} label="items" patch={patch} />}
+
+      {open && isRef && summary && <RefPreview summary={summary} ctx={ctx} />}
+      {open && hasChildren && !isRef && (
+        <div className="ml-2.5 border-l border-edge pl-2" data-children>
+          {node.type === "object" &&
+            node.properties.map((p, i) => (
+              <NodeRow key={p.node.id} node={p.node} depth={depth + 1} entry={{ parentId: node.id, index: i, key: p.key, required: p.required }} ctx={ctx} />
+            ))}
+          {node.type === "object" && node.additionalSchema && <NodeRow node={node.additionalSchema} depth={depth + 1} label="extra keys" ctx={ctx} />}
+          {node.type === "array" && node.items && <NodeRow node={node.items} depth={depth + 1} label="items" ctx={ctx} />}
+        </div>
+      )}
+      {node.type === "object" && (open || !hasChildren) && (
+        <div className={cn("py-0.5", hasChildren ? "ml-2.5 border-l border-edge pl-2" : "pl-7")}>
+          <button
+            onClick={() => {
+              setOpen(true);
+              set((n) => ({ ...n, properties: [...n.properties, { key: "", required: false, node: createNode("string") }] }));
+            }}
+            className="inline-flex h-7 items-center gap-1 rounded-[var(--radius-sm)] px-2 text-[12px] text-accent hover:bg-raised"
+          >
+            <Plus size={13} /> property
+          </button>
+        </div>
+      )}
     </div>
+  );
+}
+
+/* --------------------------------------------------------- what a $ref allows */
+
+function RefPreview({ summary, ctx }: { summary: SchemaSummary; ctx: RowContext }) {
+  const pointer = summary.ref ?? "";
+  return (
+    <div className="mb-1 ml-7 rounded-[var(--radius-sm)] border border-dashed border-edge bg-base-2 px-2.5 py-1.5 text-[12px]" data-ref-preview={pointer}>
+      {summary.missing ? (
+        <p className="text-warn">
+          {pointer.startsWith("#") ? "No definition at this pointer yet." : "A reference outside this document; it cannot be shown here, but validation follows it if it can be fetched."}
+        </p>
+      ) : (
+        <>
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-muted">
+            <span className="inline-flex items-center gap-1">
+              <Link2 size={11} /> allows
+            </span>
+            <SummaryType s={summary} />
+            <Constraints s={summary} />
+            {summary.description && <span className="min-w-0 flex-1 truncate text-faint" title={summary.description}>{summary.description}</span>}
+          </div>
+          {summary.children.length > 0 && (
+            <ul className="mt-1 space-y-0.5">
+              {summary.children.map((c, i) => (
+                <SummaryRow key={`${c.label}-${i}`} s={c} ctx={ctx} />
+              ))}
+            </ul>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+function SummaryType({ s }: { s: SchemaSummary }) {
+  return <span className="font-medium text-ink">{s.recursive ? "↻ as above" : s.missing ? "unresolved" : s.type}</span>;
+}
+
+function Constraints({ s }: { s: SchemaSummary }) {
+  if (!s.constraints.length && !s.conditions.length) return null;
+  return (
+    <>
+      {s.constraints.map((c, i) => (
+        <span key={i} className="rounded bg-raised px-1.5 py-px font-mono text-[10.5px] text-muted">
+          {c}
+        </span>
+      ))}
+      {s.conditions.map((c, i) => (
+        <span key={`c${i}`} className="rounded border border-dashed border-edge-bright px-1.5 py-px text-[10.5px] text-muted">
+          {c}
+        </span>
+      ))}
+    </>
+  );
+}
+
+function SummaryRow({ s, ctx }: { s: SchemaSummary; ctx: RowContext }) {
+  return (
+    <li data-summary-row={s.label}>
+      <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+        <code className={cn("font-mono text-[11.5px]", s.required ? "text-ink" : "text-muted")}>
+          {s.label}
+          {s.required && (
+            <span className="text-danger" title="required">
+              *
+            </span>
+          )}
+        </code>
+        <SummaryType s={s} />
+        {s.ref && !s.missing && (
+          <button
+            type="button"
+            onClick={() => ctx.jumpTo(s.ref!)}
+            className="inline-flex items-center gap-0.5 font-mono text-[10.5px] text-accent hover:underline"
+            title="Scroll to this definition"
+            data-jump-def
+          >
+            <Link2 size={10} /> {s.ref.replace(/^#\/(\$defs|definitions)\//, "")}
+          </button>
+        )}
+        <Constraints s={s} />
+        {s.description && (
+          <span className="min-w-0 max-w-[48ch] truncate text-[11.5px] text-faint" title={s.description}>
+            {s.description}
+          </span>
+        )}
+      </div>
+      {s.children.length > 0 && !s.recursive && (
+        <ul className="ml-2 mt-0.5 space-y-0.5 border-l border-edge pl-2">
+          {s.children.map((c, i) => (
+            <SummaryRow key={`${c.label}-${i}`} s={c} ctx={ctx} />
+          ))}
+        </ul>
+      )}
+    </li>
   );
 }
 
@@ -631,11 +935,13 @@ function NumField({
   onChange,
   placeholder,
   title,
+  wide,
 }: {
   value: string;
   onChange: (v: string) => void;
   placeholder: string;
   title: string;
+  wide?: boolean;
 }) {
   return (
     <input
@@ -644,7 +950,7 @@ function NumField({
       placeholder={placeholder}
       title={title}
       inputMode="decimal"
-      className={cn(F, "w-14")}
+      className={cn(F, wide ? "w-[4.5rem]" : "w-14")}
     />
   );
 }

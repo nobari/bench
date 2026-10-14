@@ -6,9 +6,12 @@
  * `./validate.ts` (Ajv) so this module stays dependency-free.
  */
 
-export type NodeType = "object" | "array" | "string" | "number" | "integer" | "boolean" | "null" | "any";
+export type NodeType = "object" | "array" | "string" | "number" | "integer" | "boolean" | "null" | "any" | "ref";
 
-export const NODE_TYPES: NodeType[] = ["object", "array", "string", "number", "integer", "boolean", "null", "any"];
+export const NODE_TYPES: NodeType[] = ["object", "array", "string", "number", "integer", "boolean", "null", "any", "ref"];
+
+/** Where a document keeps its reusable definitions. */
+export type DefsKeyword = "$defs" | "definitions";
 
 /** Formats supported by ajv-formats that are worth offering in the designer. */
 export const STRING_FORMATS = [
@@ -42,6 +45,20 @@ export interface SchemaNode {
   minimum: string;
   maximum: string;
   multipleOf: string;
+  // object, continued
+  minProperties: string;
+  maxProperties: string;
+  /** When extra keys must match a schema rather than being simply allowed or refused. */
+  additionalSchema?: SchemaNode;
+  /** The one allowed value, as JSON text; empty for none. */
+  const: string;
+  /** For type "ref": a JSON pointer in this document (`#/$defs/name`) or a URI. */
+  ref: string;
+  /** Reusable definitions (normally on the root), referenced by `#/<defsKeyword>/<key>`. */
+  defs: DefEntry[];
+  defsKeyword: DefsKeyword;
+  /** The order `required` had when imported, so it is written back unchanged (new keys follow in property order). */
+  requiredOrder: string[];
   /** Keywords the designer doesn't model, kept verbatim so imports round-trip. */
   extra: Record<string, unknown>;
 }
@@ -49,6 +66,11 @@ export interface SchemaNode {
 export interface PropertyEntry {
   key: string;
   required: boolean;
+  node: SchemaNode;
+}
+
+export interface DefEntry {
+  key: string;
   node: SchemaNode;
 }
 
@@ -76,6 +98,14 @@ export function createNode(type: NodeType = "string", partial: Partial<SchemaNod
     minimum: "",
     maximum: "",
     multipleOf: "",
+    minProperties: "",
+    maxProperties: "",
+    additionalSchema: undefined,
+    const: "",
+    ref: "",
+    defs: [],
+    defsKeyword: "$defs",
+    requiredOrder: [],
     extra: {},
     ...partial,
   };
@@ -92,7 +122,14 @@ export function updateNode(root: SchemaNode, id: string, fn: (n: SchemaNode) => 
   });
   const items = root.items ? updateNode(root.items, id, fn) : undefined;
   if (items !== root.items) changed = true;
-  return changed ? { ...root, properties, items } : root;
+  const additionalSchema = root.additionalSchema ? updateNode(root.additionalSchema, id, fn) : undefined;
+  if (additionalSchema !== root.additionalSchema) changed = true;
+  const defs = root.defs.map((d) => {
+    const node = updateNode(d.node, id, fn);
+    if (node !== d.node) changed = true;
+    return node === d.node ? d : { ...d, node };
+  });
+  return changed ? { ...root, properties, items, additionalSchema, defs } : root;
 }
 
 /* ------------------------------------------------------------ node → schema */
@@ -121,14 +158,26 @@ function parseEnum(s: string): unknown[] | undefined {
   });
 }
 
+function parseConst(s: string): unknown {
+  const t = s.trim();
+  try {
+    return JSON.parse(t);
+  } catch {
+    return t;
+  }
+}
+
 export function nodeToSchema(node: SchemaNode, root = true): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   if (root) out.$schema = DRAFT_2020;
-  if (node.type !== "any") out.type = node.nullable ? [node.type, "null"] : node.type;
+  if (node.type === "ref") {
+    if (node.ref.trim()) out.$ref = node.ref.trim();
+  } else if (node.type !== "any") out.type = node.nullable ? [node.type, "null"] : node.type;
   if (node.title.trim()) out.title = node.title.trim();
   if (node.description.trim()) out.description = node.description.trim();
   const en = parseEnum(node.enum);
   if (en) out.enum = en;
+  if (node.const.trim()) out.const = parseConst(node.const);
 
   switch (node.type) {
     case "object": {
@@ -137,9 +186,15 @@ export function nodeToSchema(node: SchemaNode, root = true): Record<string, unkn
         for (const p of node.properties) if (p.key.trim()) props[p.key.trim()] = nodeToSchema(p.node, false);
         out.properties = props;
         const required = node.properties.filter((p) => p.required && p.key.trim()).map((p) => p.key.trim());
-        if (required.length) out.required = required;
+        const kept = node.requiredOrder.filter((k) => required.includes(k));
+        const ordered = [...kept, ...required.filter((k) => !kept.includes(k))];
+        if (ordered.length) out.required = ordered;
       }
-      if (!node.additionalProperties) out.additionalProperties = false;
+      if (node.additionalSchema) out.additionalProperties = nodeToSchema(node.additionalSchema, false);
+      else if (!node.additionalProperties) out.additionalProperties = false;
+      const a = num(node.minProperties), b = num(node.maxProperties);
+      if (a !== undefined) out.minProperties = a;
+      if (b !== undefined) out.maxProperties = b;
       break;
     }
     case "array": {
@@ -170,6 +225,11 @@ export function nodeToSchema(node: SchemaNode, root = true): Record<string, unkn
       break;
   }
   for (const [k, v] of Object.entries(node.extra)) if (!(k in out)) out[k] = v;
+  if (node.defs.length) {
+    const defs: Record<string, unknown> = {};
+    for (const d of node.defs) if (d.key.trim()) defs[d.key.trim()] = nodeToSchema(d.node, false);
+    out[node.defsKeyword] = defs;
+  }
   return out;
 }
 
@@ -178,7 +238,7 @@ export function nodeToSchema(node: SchemaNode, root = true): Record<string, unkn
 const HANDLED = new Set([
   "$schema", "type", "title", "description", "enum", "properties", "required", "additionalProperties",
   "items", "minItems", "maxItems", "uniqueItems", "minLength", "maxLength", "pattern", "format",
-  "minimum", "maximum", "multipleOf",
+  "minimum", "maximum", "multipleOf", "minProperties", "maxProperties", "const", "$ref", "$defs", "definitions",
 ]);
 
 const str = (v: unknown) => (v === undefined || v === null ? "" : String(v));
@@ -195,25 +255,40 @@ export function schemaToNode(schema: unknown, root = true): SchemaNode {
   let type: NodeType = "any";
   let nullable = false;
   const extra: Record<string, unknown> = {};
+  const isRef = typeof s.$ref === "string";
   const t = s.type;
-  if (typeof t === "string" && NODE_TYPES.includes(t as NodeType)) type = t as NodeType;
+  if (isRef) type = "ref";
+  else if (typeof t === "string" && t !== "ref" && NODE_TYPES.includes(t as NodeType)) type = t as NodeType;
   else if (Array.isArray(t)) {
     const nonNull = t.filter((x) => x !== "null");
     nullable = t.includes("null");
-    if (nonNull.length === 1 && NODE_TYPES.includes(nonNull[0] as NodeType)) type = nonNull[0] as NodeType;
+    if (nonNull.length === 1 && nonNull[0] !== "ref" && NODE_TYPES.includes(nonNull[0] as NodeType)) type = nonNull[0] as NodeType;
     else extra.type = t;
-  }
+  } else if (t !== undefined) extra.type = t;
   if (type === "any" && !("type" in extra)) {
     if (s.properties || s.required) type = "object";
     else if (s.items) type = "array";
   }
+  const extraSchema = s.additionalProperties && typeof s.additionalProperties === "object" ? s.additionalProperties : null;
+  const defsKeyword: DefsKeyword = s.$defs && typeof s.$defs === "object" ? "$defs" : "definitions";
+  const defsSource = s[defsKeyword];
 
   const node = createNode(type, {
     nullable,
     title: str(s.title),
     description: str(s.description),
     enum: Array.isArray(s.enum) ? s.enum.map((v) => (typeof v === "string" ? v : JSON.stringify(v))).join(", ") : "",
+    const: "const" in s ? JSON.stringify(s.const) : "",
+    ref: isRef ? (s.$ref as string) : "",
     additionalProperties: s.additionalProperties !== false,
+    additionalSchema: type === "object" && extraSchema ? schemaToNode(extraSchema, false) : undefined,
+    minProperties: str(s.minProperties),
+    maxProperties: str(s.maxProperties),
+    defsKeyword,
+    defs:
+      defsSource && typeof defsSource === "object" && !Array.isArray(defsSource)
+        ? Object.entries(defsSource as Record<string, unknown>).map(([key, sub]) => ({ key, node: schemaToNode(sub, false) }))
+        : [],
     minItems: str(s.minItems),
     maxItems: str(s.maxItems),
     uniqueItems: s.uniqueItems === true,
@@ -227,6 +302,7 @@ export function schemaToNode(schema: unknown, root = true): SchemaNode {
     items: undefined,
   });
 
+  node.requiredOrder = Array.isArray(s.required) ? (s.required as unknown[]).map(String) : [];
   if (type === "object" && s.properties && typeof s.properties === "object") {
     const required = new Set(Array.isArray(s.required) ? (s.required as unknown[]).map(String) : []);
     node.properties = Object.entries(s.properties as Record<string, unknown>).map(([key, sub]) => ({
@@ -247,9 +323,219 @@ export function schemaToNode(schema: unknown, root = true): SchemaNode {
     extra[k] = v;
   }
   if (!root && "$schema" in s) extra.$schema = s.$schema;
-  if (type === "array" && "additionalProperties" in s) extra.additionalProperties = s.additionalProperties;
+  if (type !== "object" && "additionalProperties" in s) extra.additionalProperties = s.additionalProperties;
+  if (type !== "object" && ("minProperties" in s || "maxProperties" in s)) {
+    if ("minProperties" in s) extra.minProperties = s.minProperties;
+    if ("maxProperties" in s) extra.maxProperties = s.maxProperties;
+  }
+  // Both keywords present: the one the designer does not edit is kept verbatim.
+  if (defsKeyword === "$defs" && "definitions" in s) extra.definitions = s.definitions;
   node.extra = extra;
   return node;
+}
+
+/** The pointers a `$ref` in this design can name, in definition order. */
+export function listDefinitions(root: SchemaNode): string[] {
+  return root.defs.filter((d) => d.key.trim()).map((d) => `#/${root.defsKeyword}/${d.key.trim()}`);
+}
+
+/* --------------------------------------------------------------- references */
+
+/** The value a JSON pointer into this document names (`#/$defs/x`), or undefined for a URI, an anchor or a missing target. */
+export function resolvePointer(root: unknown, ref: string): unknown {
+  if (!ref.startsWith("#")) return undefined;
+  const path = ref.slice(1);
+  if (path === "") return root;
+  if (!path.startsWith("/")) return undefined;
+  let cur: unknown = root;
+  for (const raw of path.split("/").slice(1)) {
+    let seg = raw;
+    try {
+      seg = decodeURIComponent(raw);
+    } catch {
+      /* keep as is */
+    }
+    seg = seg.replace(/~1/g, "/").replace(/~0/g, "~");
+    if (!cur || typeof cur !== "object") return undefined;
+    cur = (cur as Record<string, unknown>)[seg];
+    if (cur === undefined) return undefined;
+  }
+  return cur;
+}
+
+/** A schema's shape in words, with references followed, for showing what a value may be. */
+export interface SchemaSummary {
+  /** Property name, "items", "extra keys", or "" for the schema itself. */
+  label: string;
+  type: string;
+  /** The pointer this came through, when the schema was a reference. */
+  ref?: string;
+  required: boolean;
+  description: string;
+  constraints: string[];
+  conditions: string[];
+  children: SchemaSummary[];
+  /** The reference is already open further up: not expanded again. */
+  recursive?: boolean;
+  /** The reference could not be followed (missing, or a URI outside this document). */
+  missing?: boolean;
+}
+
+const MAX_SUMMARY_DEPTH = 24;
+const fmtValue = (v: unknown) => (typeof v === "string" ? JSON.stringify(v) : JSON.stringify(v));
+const range = (min: unknown, max: unknown, unit: string, exMin?: unknown, exMax?: unknown): string[] => {
+  const out: string[] = [];
+  const lo = typeof min === "number" ? min : undefined, hi = typeof max === "number" ? max : undefined;
+  if (lo !== undefined && hi !== undefined) out.push(unit ? `${lo}–${hi} ${unit}` : `${lo}–${hi}`);
+  else if (lo !== undefined) out.push(unit ? `≥ ${lo} ${unit}` : `≥ ${lo}`);
+  else if (hi !== undefined) out.push(unit ? `≤ ${hi} ${unit}` : `≤ ${hi}`);
+  if (typeof exMin === "number") out.push(`> ${exMin}`);
+  if (typeof exMax === "number") out.push(`< ${exMax}`);
+  return out;
+};
+
+export function summarizeSchema(schema: unknown, rootSchema: unknown, label = "", required = false): SchemaSummary {
+  return walkSummary(schema, rootSchema, label, required, new Set(), 0);
+}
+
+function walkSummary(schema: unknown, rootSchema: unknown, label: string, required: boolean, open: Set<string>, depth: number): SchemaSummary {
+  const base: SchemaSummary = { label, type: "any", required, description: "", constraints: [], conditions: [], children: [] };
+  if (schema === true || schema === undefined) return base;
+  if (schema === false) return { ...base, type: "nothing" };
+  if (!schema || typeof schema !== "object") return base;
+  let s = schema as Record<string, unknown>;
+  let ref: string | undefined;
+  const siblings = s;
+  if (typeof s.$ref === "string") {
+    ref = s.$ref;
+    if (open.has(ref)) return { ...base, type: "…", ref, recursive: true, description: str(s.description) };
+    const target = resolvePointer(rootSchema, ref);
+    if (!target || typeof target !== "object") return { ...base, type: "?", ref, missing: true, description: str(s.description) };
+    s = target as Record<string, unknown>;
+    open = new Set(open).add(ref);
+  }
+  const out: SchemaSummary = { ...base, ref, description: str(siblings.description) || str(s.description) };
+  if (depth > MAX_SUMMARY_DEPTH) {
+    out.constraints.push("…");
+    return out;
+  }
+  // Type
+  let type = "any";
+  const t = s.type;
+  if (typeof t === "string") type = t;
+  else if (Array.isArray(t)) {
+    const nonNull = t.filter((x) => x !== "null");
+    type = nonNull.join(" | ") || "null";
+    if (t.includes("null") && nonNull.length) out.constraints.push("or null");
+  } else if (s.properties || s.required || s.additionalProperties !== undefined) type = "object";
+  else if (s.items !== undefined) type = "array";
+  if (Array.isArray(s.enum)) {
+    type = "enum";
+    out.constraints.push(s.enum.map(fmtValue).join(" · "));
+  } else if ("const" in s) {
+    type = "const";
+    out.constraints.push(`= ${fmtValue(s.const)}`);
+  }
+  out.type = type;
+  // Constraints by type
+  if (type === "string" || typeof s.format === "string" || typeof s.pattern === "string") {
+    if (typeof s.format === "string") out.constraints.push(s.format);
+    out.constraints.push(...range(s.minLength, s.maxLength, "chars"));
+    if (typeof s.pattern === "string") out.constraints.push(`pattern ${s.pattern}`);
+  }
+  if (type === "number" || type === "integer" || "minimum" in s || "maximum" in s || "exclusiveMinimum" in s || "exclusiveMaximum" in s) {
+    out.constraints.push(...range(s.minimum, s.maximum, "", s.exclusiveMinimum, s.exclusiveMaximum));
+    if (typeof s.multipleOf === "number") out.constraints.push(`multiple of ${s.multipleOf}`);
+  }
+  if (type === "object") {
+    if (s.additionalProperties === false) out.constraints.push("no extra keys");
+    out.constraints.push(...range(s.minProperties, s.maxProperties, "keys"));
+    const req = new Set(Array.isArray(s.required) ? (s.required as unknown[]).map(String) : []);
+    if (s.properties && typeof s.properties === "object") {
+      for (const [key, sub] of Object.entries(s.properties as Record<string, unknown>)) out.children.push(walkSummary(sub, rootSchema, key, req.has(key), open, depth + 1));
+    }
+    for (const key of req) if (!out.children.some((c) => c.label === key)) out.children.push({ ...walkSummary(true, rootSchema, key, true, open, depth + 1) });
+    if (s.additionalProperties && typeof s.additionalProperties === "object") out.children.push(walkSummary(s.additionalProperties, rootSchema, "extra keys", false, open, depth + 1));
+    if (s.patternProperties && typeof s.patternProperties === "object") {
+      for (const [pat, sub] of Object.entries(s.patternProperties as Record<string, unknown>)) out.children.push(walkSummary(sub, rootSchema, `keys matching ${pat}`, false, open, depth + 1));
+    }
+  }
+  if (type === "array") {
+    const minItems = typeof s.minItems === "number" && s.minItems > 0 ? s.minItems : undefined;
+    out.constraints.push(...range(minItems, s.maxItems, "items"));
+    if (s.uniqueItems === true) out.constraints.push("unique");
+    if (Array.isArray(s.prefixItems)) (s.prefixItems as unknown[]).forEach((sub, i) => out.children.push(walkSummary(sub, rootSchema, `item ${i + 1}`, true, open, depth + 1)));
+    if (s.items !== undefined && typeof s.items === "object" && !Array.isArray(s.items)) out.children.push(walkSummary(s.items, rootSchema, "items", false, open, depth + 1));
+    else if (Array.isArray(s.items)) (s.items as unknown[]).forEach((sub, i) => out.children.push(walkSummary(sub, rootSchema, `item ${i + 1}`, true, open, depth + 1)));
+  }
+  for (const key of ["oneOf", "anyOf", "allOf"] as const) {
+    if (!Array.isArray(s[key])) continue;
+    (s[key] as unknown[]).forEach((sub, i) => out.children.push(walkSummary(sub, rootSchema, `${key === "oneOf" ? "one of" : key === "anyOf" ? "any of" : "all of"} · ${i + 1}`, false, open, depth + 1)));
+  }
+  out.conditions = describeConditions(s);
+  return out;
+}
+
+/** Conditional and combining keywords in plain words, e.g. `if reason = "other" then note is required`. */
+export function describeConditions(schema: unknown): string[] {
+  if (!schema || typeof schema !== "object") return [];
+  const s = schema as Record<string, unknown>;
+  const out: string[] = [];
+  if (s.if && typeof s.if === "object") {
+    const cond = describeTest(s.if as Record<string, unknown>);
+    const then = s.then && typeof s.then === "object" ? describeEffect(s.then as Record<string, unknown>) : "";
+    const otherwise = s.else && typeof s.else === "object" ? describeEffect(s.else as Record<string, unknown>) : "";
+    let line = `if ${cond}`;
+    if (then) line += ` then ${then}`;
+    if (otherwise) line += ` else ${otherwise}`;
+    out.push(line);
+  }
+  if (Array.isArray(s.oneOf)) out.push(`one of ${s.oneOf.length} schemas`);
+  if (Array.isArray(s.anyOf)) out.push(`any of ${s.anyOf.length} schemas`);
+  if (Array.isArray(s.allOf)) out.push(`all of ${s.allOf.length} schemas`);
+  if (s.not !== undefined) out.push("must not match a schema");
+  if (s.dependentRequired && typeof s.dependentRequired === "object") {
+    for (const [key, deps] of Object.entries(s.dependentRequired as Record<string, unknown>)) if (Array.isArray(deps)) out.push(`with ${key}, ${listWords(deps.map(String))} ${deps.length === 1 ? "is" : "are"} required`);
+  }
+  return out;
+}
+
+const listWords = (xs: string[]) => (xs.length <= 1 ? xs.join("") : `${xs.slice(0, -1).join(", ")} and ${xs[xs.length - 1]}`);
+
+function describeTest(test: Record<string, unknown>): string {
+  const parts: string[] = [];
+  const req = new Set(Array.isArray(test.required) ? (test.required as unknown[]).map(String) : []);
+  if (test.properties && typeof test.properties === "object") {
+    for (const [key, sub] of Object.entries(test.properties as Record<string, unknown>)) {
+      const p = sub && typeof sub === "object" ? (sub as Record<string, unknown>) : {};
+      if ("const" in p) parts.push(`${key} = ${fmtValue(p.const)}`);
+      else if (Array.isArray(p.enum)) parts.push(`${key} is ${p.enum.map(fmtValue).join(" or ")}`);
+      else if (typeof p.type === "string") parts.push(`${key} is ${p.type === "integer" || p.type === "object" || p.type === "array" ? "an" : "a"} ${p.type}`);
+      else parts.push(`${key} matches a schema`);
+      req.delete(key);
+    }
+  }
+  for (const key of req) parts.push(`${key} is present`);
+  return parts.length ? parts.join(" and ") : JSON.stringify(test);
+}
+
+function describeEffect(effect: Record<string, unknown>): string {
+  const parts: string[] = [];
+  if (Array.isArray(effect.required) && effect.required.length) {
+    const keys = (effect.required as unknown[]).map(String);
+    parts.push(`${listWords(keys)} ${keys.length === 1 ? "is" : "are"} required`);
+  }
+  if (effect.properties && typeof effect.properties === "object") {
+    for (const [key, sub] of Object.entries(effect.properties as Record<string, unknown>)) {
+      const p = sub && typeof sub === "object" ? (sub as Record<string, unknown>) : {};
+      if ("const" in p) parts.push(`${key} = ${fmtValue(p.const)}`);
+      else if (sub === false) parts.push(`${key} is not allowed`);
+      else parts.push(`${key} matches a schema`);
+    }
+  }
+  const rest = Object.keys(effect).filter((k) => k !== "required" && k !== "properties");
+  if (rest.length && !parts.length) parts.push(JSON.stringify(effect));
+  return parts.join(" and ");
 }
 
 /* ---------------------------------------------------------------- inference */
