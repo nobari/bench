@@ -3,10 +3,11 @@ import { useEffect } from "react";
 /**
  * Soft state for share links. A widget's real data lives in the query string or the hash already; the way it is being
  * looked at — a view mode, an open outline — is registered here and written into the link as one `s` hash parameter
- * when a share link is made. A reader applies only what it still understands, so a link keeps working when a state
+ * when a share link is made (`ui` in the hash). A reader applies only what it still understands, so a link keeps working when a state
  * changes or disappears later; the theme is never part of it.
  */
-const PARAM = "s";
+// Its own parameter, clear of the ones tools use for their data (the JSON Schema tool keeps the schema in `s`).
+const PARAM = "ui";
 const states = new Map<string, unknown>();
 
 function encode(value: unknown): string {
@@ -37,7 +38,7 @@ export function useShareState(key: string, value: object | null) {
   }, [key, json]);
 }
 
-/** Put every registered soft state into the page's hash as `s`, keeping the other hash parameters. */
+/** Put every registered soft state into the page's hash as `ui`, keeping the other hash parameters. */
 export function writeShareStateToUrl() {
   const hash = new URLSearchParams(window.location.hash.replace(/^#/, ""));
   if (states.size) hash.set(PARAM, encode(Object.fromEntries(states)));
