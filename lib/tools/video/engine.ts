@@ -1355,11 +1355,11 @@ async function exportWithPulse(
     await seg.output.start();
     segment = seg;
   };
-  /** Finishes the open part so it counts as done; false when it could not be finished (then it is discarded). */
-  const closeSegment = async (): Promise<boolean> => {
-    const seg = segment;
-    if (!seg) return true;
-    segment = null;
+  // The manifest is written by one hand at a time: parts can finish while another is being saved.
+  let saveChain: Promise<void> = Promise.resolve();
+  const saveManifest = () => (saveChain = saveChain.then(() => parts!.store.save(manifest!)));
+  /** Finishes a part so it counts as done; false when it could not be finished (then it is discarded). */
+  const finishSegment = async (seg: Segment): Promise<boolean> => {
     if (!seg.frames) {
       await discardSegment(seg);
       return true;
@@ -1376,8 +1376,42 @@ async function exportWithPulse(
     manifest!.parts.sort((a, b) => a.start - b.start);
     manifest!.updatedAt = Date.now();
     runCursor = Math.max(runCursor, seg.end);
-    await parts!.store.save(manifest!);
+    await saveManifest();
     return true;
+  };
+  /** Finishes the open part now (used when the export stops or ends). */
+  const closeSegment = async (): Promise<boolean> => {
+    const seg = segment;
+    if (!seg) return true;
+    segment = null;
+    return finishSegment(seg);
+  };
+  // Finishing a part means flushing its encoder, writing its index and closing its file, which the browser then
+  // reads back to check — seconds per part. That happens in the background while the next part is encoded; a
+  // failure there stops the export at the next frame, and everything is settled before the join and on any exit.
+  const pendingCloses = new Set<Promise<void>>();
+  let closeFailure: Error | null = null;
+  const closeSegmentLater = () => {
+    const seg = segment;
+    segment = null;
+    if (!seg) return;
+    const p: Promise<void> = finishSegment(seg)
+      .then((ok) => {
+        if (!ok) closeFailure ??= partError(`Part ${seg.file} could not be written to the parts folder.`);
+      })
+      .catch((e) => {
+        closeFailure ??= e instanceof Error ? e : new Error(String(e));
+      })
+      .finally(() => pendingCloses.delete(p));
+    pendingCloses.add(p);
+  };
+  const settleCloses = async () => {
+    await Promise.all([...pendingCloses]);
+    if (closeFailure) {
+      const e = closeFailure;
+      closeFailure = null;
+      throw e;
+    }
   };
   /** Export time this run has finished work up to (the end of the last part it closed). */
   let runCursor = gaps[0]?.from ?? 0;
@@ -1390,8 +1424,13 @@ async function exportWithPulse(
   const addFrame = async (timelineT: number, duration: number) => {
     const t = timelineT - offset;
     if (parts) {
+      if (closeFailure) await settleCloses();
       if (!segment || t - segment.start >= partSeconds) {
-        if (segment && !(await closeSegment())) throw partError("A finished part could not be written to the parts folder.");
+        if (segment) {
+          closeSegmentLater();
+          // Two parts finishing at once is plenty; a third waits so the disk is never asked for more.
+          if (pendingCloses.size > 2) await settleCloses();
+        }
         await openSegment(t);
       }
       const seg = segment!;
@@ -1614,11 +1653,15 @@ async function exportWithPulse(
         await runVideo(cursor);
         break;
       } catch (e) {
+        // What was done stays: the open part is finished — on a cancel too, so a stop can be continued from —
+        // and the parts finishing in the background are waited for (a failure among them ends the export).
+        if (parts) {
+          await closeSegment();
+          await settleCloses();
+        }
         const canAsk = !!current && !isAbort(e) && !isPartError(e) && !!opts.onFault;
         const fault = canAsk ? await describeFault(e, faults + 1) : null;
         current = null;
-        // What was done stays: the open part is finished — on a cancel too, so a stop can be continued from.
-        if (parts) await closeSegment();
         if (!fault) throw e;
         faults++;
         if (Math.abs(fault.timelineT - lastFaultT) < 1e-3) sameFault++;
@@ -1636,12 +1679,15 @@ async function exportWithPulse(
         if (manifest) {
           manifest.skipped = skips;
           manifest.updatedAt = Date.now();
-          await parts!.store.save(manifest);
+          await saveManifest();
         }
         cursor = parts ? doneUntil() : Math.max(cursor, fault.timelineT - offset);
       }
     }
-    if (parts && segment && !(await closeSegment())) throw partError("The last part could not be written to the parts folder.");
+    if (parts) {
+      if (segment && !(await closeSegment())) throw partError("The last part could not be written to the parts folder.");
+      await settleCloses();
+    }
     await neighbour.reset();
 
     // Audio, mixed and encoded into whichever output takes the file.
@@ -1722,7 +1768,7 @@ async function exportWithPulse(
           // Its bytes are in the file now; should the file not get finished, this stretch is exported again.
           part.consumed = true;
           manifest!.updatedAt = Date.now();
-          await parts.store.save(manifest!);
+          await saveManifest();
           await parts.store.remove(part.file);
         }
         if (parts.testFailJoinAfter !== undefined && index + 1 >= parts.testFailJoinAfter) throw new Error("Test: the join was interrupted.");
@@ -1742,7 +1788,10 @@ async function exportWithPulse(
     emit(true);
   } catch (e) {
     // Nothing half-written is left behind: the output being written is dropped (the finished parts stay).
-    if (parts && segment) await closeSegment();
+    if (parts) {
+      if (segment) await closeSegment();
+      await Promise.allSettled([...pendingCloses]);
+    }
     await neighbour.reset().catch(() => undefined);
     try {
       await output?.cancel();
