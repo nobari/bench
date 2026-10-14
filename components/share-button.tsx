@@ -4,9 +4,10 @@ import { useState } from "react";
 import { Check, Link2, Loader2 } from "lucide-react";
 import { MAX_URL_LENGTH, type ShortenResponse } from "@/lib/tools/web/shortlink";
 import { cn } from "@/lib/utils";
+import { writeShareStateToUrl } from "@/lib/share-state";
 
 /** Share links longer than this go through the URL shortener (/web/short-url). */
-export const SHORTEN_SHARE_ABOVE = 2000;
+export const SHORTEN_SHARE_ABOVE = 128;
 
 /**
  * Dispatched on `window` right before the page URL is read for sharing, so a
@@ -78,6 +79,7 @@ export function ShareButton({ className, variant = "primary" }: Props) {
   const share = async (e: React.MouseEvent) => {
     if (state === "busy") return;
     window.dispatchEvent(new CustomEvent(SHARE_SYNC_EVENT));
+    writeShareStateToUrl();
     const href = window.location.href;
     const forceFull = e.shiftKey;
     if (!forceFull && href.length > SHORTEN_SHARE_ABOVE && href.length <= MAX_URL_LENGTH) setState("busy");
@@ -104,7 +106,7 @@ export function ShareButton({ className, variant = "primary" }: Props) {
     <button
       type="button"
       onClick={share}
-      title={`Copy a link that reopens this exact state. Links over ${SHORTEN_SHARE_ABOVE.toLocaleString()} characters are shortened automatically — shift-click to copy the full URL.`}
+      title={`Copy a link that reopens this content and the way you are looking at it. Links over ${SHORTEN_SHARE_ABOVE} characters are shortened automatically — shift-click to copy the full URL.`}
       className={cn(
         "inline-flex select-none items-center gap-2 rounded-[var(--radius-sm)] transition-colors",
         variant === "primary"

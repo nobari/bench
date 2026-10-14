@@ -57,17 +57,34 @@ export interface HeadingInfo {
 let slugCounts = new Map<string, number>();
 let collected: HeadingInfo[] = [];
 
+/** Highlighted code blocks, by language and source: while typing elsewhere every unchanged block is reused as is. */
+const highlighted = new Map<string, string>();
+const HIGHLIGHT_CACHE = 300;
+function highlight(language: string, text: string): string {
+  const key = `${language}\u0000${text}`;
+  const hit = highlighted.get(key);
+  if (hit !== undefined) return hit;
+  const out = language && hljs.getLanguage(language) ? hljs.highlight(text, { language, ignoreIllegals: true }).value : escapeHtml(text);
+  if (highlighted.size >= HIGHLIGHT_CACHE) highlighted.delete(highlighted.keys().next().value as string);
+  highlighted.set(key, out);
+  return out;
+}
+
+/** GitHub-style alerts: a blockquote opening with [!NOTE], [!TIP], [!IMPORTANT], [!WARNING] or [!CAUTION]. */
+export const ALERT_KINDS: Record<string, string> = { note: "Note", tip: "Tip", important: "Important", warning: "Warning", caution: "Caution" };
+
 const marked = new Marked({
   gfm: true,
   breaks: false,
   renderer: {
     code({ text, lang }: Tokens.Code) {
       const language = (lang ?? "").trim().split(/\s+/)[0].toLowerCase();
-      if (language && hljs.getLanguage(language)) {
-        const out = hljs.highlight(text, { language, ignoreIllegals: true }).value;
-        return `<pre><code class="hljs language-${escapeHtml(language)}">${out}</code></pre>\n`;
-      }
-      return `<pre><code class="hljs${language ? ` language-${escapeHtml(language)}` : ""}">${escapeHtml(text)}</code></pre>\n`;
+      // A Mermaid fence becomes a diagram in the browser; the source stays inside until it is drawn (and for exports).
+      // (The source rides only in the <pre>: in an attribute, Mermaid's "-->" arrows would be stripped as unsafe markup.)
+      if (language === "mermaid") return `<div class="md-mermaid" data-diagram="mermaid"><pre class="md-mermaid-src"><code>${escapeHtml(text)}</code></pre></div>\n`;
+      const out = highlight(language, text);
+      const cls = `hljs${language ? ` language-${escapeHtml(language)}` : ""}`;
+      return `<div class="md-code"><div class="md-code-bar"><span class="md-lang">${escapeHtml(language || "code")}</span><button type="button" class="md-copy" data-copy aria-label="Copy this code">Copy</button></div><pre><code class="${cls}">${out}</code></pre></div>\n`;
     },
     heading({ tokens, depth }: Tokens.Heading) {
       const inner = this.parser.parseInline(tokens);
@@ -76,7 +93,25 @@ const marked = new Marked({
       slugCounts.set(base, n + 1);
       const id = n ? `${base}-${n}` : base;
       collected.push({ depth, text: inner.replace(/<[^>]+>/g, ""), id });
-      return `<h${depth} id="${id}">${inner}</h${depth}>\n`;
+      return `<h${depth} id="${id}">${inner}<a class="md-anchor" href="#${id}" aria-label="Link to this section">#</a></h${depth}>\n`;
+    },
+    blockquote({ tokens }: Tokens.Blockquote) {
+      const body = this.parser.parse(tokens);
+      const m = /^<p>\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]\s*(?:<br>)?\s*/i.exec(body);
+      if (!m) return `<blockquote>\n${body}</blockquote>\n`;
+      const kind = m[1].toLowerCase();
+      const rest = body.slice(m[0].length);
+      const inner = rest.startsWith("</p>") ? rest.slice(4) : `<p>${rest}`;
+      return `<div class="md-alert md-alert-${kind}" role="note"><p class="md-alert-title">${ALERT_KINDS[kind]}</p>${inner}</div>\n`;
+    },
+    table({ header, rows }: Tokens.Table) {
+      const cell = (c: Tokens.TableCell, tag: "th" | "td") => `<${tag}${c.align ? ` style="text-align:${c.align}"` : ""}>${this.parser.parseInline(c.tokens)}</${tag}>`;
+      const head = `<thead><tr>${header.map((c) => cell(c, "th")).join("")}</tr></thead>`;
+      const body = rows.length ? `<tbody>${rows.map((r) => `<tr>${r.map((c) => cell(c, "td")).join("")}</tr>`).join("")}</tbody>` : "";
+      return `<div class="md-table"><table>${head}${body}</table></div>\n`;
+    },
+    image({ href, title, text }: Tokens.Image) {
+      return `<img src="${escapeHtml(href)}" alt="${escapeHtml(text)}"${title ? ` title="${escapeHtml(title)}"` : ""} loading="lazy" decoding="async">`;
     },
     link({ href, title, tokens }: Tokens.Link) {
       const inner = this.parser.parseInline(tokens);
@@ -195,9 +230,21 @@ p,ul,ol,pre,table,blockquote{margin:0 0 1em}a{color:#2f2f36;text-decoration:unde
 pre{background:#f3f5ee;border:1px solid #d6dccb;border-radius:6px;padding:14px 16px;overflow:auto}pre code{background:none;padding:0;font-size:.875em}
 blockquote{border-left:3px solid #bec8ae;margin-left:0;padding:.2em 1em;color:#5c6854}table{border-collapse:collapse;width:100%}th,td{border:1px solid #d6dccb;padding:.45em .7em;text-align:left}th{background:#f0f3ea}
 img{max-width:100%}hr{border:0;border-top:1px solid #d6dccb;margin:2em 0}input[type=checkbox]{margin-right:.4em}
+.md-code{margin:0 0 1em}.md-code pre{margin:0}.md-table{overflow:auto;margin:0 0 1em}.md-table table{margin:0}
+.md-alert{border-left:3px solid #8a8f99;background:#f6f6f7;border-radius:6px;padding:.6em 1em;margin:0 0 1em}.md-alert p{margin:0 0 .4em}.md-alert-title{font-weight:600}
+.md-alert-tip{border-color:#35688a}.md-alert-important{border-color:#6639ba}.md-alert-warning{border-color:#8a6720}.md-alert-caution{border-color:#b8342f}
+.md-mermaid{text-align:center;margin:0 0 1em}.md-mermaid svg{max-width:100%;height:auto}.md-mermaid-src{text-align:left}
 .hljs-comment,.hljs-quote{color:#6e7781;font-style:italic}.hljs-keyword,.hljs-selector-tag,.hljs-literal,.hljs-built_in{color:#6639ba}.hljs-string,.hljs-regexp,.hljs-addition{color:#116329}.hljs-number,.hljs-meta{color:#953800}
 .hljs-title,.hljs-name,.hljs-section,.hljs-attr,.hljs-attribute,.hljs-variable,.hljs-template-variable{color:#0550ae}.hljs-type,.hljs-symbol,.hljs-bullet{color:#b45309}.hljs-deletion{color:#c0392b}.hljs-emphasis{font-style:italic}.hljs-strong{font-weight:600}
 @media print{main{padding:0}}`;
+
+/** Preview HTML made fit for a file: the copy bars go, drawn diagrams stay (their source is dropped once drawn). */
+export function exportableHtml(html: string): string {
+  return html
+    .replace(/<div class="md-code-bar">[\s\S]*?<\/div>/g, "")
+    .replace(/<a class="md-anchor"[^>]*>#<\/a>/g, "")
+    .replace(/(<div class="md-mermaid"[^>]*data-state="done"[^>]*>)<pre class="md-mermaid-src">[\s\S]*?<\/pre>/g, "$1");
+}
 
 /** A complete HTML document for download or printing. */
 export function toStandaloneHtml(title: string, bodyHtml: string): string {
@@ -255,6 +302,16 @@ Type on the left, see the result on the right. **Bold**, *italic*, ~~strikethrou
 export function greet(name: string): string {
   return \`Hello, \${name}!\`; // highlighted
 }
+\`\`\`
+
+> [!TIP]
+> Alerts like this one, plus **Note**, **Important**, **Warning** and **Caution**, render as callouts.
+
+## Diagram
+
+\`\`\`mermaid
+flowchart LR
+  Write[Write Markdown] --> Preview --> Share[Share the link]
 \`\`\`
 
 > Blockquotes for callouts, and a horizontal rule below.

@@ -1,6 +1,6 @@
 "use client";
 
-import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { useQueryState, parseAsStringLiteral } from "nuqs";
 import DOMPurify from "dompurify";
 import { compressToEncodedURIComponent, decompressFromEncodedURIComponent } from "lz-string";
@@ -9,6 +9,7 @@ import {
   Code,
   Columns2,
   Download,
+  Expand,
   Eye,
   Heading1,
   Heading2,
@@ -16,6 +17,8 @@ import {
   Italic,
   Link2,
   List,
+  Maximize2,
+  Minimize2,
   ListChecks,
   ListOrdered,
   ListTree,
@@ -30,6 +33,7 @@ import {
 import {
   SAMPLE,
   documentTitle,
+  exportableHtml,
   indentLines,
   insertBlock,
   markdownStats,
@@ -41,10 +45,27 @@ import {
 } from "@/lib/tools/text/markdown";
 import { CopyButton } from "@/components/copy-button";
 import { SHARE_SYNC_EVENT } from "@/components/share-button";
+import { readShareState, useShareState } from "@/lib/share-state";
+import { subscribeTheme } from "@/lib/theme";
 import { cn } from "@/lib/utils";
 
 const VIEWS = ["edit", "split", "preview"] as const;
 const DRAFT_KEY = "bench:markdown:draft";
+
+/** Drawn diagrams by theme and source: typing anywhere else leaves every diagram as it is. */
+const mermaidCache = new Map<string, string>();
+const MERMAID_CACHE = 80;
+type MermaidModule = typeof import("mermaid").default;
+let mermaidModule: Promise<MermaidModule> | null = null;
+const loadMermaid = () => (mermaidModule ??= import("mermaid").then((m) => m.default));
+/** Mermaid's theme for the site's: dark and wood are dark, light is neutral, no choice follows the system. */
+function mermaidTheme(): "dark" | "neutral" {
+  const t = document.documentElement.dataset.theme;
+  if (t === "dark" || t === "wood") return "dark";
+  if (t === "light") return "neutral";
+  return matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "neutral";
+}
+let mermaidSeq = 0;
 
 if (typeof window !== "undefined") {
   DOMPurify.addHook("afterSanitizeAttributes", (node) => {
@@ -87,14 +108,23 @@ export function MarkdownEditorWidget() {
   const [initial] = useState(readInitial);
   const [text, setText] = useState(initial.text);
   const [savedAt, setSavedAt] = useState<number | null>(null);
-  const [outline, setOutline] = useState(false);
+  // How the link's reader looked at it, applied softly: only values still understood are taken.
+  const [outline, setOutline] = useState(() => readShareState<{ outline: unknown }>("markdown")?.outline === true);
+  const [fill, setFill] = useState(() => readShareState<{ fill: unknown }>("markdown")?.fill === true);
+  useShareState("markdown", { outline, fill });
+  const [fullscreen, setFullscreen] = useState(false);
+  const [themeTick, setThemeTick] = useState(0);
   const taRef = useRef<HTMLTextAreaElement | null>(null);
   const previewRef = useRef<HTMLDivElement | null>(null);
+  const previewPanelRef = useRef<HTMLDivElement | null>(null);
   const syncing = useRef(false);
   const urlsRef = useRef<string[]>([]);
 
   const deferred = useDeferredValue(text);
   const rendered = useMemo(() => renderMarkdown(deferred, sanitize), [deferred]);
+  // React 19 resets innerHTML whenever it is handed a new object, so the preview's markup is kept as one object per
+  // render result: unrelated state changes (autosave time, outline, copy feedback) leave the preview DOM alone.
+  const previewHtml = useMemo(() => ({ __html: rendered.html }), [rendered.html]);
   const stats = useMemo(() => markdownStats(deferred), [deferred]);
 
   // Autosave the draft locally (debounced).
@@ -125,6 +155,109 @@ export function MarkdownEditorWidget() {
     const urls = urlsRef.current;
     return () => urls.forEach((u) => URL.revokeObjectURL(u));
   }, []);
+
+  // Diagrams: drawn when they scroll into view, from the cache when the source is unchanged, after a short pause while
+  // the source is being typed; a theme change redraws them in the matching Mermaid theme.
+  useEffect(() => subscribeTheme(() => setThemeTick((t) => t + 1)), []);
+  useEffect(() => {
+    const root = previewRef.current;
+    if (!root) return;
+    const blocks = Array.from(root.querySelectorAll<HTMLElement>(".md-mermaid[data-diagram]"));
+    const sourceOf = (el: HTMLElement) => el.dataset.source ?? (el.dataset.source = el.querySelector(".md-mermaid-src")?.textContent ?? "");
+    if (!blocks.length) return;
+    let cancelled = false;
+    const theme = mermaidTheme();
+    const draw = async (el: HTMLElement) => {
+      const code = sourceOf(el);
+      const key = `${theme}\u0000${code}`;
+      const hit = mermaidCache.get(key);
+      if (hit) {
+        el.innerHTML = hit;
+        el.dataset.state = "done";
+        return;
+      }
+      el.dataset.state = "rendering";
+      await new Promise((r) => setTimeout(r, 350));
+      if (cancelled || !el.isConnected) return;
+      try {
+        const mermaid = await loadMermaid();
+        mermaid.initialize({ startOnLoad: false, theme, securityLevel: "strict", fontFamily: "inherit" });
+        const { svg } = await mermaid.render(`md-mermaid-${++mermaidSeq}`, code);
+        if (cancelled || !el.isConnected) return;
+        if (mermaidCache.size >= MERMAID_CACHE) mermaidCache.delete(mermaidCache.keys().next().value as string);
+        mermaidCache.set(key, svg);
+        el.innerHTML = svg;
+        el.dataset.state = "done";
+      } catch (e) {
+        if (cancelled) return;
+        const msg = e instanceof Error ? e.message : String(e);
+        el.dataset.state = "error";
+        el.innerHTML = `<p class="md-mermaid-error">Diagram not drawn: ${msg.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c] ?? c)}</p><pre class="md-mermaid-src"><code>${code.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c] ?? c)}</code></pre>`;
+      }
+    };
+    const io = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (!entry.isIntersecting) continue;
+          io.unobserve(entry.target);
+          void draw(entry.target as HTMLElement);
+        }
+      },
+      { root, rootMargin: "300px" },
+    );
+    for (const el of blocks) {
+      const hit = mermaidCache.get(`${theme}\u0000${sourceOf(el)}`);
+      if (hit) {
+        el.innerHTML = hit;
+        el.dataset.state = "done";
+      } else io.observe(el);
+    }
+    return () => {
+      cancelled = true;
+      io.disconnect();
+    };
+  }, [rendered.html, themeTick, fill, fullscreen]);
+
+  // Copy buttons on code blocks (the preview is plain HTML, so one listener on the container serves them all).
+  const onPreviewClick = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    const btn = (e.target as HTMLElement).closest<HTMLButtonElement>(".md-copy");
+    if (!btn) return;
+    const code = btn.closest(".md-code")?.querySelector("pre code")?.textContent ?? "";
+    void navigator.clipboard.writeText(code).then(() => {
+      btn.textContent = "Copied";
+      btn.dataset.copied = "true";
+      setTimeout(() => {
+        btn.textContent = "Copy";
+        delete btn.dataset.copied;
+      }, 1500);
+    });
+  }, []);
+
+  // Fill the window (Esc leaves it) and real full screen on the preview panel.
+  useEffect(() => {
+    if (!fill) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !document.fullscreenElement) setFill(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => {
+      document.body.style.overflow = prev;
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [fill]);
+  useEffect(() => {
+    const onChange = () => setFullscreen(document.fullscreenElement === previewPanelRef.current && !!previewPanelRef.current);
+    document.addEventListener("fullscreenchange", onChange);
+    return () => document.removeEventListener("fullscreenchange", onChange);
+  }, []);
+  const toggleFullscreen = () => {
+    if (document.fullscreenElement) void document.exitFullscreen();
+    else void previewPanelRef.current?.requestFullscreen?.().catch(() => setFill(true));
+  };
+  /** The preview as it stands — diagrams drawn, copy bars gone — for files and printing. */
+  const exportHtml = () => exportableHtml(previewRef.current?.querySelector(".md-preview")?.innerHTML ?? rendered.html);
 
   const apply = (fn: (t: string, s: number, e: number) => Edit) => {
     const ta = taRef.current;
@@ -200,7 +333,7 @@ export function MarkdownEditorWidget() {
   const print = () => {
     const w = window.open("", "_blank");
     if (!w) return;
-    w.document.write(toStandaloneHtml(title, rendered.html));
+    w.document.write(toStandaloneHtml(title, exportHtml()));
     w.document.close();
     w.focus();
     setTimeout(() => w.print(), 300);
@@ -262,11 +395,11 @@ export function MarkdownEditorWidget() {
 
         <div className="ml-auto flex flex-wrap items-center gap-1.5">
           <CopyButton value={text} label="Copy Markdown" />
-          <CopyButton value={rendered.html} label="Copy HTML" />
+          <CopyButton value={exportableHtml(rendered.html)} label="Copy HTML" />
           <button onClick={() => download(`${fileBase}.md`, text, "text/markdown")} className={GHOST} title="Download as .md">
             <Download size={13} /> .md
           </button>
-          <button onClick={() => download(`${fileBase}.html`, toStandaloneHtml(title, rendered.html), "text/html")} className={GHOST} title="Download as a standalone .html">
+          <button onClick={() => download(`${fileBase}.html`, toStandaloneHtml(title, exportHtml()), "text/html")} className={GHOST} title="Download as a standalone .html">
             <Download size={13} /> .html
           </button>
           <button onClick={print} className={GHOST} title="Print, or save as PDF from the print dialog">
@@ -312,14 +445,24 @@ export function MarkdownEditorWidget() {
         )}
 
         {showPreview && (
-          <div className="panel flex min-w-0 flex-col">
-            <div className="flex items-center justify-between border-b border-edge px-3 py-2">
-              <span className="readout">Preview</span>
-              {rendered.headings.length > 0 && (
-                <button onClick={() => setOutline((o) => !o)} className={cn(GHOST, outline && "border-accent text-accent")}>
-                  <ListTree size={13} /> Outline
+          <div ref={previewPanelRef} className={cn("panel flex min-w-0 flex-col md-panel", fill && "fixed inset-0 z-[60] rounded-none border-0", fullscreen && "rounded-none border-0")} data-preview-panel data-fill={fill ? "true" : undefined} data-fullscreen={fullscreen ? "true" : undefined}>
+            <div className="flex items-center justify-between gap-2 border-b border-edge px-3 py-2">
+              <span className="readout">Preview{fill || fullscreen ? ` — ${title}` : ""}</span>
+              <div className="flex items-center gap-1.5">
+                {rendered.headings.length > 0 && (
+                  <button onClick={() => setOutline((o) => !o)} className={cn(GHOST, outline && "border-accent text-accent")}>
+                    <ListTree size={13} /> Outline
+                  </button>
+                )}
+                {!fullscreen && (
+                  <button onClick={() => setFill((f) => !f)} className={cn(GHOST, fill && "border-accent text-accent")} title={fill ? "Back to the page (Esc)" : "Fill the browser window with the preview"} data-fill-toggle>
+                    {fill ? <Minimize2 size={13} /> : <Expand size={13} />} {fill ? "Exit" : "Fill window"}
+                  </button>
+                )}
+                <button onClick={toggleFullscreen} className={cn(GHOST, fullscreen && "border-accent text-accent")} title={fullscreen ? "Leave full screen (Esc)" : "Preview full screen"} data-fullscreen-toggle>
+                  <Maximize2 size={13} /> {fullscreen ? "Exit full screen" : "Full screen"}
                 </button>
-              )}
+              </div>
             </div>
             {outline && rendered.headings.length > 0 && (
               <nav aria-label="Outline" className="border-b border-edge bg-base-2 px-3 py-2">
@@ -334,9 +477,9 @@ export function MarkdownEditorWidget() {
                 </ul>
               </nav>
             )}
-            <div ref={previewRef} onScroll={onPreviewScroll} className="h-[560px] overflow-auto p-4 sm:p-6">
+            <div ref={previewRef} onScroll={onPreviewScroll} onClick={onPreviewClick} className={cn("overflow-auto p-4 sm:p-6", fill || fullscreen ? "min-h-0 flex-1" : "h-[560px]")}>
               {text.trim() ? (
-                <div className="md-preview" dangerouslySetInnerHTML={{ __html: rendered.html }} />
+                <div className={cn("md-preview", (fill || fullscreen) && "mx-auto max-w-3xl")} dangerouslySetInnerHTML={previewHtml} />
               ) : (
                 <p className="text-[13px] text-faint">The preview appears here as you type.</p>
               )}

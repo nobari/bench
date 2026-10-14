@@ -32,6 +32,7 @@ import {
 } from "@/lib/tools/json/utils";
 import { cn } from "@/lib/utils";
 import { SHARE_SYNC_EVENT } from "@/components/share-button";
+import { readShareState, useShareState } from "@/lib/share-state";
 import { useUnsavedWork } from "@/lib/unsaved-work";
 
 const SAMPLE = `{
@@ -65,8 +66,13 @@ type IndentOpt = 2 | 4 | "\t";
 export function JsonViewerWidget() {
   const [text, setText] = useState<string>(readInitial);
   useUnsavedWork(text.trim() && text !== readInitial() ? "The JSON in the viewer is not in the link yet; it would be lost. Use Share to keep it in the URL." : null);
-  const [view, setView] = useState<"tree" | "raw">("tree");
-  const [indent, setIndent] = useState<IndentOpt>(2);
+  // The way the link's reader looked at it, applied softly: only values still understood are taken.
+  const [view, setView] = useState<"tree" | "raw">(() => (readShareState<{ view: unknown }>("json")?.view === "raw" ? "raw" : "tree"));
+  const [indent, setIndent] = useState<IndentOpt>(() => {
+    const v = readShareState<{ indent: unknown }>("json")?.indent;
+    return v === 4 || v === "\t" ? v : 2;
+  });
+  useShareState("json", { view, indent });
   const [query, setQuery] = useState("");
   const [forceOpen, setForceOpen] = useState<Set<string>>(new Set());
   const [forceClosed, setForceClosed] = useState<Set<string>>(new Set());
