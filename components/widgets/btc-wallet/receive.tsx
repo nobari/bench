@@ -3,8 +3,9 @@
 /** Receive: the next unused address as text and QR, an optional BIP21 amount and label, and a watch for the payment. */
 import { useEffect, useMemo, useState } from "react";
 import QRCode from "qrcode";
-import { ExternalLink, RefreshCw } from "lucide-react";
+import { Copy, Droplets, ExternalLink, RefreshCw } from "lucide-react";
 import { bip21, FAUCETS } from "@/lib/tools/crypto/btc/chain";
+import { NETWORK_LABELS, isTestNetwork } from "@/lib/tools/crypto/btc/keys";
 import { freshReceive, type AddressEntry, type WalletRecord } from "@/lib/tools/crypto/btc/store";
 import { parseAmount } from "@/lib/tools/crypto/btc/units";
 import { CopyButton } from "@/components/copy-button";
@@ -113,20 +114,51 @@ export function ReceivePanel({ engine, wallet }: { engine: Engine; wallet: Walle
             <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-accent align-middle" /> Watching this address — a payment shows here within {engine.state.prefs.pollSeconds} s of reaching the mempool.
           </Note>
         )}
-        {engine.network === "testnet" && (
-          <div className="flex flex-wrap items-center gap-2 text-[11.5px] text-faint">
-            Need test coins? Faucets:
-            {FAUCETS.map((f) => (
-              <a key={f.url} href={f.url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-muted underline hover:text-ink">
-                {f.name} <ExternalLink size={10} />
-              </a>
-            ))}
-            <Btn className="h-6 px-2 text-[11px]" onClick={() => void navigator.clipboard?.writeText(entry.address)}>
-              copy address
-            </Btn>
-          </div>
-        )}
+        {isTestNetwork(engine.network) && <FaucetPanel engine={engine} address={entry.address} />}
       </div>
     </div>
+  );
+}
+
+/** Free test coins: every faucet known for this network, with the address one tap away from its form. */
+function FaucetPanel({ engine, address }: { engine: Engine; address: string }) {
+  const [copied, setCopied] = useState<string | null>(null);
+  const list = FAUCETS[engine.network];
+  const go = async (url: string) => {
+    try {
+      await navigator.clipboard.writeText(address);
+      setCopied(url);
+      setTimeout(() => setCopied((c) => (c === url ? null : c)), 2000);
+    } catch {
+      /* clipboard unavailable: the address is still on screen */
+    }
+    window.open(url, "_blank", "noopener,noreferrer");
+  };
+  return (
+    <section className="rounded-[var(--radius)] border border-edge" data-faucets data-faucet-network={engine.network}>
+      <div className="flex items-center gap-2 border-b border-edge px-3 py-2">
+        <Droplets size={14} className="text-accent" />
+        <span className="readout">Get {NETWORK_LABELS[engine.network]} coins from a faucet</span>
+      </div>
+      <ul className="divide-y divide-edge">
+        {list.map((f) => (
+          <li key={f.url} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2" data-faucet={f.url}>
+            <div className="min-w-0 flex-1">
+              <a href={f.url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-[12.5px] font-medium text-ink underline-offset-2 hover:underline">
+                {f.name} <ExternalLink size={11} className="text-faint" />
+              </a>
+              <div className="text-[11.5px] text-faint">{f.note}</div>
+            </div>
+            <Btn className="h-7 px-2" onClick={() => void go(f.url)} data-faucet-go={f.url}>
+              <Copy size={11} /> {copied === f.url ? "Address copied" : "Copy address & open"}
+            </Btn>
+          </li>
+        ))}
+        {!list.length && <li className="px-3 py-2 text-[12px] text-faint">No faucet known for this network.</li>}
+      </ul>
+      <p className="border-t border-edge px-3 py-2 text-[11.5px] text-faint">
+        Paste the address into the faucet&apos;s form. The payment shows up above within {engine.state.prefs.pollSeconds} s of reaching the mempool, then needs a confirmation before it can be spent. Faucets come and go; if one is empty, try the next.
+      </p>
+    </section>
   );
 }

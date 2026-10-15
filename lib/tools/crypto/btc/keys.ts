@@ -11,19 +11,27 @@ import { sha256 } from "@noble/hashes/sha2.js";
 import { bytesToHex, hexToBytes } from "@noble/hashes/utils.js";
 import { Address, NETWORK, OutScript, TEST_NETWORK, WIF, p2pkh, p2tr, p2wpkh } from "@scure/btc-signer";
 
-export type Network = "mainnet" | "testnet";
+/** Mainnet, plus the three test networks. The test networks share address formats and key versions; only the chain differs. */
+export type Network = "mainnet" | "testnet4" | "signet" | "testnet";
+/** Display order: the current test network first, mainnet last. */
+export const NETWORK_ORDER: Network[] = ["testnet4", "signet", "testnet", "mainnet"];
+export const isTestNetwork = (n: Network) => n !== "mainnet";
 export type AddressType = "p2pkh" | "p2wpkh" | "p2tr";
 export type Chain = 0 | 1;
 
 export const NETWORKS: Record<Network, { name: string; net: typeof NETWORK; coinType: number; versions: { private: number; public: number } }> = {
   mainnet: { name: "Bitcoin mainnet", net: NETWORK, coinType: 0, versions: { private: 0x0488ade4, public: 0x0488b21e } },
-  testnet: { name: "Bitcoin testnet", net: TEST_NETWORK, coinType: 1, versions: { private: 0x04358394, public: 0x043587cf } },
+  testnet4: { name: "Bitcoin testnet4", net: TEST_NETWORK, coinType: 1, versions: { private: 0x04358394, public: 0x043587cf } },
+  signet: { name: "Bitcoin signet", net: TEST_NETWORK, coinType: 1, versions: { private: 0x04358394, public: 0x043587cf } },
+  testnet: { name: "Bitcoin testnet3", net: TEST_NETWORK, coinType: 1, versions: { private: 0x04358394, public: 0x043587cf } },
 };
+/** Short labels for switches and lists. */
+export const NETWORK_LABELS: Record<Network, string> = { mainnet: "Mainnet", testnet4: "Testnet4", signet: "Signet", testnet: "Testnet3" };
 
 export const ADDRESS_TYPES: { id: AddressType; name: string; purpose: number; prefix: Record<Network, string>; blurb: string }[] = [
-  { id: "p2wpkh", name: "Native SegWit", purpose: 84, prefix: { mainnet: "bc1q", testnet: "tb1q" }, blurb: "BIP84 · cheapest common type, accepted everywhere that matters" },
-  { id: "p2tr", name: "Taproot", purpose: 86, prefix: { mainnet: "bc1p", testnet: "tb1p" }, blurb: "BIP86 · newest type, Schnorr signatures, smallest inputs" },
-  { id: "p2pkh", name: "Legacy", purpose: 44, prefix: { mainnet: "1", testnet: "m/n" }, blurb: "BIP44 · oldest type, largest fees, works with anything" },
+  { id: "p2wpkh", name: "Native SegWit", purpose: 84, prefix: { mainnet: "bc1q", testnet4: "tb1q", signet: "tb1q", testnet: "tb1q" }, blurb: "BIP84 · cheapest common type, accepted everywhere that matters" },
+  { id: "p2tr", name: "Taproot", purpose: 86, prefix: { mainnet: "bc1p", testnet4: "tb1p", signet: "tb1p", testnet: "tb1p" }, blurb: "BIP86 · newest type, Schnorr signatures, smallest inputs" },
+  { id: "p2pkh", name: "Legacy", purpose: 44, prefix: { mainnet: "1", testnet4: "m/n", signet: "m/n", testnet: "m/n" }, blurb: "BIP44 · oldest type, largest fees, works with anything" },
 ];
 export const addressTypeInfo = (id: AddressType) => ADDRESS_TYPES.find((t) => t.id === id)!;
 
@@ -115,11 +123,11 @@ export function privateKeyAt(account: AccountKeys, chain: Chain, index: number):
 /* ------------------------------------------------------------- watch-only */
 
 /** SLIP-132 prefixes map to a type; plain xpub/tpub need the type said. */
-const SLIP132: Record<string, { network: Network; type: AddressType }> = {
-  xpub: { network: "mainnet", type: "p2pkh" },
-  zpub: { network: "mainnet", type: "p2wpkh" },
-  tpub: { network: "testnet", type: "p2pkh" },
-  vpub: { network: "testnet", type: "p2wpkh" },
+const SLIP132: Record<string, { test: boolean; type: AddressType }> = {
+  xpub: { test: false, type: "p2pkh" },
+  zpub: { test: false, type: "p2wpkh" },
+  tpub: { test: true, type: "p2pkh" },
+  vpub: { test: true, type: "p2wpkh" },
 };
 
 /** An account's public node from an extended public key (xpub/tpub/zpub/vpub), re-tagged to the network's version. */
@@ -128,7 +136,7 @@ export function publicAccount(xpub: string, network: Network, typeHint?: Address
   const prefix = trimmed.slice(0, 4);
   const known = SLIP132[prefix];
   if (!known) throw new Error("Not an extended public key (expected xpub, zpub, tpub or vpub).");
-  if (known.network !== network) throw new Error(`That key is for ${NETWORKS[known.network].name}.`);
+  if (known.test !== isTestNetwork(network)) throw new Error(known.test ? "That key is for a test network, not mainnet." : "That key is for mainnet, not a test network.");
   const raw = base58check(sha256).decode(trimmed);
   const retagged = new Uint8Array(raw);
   const v = NETWORKS[network].versions.public;

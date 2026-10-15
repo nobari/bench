@@ -3,7 +3,7 @@
  * user's preferences, and — separately, in the vault — the mnemonics. Pure helpers over that shape; the widget
  * owns persistence and the live chain data.
  */
-import type { AddressType, Network } from "./keys";
+import { NETWORK_ORDER, type AddressType, type Network } from "./keys";
 import type { Provider } from "./chain";
 import type { Fiat, Unit } from "./units";
 
@@ -62,8 +62,10 @@ export const STORAGE_KEY = "bench:btc-wallet:v1";
 export const DEFAULT_PREFS: Prefs = { unit: "btc", fiat: "usd", provider: "blockstream", lockMinutes: 15, lockOnHide: false, pollSeconds: 20, hideSecrets: true };
 export const GAP_LIMIT = 20;
 
+const perNetwork = <T,>(value: () => T) => Object.fromEntries(NETWORK_ORDER.map((n) => [n, value()])) as Record<Network, T>;
+
 export function emptyState(): WalletState {
-  return { v: 1, network: "testnet", wallets: { mainnet: [], testnet: [] }, selected: { mainnet: null, testnet: null }, balances: {}, prefs: { ...DEFAULT_PREFS } };
+  return { v: 1, network: "testnet4", wallets: perNetwork(() => []), selected: perNetwork(() => null), balances: {}, prefs: { ...DEFAULT_PREFS } };
 }
 
 export function newWalletId(): string {
@@ -96,9 +98,9 @@ export function readState(raw: unknown): WalletState {
   const base = emptyState();
   return {
     v: 1,
-    network: s.network === "mainnet" ? "mainnet" : "testnet",
-    wallets: { mainnet: Array.isArray(s.wallets.mainnet) ? s.wallets.mainnet : [], testnet: Array.isArray(s.wallets.testnet) ? s.wallets.testnet : [] },
-    selected: { mainnet: s.selected?.mainnet ?? null, testnet: s.selected?.testnet ?? null },
+    network: NETWORK_ORDER.includes(s.network) ? s.network : "testnet4",
+    wallets: Object.fromEntries(NETWORK_ORDER.map((n) => [n, Array.isArray(s.wallets[n]) ? s.wallets[n] : []])) as WalletState["wallets"],
+    selected: Object.fromEntries(NETWORK_ORDER.map((n) => [n, s.selected?.[n] ?? null])) as WalletState["selected"],
     balances: s.balances && typeof s.balances === "object" ? s.balances : {},
     prefs: { ...base.prefs, ...s.prefs },
   };

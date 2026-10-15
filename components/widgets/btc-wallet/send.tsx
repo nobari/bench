@@ -132,7 +132,7 @@ export function SendPanel({ engine, wallet }: { engine: Engine; wallet: WalletRe
           {bal && bal.pending > 0n && <div className="text-warn">+{bal.pending.toString()} sats pending</div>}
         </div>
       </div>
-      <Field label="Fee" hint={tiers ? `Live estimates from ${engine.state.prefs.provider}: slow ≈ ${tiers.targets.slow} blocks, standard ≈ ${tiers.targets.standard}, fast next block.` : "Fee estimates are not loaded yet; defaults shown."}>
+      <Field label="Fee" hint={tiers ? `Live estimates from ${engine.providerName}: slow ≈ ${tiers.targets.slow} blocks, standard ≈ ${tiers.targets.standard}, fast next block.` : "Fee estimates are not loaded yet; defaults shown."}>
         <div className="flex flex-wrap items-center gap-2">
           <Seg
             name="fee-tier"

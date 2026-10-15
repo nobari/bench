@@ -6,7 +6,8 @@
 import type { Network } from "./keys";
 
 export type Provider = "blockstream" | "mempool";
-export const PROVIDERS: Record<Provider, { name: string; api: Record<Network, string>; explorer: Record<Network, string> }> = {
+/** Each provider serves some networks; `endpoints` falls back to mempool.space for the rest. */
+export const PROVIDERS: Record<Provider, { name: string; api: Partial<Record<Network, string>>; explorer: Partial<Record<Network, string>> }> = {
   blockstream: {
     name: "Blockstream",
     api: { mainnet: "https://blockstream.info/api", testnet: "https://blockstream.info/testnet/api" },
@@ -14,17 +15,46 @@ export const PROVIDERS: Record<Provider, { name: string; api: Record<Network, st
   },
   mempool: {
     name: "mempool.space",
-    api: { mainnet: "https://mempool.space/api", testnet: "https://mempool.space/testnet/api" },
-    explorer: { mainnet: "https://mempool.space", testnet: "https://mempool.space/testnet" },
+    api: { mainnet: "https://mempool.space/api", testnet4: "https://mempool.space/testnet4/api", signet: "https://mempool.space/signet/api", testnet: "https://mempool.space/testnet/api" },
+    explorer: { mainnet: "https://mempool.space", testnet4: "https://mempool.space/testnet4", signet: "https://mempool.space/signet", testnet: "https://mempool.space/testnet" },
   },
 };
 
-/** Testnet coins for trying the wallet out. */
-export const FAUCETS = [
-  { name: "coinfaucet.eu", url: "https://coinfaucet.eu/en/btc-testnet/" },
-  { name: "bitcoinfaucet.uo1.net", url: "https://bitcoinfaucet.uo1.net/" },
-  { name: "mempool.co faucet", url: "https://testnet-faucet.mempool.co/" },
-];
+/** The API base and explorer for a provider on a network — mempool.space when the chosen provider has no such chain. */
+export function endpoints(provider: Provider, network: Network): { api: string; explorer: string; provider: Provider; name: string } {
+  const p = PROVIDERS[provider].api[network] ? provider : "mempool";
+  return { api: PROVIDERS[p].api[network]!, explorer: PROVIDERS[p].explorer[network]!, provider: p, name: PROVIDERS[p].name };
+}
+
+export interface Faucet {
+  name: string;
+  url: string;
+  /** What to expect: amount, captcha, account. */
+  note: string;
+}
+/**
+ * Free test coins per network, checked reachable on 2026-10-15. Faucets come and go: the list is a starting point,
+ * and the Receive tab watches the address so a payment from any of them shows up.
+ */
+export const FAUCETS: Record<Network, Faucet[]> = {
+  testnet4: [
+    { name: "mempool.space faucet", url: "https://mempool.space/testnet4/faucet", note: "Sign in with a free mempool.space account; generous and quick." },
+    { name: "coinfaucet.eu", url: "https://coinfaucet.eu/en/btc-testnet4/", note: "Captcha, no account." },
+    { name: "faucet.testnet4.dev", url: "https://faucet.testnet4.dev/", note: "Captcha; shows its current maximum per claim." },
+    { name: "CypherFaucet", url: "https://cypherfaucet.com/btc-testnet", note: "Up to 0.01 tBTC an hour, rate-limited per address and IP." },
+    { name: "testnet4.anyone.eu.org", url: "https://testnet4.anyone.eu.org/", note: "Small amounts, simple form." },
+  ],
+  signet: [
+    { name: "mempool.space faucet", url: "https://mempool.space/signet/faucet", note: "Sign in with a free mempool.space account." },
+    { name: "Signet faucet (mirror)", url: "https://alt.signetfaucet.com/", note: "The community signet faucet; no account. The main signetfaucet.com is often down." },
+    { name: "coinfaucet.eu", url: "https://coinfaucet.eu/en/btc-signet/", note: "Captcha, no account." },
+  ],
+  testnet: [
+    { name: "coinfaucet.eu", url: "https://coinfaucet.eu/en/btc-testnet/", note: "Captcha, no account. Testnet3 is legacy: coins are scarce." },
+    { name: "bitcoinfaucet.uo1.net", url: "https://bitcoinfaucet.uo1.net/", note: "Up to 0.000115 tBTC per request." },
+  ],
+  mainnet: [],
+};
 
 export interface Utxo {
   txid: string;

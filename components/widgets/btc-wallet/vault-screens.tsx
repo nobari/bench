@@ -8,7 +8,7 @@ import { Btn, Field, Note } from "./ui";
 
 const MODES: { id: VaultMode; name: string; icon: typeof Lock; blurb: string }[] = [
   { id: "password", name: "Password vault", icon: Lock, blurb: "Phrases are encrypted with a password (PBKDF2 · AES-GCM) before they touch this browser's storage. Locks after inactivity." },
-  { id: "plain", name: "Remember without a password", icon: Unlock, blurb: "Phrases are stored unencrypted in this browser. Fine for testnet; not for coins you care about." },
+  { id: "plain", name: "Remember without a password", icon: Unlock, blurb: "Phrases are stored unencrypted in this browser. Fine for test networks; not for coins you care about." },
   { id: "session", name: "This tab only", icon: Timer, blurb: "Nothing is stored. Close the tab and the wallets are gone unless you kept the phrases." },
 ];
 
@@ -45,7 +45,7 @@ export function VaultSetup({ onChoose, changing, onCancel }: { onChoose: (mode: 
           </Field>
         </div>
       )}
-      {mode === "plain" && <Note tone="warn" className="mt-3">Anyone who can read this browser&apos;s storage can read the phrases. Use it for testnet and small experiments.</Note>}
+      {mode === "plain" && <Note tone="warn" className="mt-3">Anyone who can read this browser&apos;s storage can read the phrases. Use it for test networks and small experiments.</Note>}
       {error && <Note tone="error" className="mt-3">{error}</Note>}
       <div className="mt-3 flex items-center justify-end gap-2">
         {onCancel && <Btn onClick={onCancel}>Cancel</Btn>}

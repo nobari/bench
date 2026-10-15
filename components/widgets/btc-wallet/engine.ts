@@ -7,7 +7,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { addressAt, addressTypeInfo, addressTypeOf, deriveAccount, isValidAddress, isValidMnemonic, newMnemonic, normalizeMnemonic, privateKeyAt, publicAccount, scriptHex, seedFingerprint, type AddressType, type Chain, type Network } from "@/lib/tools/crypto/btc/keys";
-import { Esplora, PROVIDERS, fetchPrice, feeTiers, type EsploraTx, type FeeTiers, type Utxo } from "@/lib/tools/crypto/btc/chain";
+import { Esplora, endpoints, fetchPrice, feeTiers, type EsploraTx, type FeeTiers, type Utxo } from "@/lib/tools/crypto/btc/chain";
 import { buildTx, bumpFeeRate, signTx, type BuildRequest, type BuiltTx, type SpendableUtxo } from "@/lib/tools/crypto/btc/tx";
 import { decryptJson, encryptJson, isEnvelope, type Envelope } from "@/lib/tools/crypto/btc/vault";
 import { summarizeTx, type TxRow } from "@/lib/tools/crypto/btc/history";
@@ -53,6 +53,8 @@ export interface Engine {
   tiers: FeeTiers | null;
   price: { at: number; prices: Record<string, number> } | null;
   explorer: string;
+  /** Name of the server actually in use (the chosen one, or mempool.space when it lacks the network). */
+  providerName: string;
   api: Esplora;
   // vault
   setupVault: (mode: VaultMode, password?: string) => Promise<void>;
@@ -239,8 +241,10 @@ export function useWalletEngine(testHooks?: { onEngine?: (e: Engine) => void }):
   const wallets = state.wallets[network];
   const selectedId = state.selected[network];
   const selected = wallets.find((w) => w.id === selectedId) ?? null;
-  const api = useMemo(() => new Esplora(PROVIDERS[prefs.provider].api[network]), [prefs.provider, network]);
-  const explorer = PROVIDERS[prefs.provider].explorer[network];
+  const ep = useMemo(() => endpoints(prefs.provider, network), [prefs.provider, network]);
+  const api = useMemo(() => new Esplora(ep.api), [ep.api]);
+  const explorer = ep.explorer;
+  const providerName = ep.name;
 
   const patchState = useCallback((fn: (s: WalletState) => WalletState) => setState((s) => fn(s)), []);
   const patchWallet = useCallback(
@@ -695,7 +699,7 @@ export function useWalletEngine(testHooks?: { onEngine?: (e: Engine) => void }):
   );
 
   const engine: Engine = {
-    ready, state, network, wallets, selected, live, mode, locked, hasSecrets, tiers, price, explorer, api,
+    ready, state, network, wallets, selected, live, mode, locked, hasSecrets, tiers, price, explorer, providerName, api,
     setupVault, unlock, lock, changeVault,
     select, setNetwork, setPrefs, candidates, createFromMnemonic, createNextAccount, importMnemonic, addWatch, rename, remove, label, deriveMore, mnemonicOf, privateKeyFor, exportBackup, importBackup,
     refresh, loadMore, spendable, prepareSend, prepareBump, broadcast, rows, balance, note, setNote,

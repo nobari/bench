@@ -6,9 +6,9 @@
  * an encrypted vault and backups. Testnet by default.
  */
 import { useEffect, useState } from "react";
-import { Bitcoin, Lock, RefreshCw, Settings, ShieldAlert } from "lucide-react";
+import { Bitcoin, Droplets, Lock, RefreshCw, Settings, ShieldAlert } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { addressTypeInfo } from "@/lib/tools/crypto/btc/keys";
+import { NETWORK_LABELS, NETWORK_ORDER, addressTypeInfo, isTestNetwork } from "@/lib/tools/crypto/btc/keys";
 import { STORAGE_KEY } from "@/lib/tools/crypto/btc/store";
 import { formatRate } from "@/lib/tools/crypto/btc/units";
 import { useWalletEngine, fiatOf, type Engine } from "./btc-wallet/engine";
@@ -65,9 +65,13 @@ export function BitcoinWalletWidget() {
             <>
               <span className="font-semibold text-danger">Mainnet — real bitcoin.</span> Keys are generated and kept in this browser and never sent anywhere, but a web page is not a hardware wallet. Keep amounts small and your recovery phrases on paper.
             </>
+          ) : engine.network === "testnet" ? (
+            <>
+              <span className="font-semibold text-warn">Testnet3 — legacy.</span> Bitcoin Core dropped it in v30 and its faucets are drying up; start new experiments on Testnet4. Keys stay in this browser; only addresses go to the chain server you pick.
+            </>
           ) : (
             <>
-              <span className="font-semibold text-warn">Testnet.</span> Coins here are worthless test coins from a faucet, so try everything. Keys are generated and kept in this browser; your addresses go to the chain server you pick, nothing else leaves the page.
+              <span className="font-semibold text-warn">{NETWORK_LABELS[engine.network]}.</span> Coins here are worthless test coins from a faucet (Receive tab), so try everything. Keys are generated and kept in this browser; your addresses go to the chain server you pick, nothing else leaves the page.
             </>
           )}
         </p>
@@ -94,7 +98,19 @@ export function BitcoinWalletWidget() {
             <span className="inline-flex items-center gap-1.5 px-1 text-sm font-semibold text-ink">
               <Bitcoin size={15} className="text-accent" /> Bitcoin wallet
             </span>
-            <Seg size="xs" name="network-quick" value={engine.network} onChange={(n) => (n === "mainnet" ? setSettings(true) : engine.setNetwork(n))} options={[{ id: "testnet", label: "Testnet" }, { id: "mainnet", label: "Mainnet" }]} />
+            <Seg size="xs" name="network-quick" value={engine.network} onChange={(n) => (n === "mainnet" ? setSettings(true) : engine.setNetwork(n))} options={NETWORK_ORDER.map((n) => ({ id: n, label: NETWORK_LABELS[n] }))} />
+            {isTestNetwork(engine.network) && w && (
+              <Btn
+                className="h-7 px-2"
+                data-faucets-button
+                onClick={() => {
+                  setTab("receive");
+                  requestAnimationFrame(() => document.querySelector("[data-faucets]")?.scrollIntoView({ behavior: "smooth", block: "center" }));
+                }}
+              >
+                <Droplets size={12} /> Test coins
+              </Btn>
+            )}
             <div className="ml-auto flex flex-wrap items-center gap-2">
               {engine.tiers && (
                 <span className="hidden font-mono text-[11px] text-faint md:inline" title="Fee estimates: slow / standard / fast">
@@ -133,7 +149,10 @@ export function BitcoinWalletWidget() {
               {!w ? (
                 <div className="flex flex-col items-center justify-center gap-3 px-6 py-14 text-center">
                   <Bitcoin size={28} className="text-faint" />
-                  <p className="max-w-sm text-[13px] text-muted">No wallet selected. Create one from a fresh recovery phrase, import a phrase you already have, or watch an address or account key.</p>
+                  <p className="max-w-sm text-[13px] text-muted">
+                    No wallet selected. Create one from a fresh recovery phrase, import a phrase you already have, or watch an address or account key.
+                    {isTestNetwork(engine.network) && " Then fill it from a faucet on the Receive tab — free test coins."}
+                  </p>
                   <Btn tone="primary" onClick={() => setAdding(true)} data-add-wallet-cta>
                     Add a wallet
                   </Btn>

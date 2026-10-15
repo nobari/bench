@@ -4,7 +4,7 @@
 import { useState } from "react";
 import { AlertTriangle } from "lucide-react";
 import { PROVIDERS, type Provider } from "@/lib/tools/crypto/btc/chain";
-import type { Network } from "@/lib/tools/crypto/btc/keys";
+import { NETWORK_LABELS, NETWORK_ORDER, type Network } from "@/lib/tools/crypto/btc/keys";
 import { FIAT_CURRENCIES } from "@/lib/tools/crypto/btc/units";
 import type { Engine } from "./engine";
 import { Btn, Field, Note, Seg } from "./ui";
@@ -18,9 +18,9 @@ export function SettingsPanel({ engine, onClose }: { engine: Engine; onClose: ()
   const [wipe, setWipe] = useState(false);
   return (
     <div className="space-y-4" data-settings>
-      <Field label="Network" hint="Wallets are kept per network. Switching shows the other list; nothing is lost.">
+      <Field label="Network" hint="Wallets are kept per network; switching shows another list, nothing is lost. Testnet4 is the current test network with working faucets, Signet the stable one, Testnet3 the legacy chain Bitcoin Core no longer ships.">
         <div className="flex flex-wrap items-center gap-2">
-          <Seg name="network" value={engine.network} onChange={(n) => (n === engine.network ? null : n === "mainnet" ? setConfirmNet(n) : engine.setNetwork(n))} options={[{ id: "testnet", label: "Testnet" }, { id: "mainnet", label: "Mainnet" }]} />
+          <Seg name="network" value={engine.network} onChange={(n) => (n === engine.network ? null : n === "mainnet" ? setConfirmNet(n) : engine.setNetwork(n))} options={NETWORK_ORDER.map((n) => ({ id: n, label: NETWORK_LABELS[n] }))} />
           {engine.network === "mainnet" && <span className="text-[11.5px] text-warn">Real bitcoin.</span>}
         </div>
       </Field>
@@ -39,7 +39,7 @@ export function SettingsPanel({ engine, onClose }: { engine: Engine; onClose: ()
                   Switch to mainnet
                 </Btn>
                 <Btn className="h-7" onClick={() => setConfirmNet(null)}>
-                  Stay on testnet
+                  Stay on {NETWORK_LABELS[engine.network]}
                 </Btn>
               </div>
             </div>
@@ -47,7 +47,7 @@ export function SettingsPanel({ engine, onClose }: { engine: Engine; onClose: ()
         </Note>
       )}
       <div className="grid gap-3 sm:grid-cols-2">
-        <Field label="Chain data" hint="Public Esplora servers. Your addresses are sent to whichever you pick — that is how any light wallet works.">
+        <Field label="Chain data" hint={`Public Esplora servers. Your addresses are sent to whichever you pick — that is how any light wallet works. Blockstream has no Testnet4 or Signet: those use mempool.space.${engine.providerName !== PROVIDERS[p.provider].name ? ` In use now: ${engine.providerName}.` : ""}`}>
           <select className="input" value={p.provider} onChange={(e) => engine.setPrefs({ provider: e.target.value as Provider })} data-provider>
             {Object.entries(PROVIDERS).map(([id, v]) => (
               <option key={id} value={id}>
