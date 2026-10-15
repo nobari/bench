@@ -67,11 +67,11 @@ export const CATEGORIES: Category[] = [
   },
   {
     slug: "crypto",
-    groups: [{ id: "hashing", name: "Hashing & signatures" }, { id: "ethereum", name: "Ethereum" }],
+    groups: [{ id: "hashing", name: "Hashing & signatures" }, { id: "bitcoin", name: "Bitcoin" }, { id: "ethereum", name: "Ethereum" }],
     name: "Crypto & Hashing",
-    tagline: "Hashes, checksums and tokens",
+    tagline: "Hashes, checksums, wallets and tokens",
     description:
-      "Generate SHA and Keccak hashes, decode JWTs, and compute address checksums entirely client-side.",
+      "Generate SHA and Keccak hashes, decode JWTs, compute address checksums, and run a Bitcoin wallet — keys, signing and all — entirely client-side.",
     icon: KeyRound,
     accentVar: "--cat-crypto",
   },

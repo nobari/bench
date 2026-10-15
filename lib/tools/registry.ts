@@ -52,6 +52,7 @@ import {
   Timer,
   Volume2,
   Wallet,
+  Bitcoin,
   Workflow,
   SquareCode,
 } from "lucide-react";
@@ -1751,9 +1752,37 @@ export const TOOLS: ToolDef[] = [
   {
     slug: "wallet",
     category: "crypto",
+    group: "bitcoin",
+    title: "Bitcoin Wallet Manager",
+    short: "Bitcoin Wallet",
+    tagline: "HD wallets, live balances, sending with fee control — keys stay in your browser",
+    description:
+      "A complete Bitcoin wallet in the browser: create or import BIP39 wallets (Native SegWit, Taproot or Legacy), watch live balances and history, receive with QR codes, send with live fee estimates and replace-by-fee, keep several wallets in a password-encrypted vault, and export encrypted backups. Testnet by default; keys never leave the page.",
+    keywords: ["bitcoin wallet", "btc wallet", "web wallet", "bip39 wallet", "bip84 native segwit", "taproot wallet", "testnet wallet", "send bitcoin", "psbt", "replace by fee", "watch-only wallet", "xpub", "hd wallet"],
+    icon: Bitcoin,
+    status: "stable",
+    widget: "bitcoin-wallet",
+    added: "2026-10-14",
+    howItWorks:
+      "Pick how the browser should keep your wallets — a password vault (PBKDF2 and AES-GCM, locks after inactivity), remembered without a password, or this tab only — then create a wallet by choosing from fresh candidate addresses, import a 12- or 24-word phrase (with a gap-limit scan for used addresses), or add a watch-only wallet from an xpub/tpub or a single address. Addresses follow BIP44 (Legacy), BIP84 (Native SegWit) or BIP86 (Taproot) with separate receive and change chains. Balances, coins and history come from a public Esplora server (Blockstream or mempool.space) and refresh every few seconds while the tab is visible. Sending builds a PSBT with coin selection, a live fee tier or a custom sat/vB rate and replace-by-fee, shows the exact fee and size for review, signs locally and broadcasts; a pending send can be bumped later. Receive shows a QR code with an optional BIP21 amount and watches for the payment. Everything is kept per network, and the Backup tab reveals the phrase behind a tap, quizzes you on it, and exports an encrypted file of every wallet.",
+    faq: [
+      { q: "Where are my keys?", a: "In this browser only. Phrases are kept in the vault you chose: encrypted with your password, stored unencrypted if you asked for that, or held in memory for the tab's lifetime. Signing happens in the page; the only thing sent out is signed transactions and the addresses the chain server needs to look up." },
+      { q: "Is it safe for real bitcoin?", a: "It is a well-built light wallet in a web page, which is still a web page: no hardware isolation, and a compromised browser or device can read what it holds. Use mainnet for small amounts, learning and watch-only tracking; keep savings on a hardware wallet. Testnet is the default so you can try everything with worthless coins." },
+      { q: "Which address types are supported?", a: "Native SegWit (bc1q…, BIP84), Taproot (bc1p…, BIP86) and Legacy (1…, BIP44), each with the standard derivation paths, so the same phrase gives the same addresses in any compliant wallet." },
+      { q: "How are fees chosen?", a: "From live estimates: slow (about a day), standard (about an hour) and fast (next block), or a custom sat/vB rate. The review step shows the exact virtual size and fee before you sign. Sends signal replace-by-fee by default, so a stuck transaction can be bumped from its detail view." },
+      { q: "Can I use an existing wallet without its keys?", a: "Yes — add a watch-only wallet from an account public key (xpub, tpub, zpub, vpub) to see every address and balance, or from a single address to watch just that one." },
+      { q: "Where does the chain data come from?", a: "A public Esplora server — Blockstream's by default, mempool.space as an alternative — and the BTC price from CoinGecko. Any light wallet shares addresses with its server; nothing else leaves the page." },
+    ],
+    examples: [],
+    related: ["crypto/eth-wallet", "crypto/hash", "media/qr-code"],
+    aliases: ["btc wallet", "bitcoin web wallet", "testnet wallet", "taproot wallet", "segwit wallet", "watch only wallet", "send bitcoin"],
+  },
+  {
+    slug: "eth-wallet",
+    category: "crypto",
     group: "ethereum",
-    title: "Crypto Wallet Generator",
-    short: "Wallet Generator",
+    title: "Ethereum Wallet Generator",
+    short: "ETH Wallet Generator",
     tagline: "Ethereum HD wallets, BIP39 mnemonics and addresses",
     description:
       "Generate an Ethereum wallet in your browser: a BIP39 recovery phrase, derived addresses (BIP44 m/44'/60'/0'/0/i) and keys — or a single random key. Fully client-side, for development and learning.",
@@ -1770,8 +1799,8 @@ export const TOOLS: ToolDef[] = [
       { q: "Can I import an existing seed phrase?", a: "Yes — paste a valid BIP39 mnemonic into the phrase field to view its derived addresses. It stays in your browser." },
     ],
     examples: [],
-    related: ["crypto/ecdsa", "crypto/eip55-checksum", "crypto/hash"],
-    aliases: ["seed phrase generator", "eth wallet", "mnemonic generator"],
+    related: ["crypto/wallet", "crypto/ecdsa", "crypto/eip55-checksum", "crypto/hash"],
+    aliases: ["seed phrase generator", "eth wallet", "mnemonic generator", "crypto wallet generator"],
   },
 
   /* ============================== MATH & UNITS ========================== */
