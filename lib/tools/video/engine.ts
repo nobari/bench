@@ -101,7 +101,10 @@ export async function probe(file: File): Promise<Probe> {
   });
   const video = await input.getPrimaryVideoTrack();
   const audio = await input.getPrimaryAudioTrack();
-  const duration = await input.computeDuration();
+  // A clip is as long as its picture. DJI's audio (and so the container) runs a few frames past the last video
+  // frame; a clip planned to that length would end on nothing to show, and an export planned from it could never
+  // reach its own end.
+  const duration = video ? await video.computeDuration() : await input.computeDuration();
   if (!video)
     return {
       duration,
@@ -1733,18 +1736,21 @@ async function exportWithPulse(
       await output.start();
       tracker.beginStep("finalize");
       emit(true);
-      // The parts must cover the export end to end before any of them is touched.
+      // Getting here means the run went over every stretch between the parts and after the last one, so where they
+      // leave a gap or stop short of the planned total, the footage had no frame there — a skipped stretch, or a
+      // clip whose picture ends before its declared length (DJI's audio runs a few frames past the video) — and the
+      // file simply ends where the picture does, as a one-piece export would. Only a part reaching back over the
+      // one before it must not get in: a cut's last frame may run a little past the next part's start, no more.
       const ordered = [...manifest!.parts].sort((a, b) => a.start - b.start);
       let pos = 0;
       const files: File[] = [];
       for (const part of ordered) {
-        if (Math.abs(part.start - pos) > 0.05) throw new Error(`The parts leave a gap at ${pos.toFixed(2)} s; resume the export to fill it.`);
+        if (part.start < pos - 0.1) throw new Error(`Part ${part.file} starts at ${part.start.toFixed(2)} s, before the part ahead of it ends (${pos.toFixed(2)} s). Discard the parts and export again.`);
         const f = await parts.store.file(part.file);
         if (!f) throw new Error(`Part ${part.file} is missing from the parts folder. Discard the parts and export again.`);
         files.push(f);
-        pos = part.end;
+        pos = Math.max(pos, part.end);
       }
-      if (Math.abs(pos - total) > 0.05) throw new Error(`The parts end at ${pos.toFixed(2)} s of ${total.toFixed(2)}; resume the export to finish them.`);
       // With less room than the file needs on top of the parts, each part goes as soon as it is in the file.
       const partBytes = files.reduce((a, f) => a + f.size, 0);
       const audioBytes = ((project.export.audioBitrateKbps * 1000) / 8) * total;
