@@ -1030,7 +1030,8 @@ class NeighbourFrames {
         await this.openInput(clip.media)
       ).getPrimaryVideoTrack();
       if (!track) return null;
-      const from = Math.max(0, sourceTimeAt(clip, window.start)),
+      // Starts a touch early, so a side whose footage ends where the window starts still has a last frame to hold.
+      const from = Math.max(0, sourceTimeAt(clip, window.start) - 0.25),
         to = sourceTimeAt(clip, window.end) + 0.5;
       this.iter = new VideoSampleSink(track)
         .samples(from, to)
@@ -1541,7 +1542,7 @@ async function exportWithPulse(
       } else if (!composed) {
         ctx2d.drawImage(sample.toCanvasImageSource(), 0, 0, outW, outH);
       }
-      const intro = introFrameAt(project, placedAll, timelineT);
+      const intro = introFrameAt(project, placedAll, timelineT, tr);
       if (intro) {
         fxScratch ??= {
           a: new OffscreenCanvas(outW, outH),
@@ -1909,7 +1910,7 @@ export async function renderFrame(opts: FrameOptions): Promise<RenderedFrame> {
     srcH = media?.height ?? main.displayHeight;
   const placedAll = placeClips(project.clips);
   const tr = transitionAt(transitionWindows(placedAll, project.media), t);
-  const intro = introFrameAt(project, placedAll, t);
+  const intro = introFrameAt(project, placedAll, t, tr);
   const gradeFor = (c: Clip) =>
     c.introRole && intro ? styledGrade(c.grade, intro.style) : c.grade;
   let composed = false;

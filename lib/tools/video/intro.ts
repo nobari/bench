@@ -8,7 +8,8 @@
  * over the finished frame (zoom, bars, vignette, grain, flash, glitch, the title card).
  */
 
-import { clipLength, clipSpeed, fontFamilyCss, newId, placeClips, type Clip, type Grade, type PlacedClip, type Project, type Transition, HANDLE_MARGIN } from "./project";
+import { TITLE_POSITIONS, cardSettings, clipLength, clipSpeed, fontFamilyCss, hasCard, newId, placeClips, type Clip, type Grade, type PlacedClip, type Project, type TitlePosition, type Transition, type TransitionWindow, HANDLE_MARGIN } from "./project";
+import { incomingShare } from "./transitions";
 
 export type IntroStyleId = "teaser" | "cinematic" | "punch" | "mono" | "pop" | "retro" | "glitch" | "spotlight" | "hyper" | "clean";
 
@@ -152,19 +153,33 @@ export interface IntroBlend {
   out: IntroFrame | null;
   in: IntroFrame | null;
   progress: number;
+  /** While the intro hands over to the video: how much of its look still shows, 1 → 0 across the transition (null inside the intro). */
+  leave: number | null;
 }
 
-export function introBlendAt(project: Project, placed: PlacedClip[], tr: { window: { outgoing: PlacedClip; incoming: PlacedClip }; progress: number } | null, t: number): IntroBlend | null {
+type TransitionHit = { window: Pick<TransitionWindow, "kind" | "outgoing" | "incoming">; progress: number };
+
+export function introBlendAt(project: Project, placed: PlacedClip[], tr: TransitionHit | null, t: number): IntroBlend | null {
   if (!tr) return null;
   const out = introFrameForClip(project, placed, tr.window.outgoing.id, t), inn = introFrameForClip(project, placed, tr.window.incoming.id, t);
   if (!out && !inn) return null;
-  return { out, in: inn, progress: Math.max(0, Math.min(1, tr.progress)) };
+  const progress = Math.max(0, Math.min(1, tr.progress));
+  return { out, in: inn, progress, leave: out && !inn ? 1 - incomingShare(tr.window.kind, progress) : null };
 }
 
-export function introFrameAt(project: Project, placed: PlacedClip[], t: number): IntroFrame | null {
+/**
+ * What the intro is doing at `t`, or null outside it. Inside the transition that carries the intro into the video
+ * (`tr`, when known) its last clip keeps supplying its frame past the intro's end, held at its last instant, so the
+ * look fades out with the picture instead of stopping dead at the cut.
+ */
+export function introFrameAt(project: Project, placed: PlacedClip[], t: number, tr?: { window: Pick<TransitionWindow, "outgoing"> } | null): IntroFrame | null {
   const region = introRegion(placed);
-  if (!region || t >= region.end || t < 0) return null;
+  if (!region || t < 0) return null;
   const all = region.card ? [...region.scenes, region.card] : region.scenes;
+  if (t >= region.end) {
+    const last = all[all.length - 1];
+    return tr && tr.window.outgoing.id === last.id ? introFrameForClip(project, placed, last.id, t) : null;
+  }
   const clip = all.find((c) => t >= c.start && t < c.end) ?? all[all.length - 1];
   const index = clip.introRole === "card" ? region.scenes.length : region.scenes.indexOf(clip);
   return { style: introStyle(project.intro.style), role: clip.introRole === "card" ? "card" : "scene", index, count: region.scenes.length, local: t - clip.start, length: clip.end - clip.start, introT: t, introLength: region.end };
@@ -246,19 +261,25 @@ export function introZoom(f: IntroFrame | null): number {
  */
 export function introZoomAt(f: IntroFrame, blend?: IntroBlend | null): number {
   if (!blend) return introZoom(f);
+  if (blend.leave !== null) return 1 + (introZoom(blend.out) - 1) * blend.leave;
   return introZoom(blend.out) * (1 - blend.progress) + introZoom(blend.in) * blend.progress;
 }
 
 export function drawIntroFx(ctx: Ctx, w: number, h: number, f: IntroFrame, project: Project, scratch: { a: Canvas; b: Canvas }, blend?: IntroBlend | null) {
   const { fx } = f.style;
   const frameNo = Math.floor(f.introT * 60);
+  // How much of the look still shows: all of it inside the intro, then fading in step with the picture as the intro
+  // hands over to the video — the title, the dim and the bars leave exactly as fast as the card's footage does.
+  const leave = blend?.leave ?? 1;
+  const card = cardSettings(project.intro.card);
+  const cardIn = ease(f.local / Math.max(0.01, card.fade));
   ctx.save();
   ctx.globalAlpha = 1;
   ctx.globalCompositeOperation = "source-over";
   ctx.filter = "none";
   const zoom = introZoomAt(f, blend);
   const glitch = fx.glitch && f.role === "scene" && f.local < fx.glitch ? 1 - f.local / fx.glitch : 0;
-  const blur = f.role === "card" ? Math.min(h * 0.006, 24) * ease(f.local / 0.6) : 0;
+  const blur = f.role === "card" && card.blur ? Math.min(h * 0.006, 24) * ease(f.local / Math.max(0.01, card.fade * 1.2)) * leave : 0;
   if (zoom !== 1 || glitch > 0 || blur > 0.3) {
     const a = scratch.a.getContext("2d") as Ctx;
     a.save();
@@ -299,16 +320,27 @@ export function drawIntroFx(ctx: Ctx, w: number, h: number, f: IntroFrame, proje
       ctx.filter = "none";
     }
   }
-  // the card: dim the footage and set the title on it
-  if (f.role === "card") {
-    const fade = ease(f.local / 0.5);
-    ctx.fillStyle = `rgba(0,0,0,${(0.55 * fade).toFixed(3)})`;
-    ctx.fillRect(0, 0, w, h);
-    const text = project.intro.card.text.trim() || project.name;
-    const sub = project.intro.card.subtitle.trim();
-    const px = Math.round(h * 0.1), subPx = Math.round(h * 0.042);
-    const rise = (1 - fade) * h * 0.025;
-    ctx.textAlign = "center";
+  // the card: dim the footage and set the title on it, where and how the settings say
+  if (f.role === "card" && leave > 0) {
+    const fade = cardIn * leave;
+    if (card.dim > 0) {
+      ctx.fillStyle = `rgba(0,0,0,${(card.dim * fade).toFixed(3)})`;
+      ctx.fillRect(0, 0, w, h);
+    }
+    const text = card.text.trim() || project.name;
+    const sub = card.subtitle.trim();
+    const px = Math.max(8, Math.round(h * card.size)), subPx = Math.round(px * 0.42);
+    const rise = (1 - cardIn) * h * 0.025;
+    const pos: TitlePosition = TITLE_POSITIONS.includes(card.position) ? card.position : "mc";
+    const row = pos[0], col = pos[1];
+    // Edges keep clear of the frame's sides and of the letterbox bars.
+    const padX = w * 0.05, padY = Math.max(h * 0.06, h * (fx.letterbox ?? 0) + h * 0.03);
+    const blockH = sub ? px + subPx * 1.6 : px;
+    const x = col === "l" ? padX : col === "r" ? w - padX : w / 2;
+    const mid = row === "t" ? padY + blockH / 2 : row === "b" ? h - padY - blockH / 2 : h / 2;
+    const cy = sub ? mid - subPx * 0.9 : mid;
+    const family = fontFamilyCss(card.font);
+    ctx.textAlign = col === "l" ? "left" : col === "r" ? "right" : "center";
     ctx.textBaseline = "middle";
     ctx.shadowColor = "rgba(0,0,0,0.6)";
     ctx.shadowBlur = px * 0.25;
@@ -316,34 +348,33 @@ export function drawIntroFx(ctx: Ctx, w: number, h: number, f: IntroFrame, proje
     const c = ctx as Ctx & { letterSpacing?: string };
     if ("letterSpacing" in c) c.letterSpacing = "0.02em";
     ctx.globalAlpha = fade;
-    ctx.fillStyle = "#ffffff";
-    ctx.font = `700 ${px}px ${fontFamilyCss("sans")}`;
-    const cy = sub ? h / 2 - subPx * 0.9 : h / 2;
-    ctx.fillText(text, w / 2, cy + rise);
+    ctx.fillStyle = card.color;
+    ctx.font = `700 ${px}px ${family}`;
+    ctx.fillText(text, x, cy + rise);
     if (sub) {
       ctx.globalAlpha = fade * 0.85;
-      ctx.font = `400 ${subPx}px ${fontFamilyCss("sans")}`;
-      if ("letterSpacing" in c) c.letterSpacing = "0.12em";
-      ctx.fillText(sub.toUpperCase(), w / 2, cy + px * 0.85 + rise);
+      ctx.font = `400 ${subPx}px ${family}`;
+      if ("letterSpacing" in c) c.letterSpacing = card.caps ? "0.12em" : "0.02em";
+      ctx.fillText(card.caps ? sub.toUpperCase() : sub, x, cy + px * 0.85 + rise);
     }
     if ("letterSpacing" in c) c.letterSpacing = "0px";
     ctx.shadowColor = "transparent";
     ctx.globalAlpha = 1;
   }
-  if (fx.vignette) {
+  if (fx.vignette && leave > 0) {
     const g = ctx.createRadialGradient(w / 2, h / 2, Math.min(w, h) * 0.3, w / 2, h / 2, Math.hypot(w, h) / 2);
     g.addColorStop(0, "rgba(0,0,0,0)");
-    g.addColorStop(1, `rgba(0,0,0,${fx.vignette})`);
+    g.addColorStop(1, `rgba(0,0,0,${(fx.vignette * leave).toFixed(3)})`);
     ctx.fillStyle = g;
     ctx.fillRect(0, 0, w, h);
   }
-  if (fx.grain) {
+  if (fx.grain && leave > 0) {
     const pat = grainPattern(ctx);
     if (pat) {
       const s = Math.max(1, h / 1080);
       ctx.save();
       ctx.globalCompositeOperation = "overlay";
-      ctx.globalAlpha = fx.grain;
+      ctx.globalAlpha = fx.grain * leave;
       ctx.translate(Math.floor(hash(frameNo * 5 + 2) * 192 * s), Math.floor(hash(frameNo * 5 + 3) * 192 * s));
       ctx.scale(s, s);
       ctx.fillStyle = pat;
@@ -352,10 +383,13 @@ export function drawIntroFx(ctx: Ctx, w: number, h: number, f: IntroFrame, proje
     }
   }
   if (fx.letterbox) {
-    const bar = Math.round(h * fx.letterbox);
-    ctx.fillStyle = "#000";
-    ctx.fillRect(0, 0, w, bar);
-    ctx.fillRect(0, h - bar, w, bar);
+    // The bars open out as the intro hands over: with the open ending they slide away across the dissolve.
+    const bar = Math.round(h * fx.letterbox * leave);
+    if (bar > 0) {
+      ctx.fillStyle = "#000";
+      ctx.fillRect(0, 0, w, bar);
+      ctx.fillRect(0, h - bar, w, bar);
+    }
   }
   if (fx.flash && f.role === "scene" && f.index > 0 && f.local < fx.flash) {
     ctx.fillStyle = `rgba(255,255,255,${((1 - f.local / fx.flash) ** 2).toFixed(3)})`;
@@ -511,14 +545,15 @@ function stampStyle(scenes: Clip[], main: Clip[], project: Project, cardId?: str
     return mainOut;
   }
   const cards: Clip[] = [];
-  if (project.intro.card.seconds > 0) {
+  if (hasCard(project.intro.card)) {
     const card = cardClip(project, restyled[restyled.length - 1], project.intro.card.seconds, cardId);
     if (style.transition) card.transitionIn = { ...style.transition };
     cards.push(card);
   }
   if (mainOut[0]) {
     delete mainOut[0].joinedToPrevious;
-    mainOut[0].transitionIn = { ...style.outro };
+    // The look's own ending, or opening out: a dissolve, across which the title fades and the bars slide away.
+    mainOut[0].transitionIn = project.intro.outro === "open" ? { kind: "dissolve", duration: style.outro.duration } : { ...style.outro };
   }
   return [...restyled, ...cards, ...mainOut];
 }
@@ -611,5 +646,5 @@ export function describeIntro(project: Project): string | null {
   const sceneLen = region.scenes.reduce((a, c) => a + (c.end - c.start), 0);
   const parts = [`${scenes} scene${scenes === 1 ? "" : "s"} (${sceneLen.toFixed(1)} s)`];
   if (region.card) parts.push(`title card ${(region.card.end - region.card.start).toFixed(1)} s`);
-  return `${style.name}: ${parts.join(" + ")} = ${region.end.toFixed(1)} s before the main video`;
+  return `${style.name}: ${parts.join(" + ")} = ${region.end.toFixed(1)} s before the main video${project.intro.outro === "open" ? ", opening out to the full frame at the end" : ""}`;
 }

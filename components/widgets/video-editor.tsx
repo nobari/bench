@@ -3,7 +3,7 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { AlertTriangle, Camera, Check, ChevronDown, ChevronRight, ChevronUp, Sparkles, Circle, Clapperboard, Crop, Download, FolderOpen, Loader, Maximize2, Minimize2, Music, Pause, Play, Repeat, Save, Scissors, SkipBack, SkipForward, SlidersHorizontal, StepBack, StepForward, Trash2, Type, Upload, Volume2, VolumeX, Keyboard, Search, Shuffle, X } from "lucide-react";
-import { DEFAULT_CLIP_GAIN_DB, DEFAULT_EXPORT, NEUTRAL_GRADE, NEUTRAL_TRANSFORM, TITLE_ALIGNS, TITLE_FAMILIES, TITLE_FONTS, TITLE_POSITIONS, TITLE_SHADOWS, TITLE_WEIGHTS, TRANSITIONS, addTransitionAt, appendMusic, applyAudioTo, applyGradeTo, applyTransitionToAll, clipAt, crossfades, dbToGain, effectiveMusicEnd, estimateExport, exportRange, fmtTime, musicGainAt, musicLength, newId, newProject, newTitle, orderRecordings, placeClips, planExport, removeRange, reorderMusic, setTransition, splitClip, timelineDuration, titleLanes, transitionAt, transitionWindows, CLIP_SPEEDS, canMergeWithNext, clipLength, clipSpeed, groupOf, sourceTimeAt, mergeWithNext, moveClip, unjoin, updateClip, visibleCuts, type Clip, type MediaRef, type MusicTrack, type Project, type ProxyHeight, type Title, type TitleFont, isFileLutKind, type FileLutKind, type LutKind, type MathLutKind, type TitleAlign, type TitlePosition, type TitleShadow, type Transition, type TransitionKind, type ExportTags, type IntroSettings, reorderClip, parseTime, type SteadyLights, STEADY_FRAMES, clampMusicStart, musicUnused, shuffleFillMusic, describeWhere, type MediaWhere, exportFingerprint } from "@/lib/tools/video/project";
+import { DEFAULT_CLIP_GAIN_DB, DEFAULT_EXPORT, NEUTRAL_GRADE, NEUTRAL_TRANSFORM, TITLE_ALIGNS, TITLE_FAMILIES, TITLE_FONTS, TITLE_POSITIONS, TITLE_SHADOWS, TITLE_WEIGHTS, TRANSITIONS, addTransitionAt, appendMusic, applyAudioTo, applyGradeTo, applyTransitionToAll, clipAt, crossfades, dbToGain, effectiveMusicEnd, estimateExport, exportRange, fmtTime, musicGainAt, musicLength, newId, newProject, newTitle, orderRecordings, placeClips, planExport, removeRange, reorderMusic, setTransition, splitClip, timelineDuration, titleLanes, transitionAt, transitionWindows, CLIP_SPEEDS, canMergeWithNext, clipLength, clipSpeed, groupOf, sourceTimeAt, mergeWithNext, moveClip, unjoin, updateClip, visibleCuts, type Clip, type MediaRef, type MusicTrack, type Project, type ProxyHeight, type Title, type TitleFont, isFileLutKind, type FileLutKind, type LutKind, type MathLutKind, type TitleAlign, type TitlePosition, type TitleShadow, type Transition, type TransitionKind, type ExportTags, type IntroSettings, type IntroCard, DEFAULT_CARD, cardSettings, hasCard, reorderClip, parseTime, type SteadyLights, STEADY_FRAMES, clampMusicStart, musicUnused, shuffleFillMusic, describeWhere, type MediaWhere, exportFingerprint } from "@/lib/tools/video/project";
 import { drawTransition } from "@/lib/tools/video/transitions";
 import { LUT_OPTIONS, buildDlogLut, deriveLut, fetchOfficialLut, lutToCube, parseCube, type Lut3D } from "@/lib/tools/video/lut";
 import { fmtBytes, fmtDelta, fmtDuration, fmtMs, type EstimateSource, type ExportProgress, type SpeedPriors, type StepProgress } from "@/lib/tools/video/progress";
@@ -1244,7 +1244,7 @@ export function VideoEditorWidget() {
           const alt = altRef.current;
           const tr = windows.length ? transitionAt(windows, playhead) : null;
           // Inside the intro the clips draw through the style's look, and its effects go on before the titles.
-          const intro = introFrameAt(project, placed, playhead);
+          const intro = introFrameAt(project, placed, playhead, tr);
           const gradeFor = (clip: Clip) => (clip.introRole && intro ? styledGrade(clip.grade, intro.style) : clip.grade);
           let composed = false;
           if (tr && alt) {
@@ -1474,6 +1474,8 @@ export function VideoEditorWidget() {
     const delta = introLength(clips) - introLength(project.clips);
     setProject(shiftAfterIntro({ ...next, clips }, delta));
   };
+  const setCard = (patch: Partial<IntroCard>) => setIntro({ card: { ...project.intro.card, ...patch } });
+  const introCard = cardSettings(project.intro.card);
   const stopMin = project.stops?.minSeconds ?? stopDefaults.minSeconds;
   const stopMargin = project.stops?.margin ?? stopDefaults.margin;
   const setStopSettings = (patch: Partial<{ minSeconds: number; margin: number }>) => {
@@ -1578,7 +1580,7 @@ export function VideoEditorWidget() {
     setPlaying(true);
   };
   // Thumbnails of the scenes in the chosen look, re-rendered when a scene, the look or the card text changes.
-  const thumbKey = introReg ? [...introReg.scenes, ...(introReg.card ? [introReg.card] : [])].map((c) => `${c.id}:${c.in.toFixed(2)}:${c.out.toFixed(2)}`).join("|") + `@${project.intro.style}@${project.intro.card.text}@${project.intro.card.subtitle}@${project.name}` : "";
+  const thumbKey = introReg ? [...introReg.scenes, ...(introReg.card ? [introReg.card] : [])].map((c) => `${c.id}:${c.in.toFixed(2)}:${c.out.toFixed(2)}`).join("|") + `@${project.intro.style}@${JSON.stringify(project.intro.card)}@${project.intro.outro ?? "look"}@${project.name}` : "";
   useEffect(() => {
     if (!thumbKey) return;
     const abort = new AbortController();
@@ -2651,6 +2653,22 @@ export function VideoEditorWidget() {
                       </button>
                     ))}
                   </div>
+                  <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] text-muted" role="radiogroup" aria-label="Ending" data-intro-outro>
+                    <span>Ending</span>
+                    <label className="flex items-center gap-1">
+                      <input type="radio" name="intro-outro" checked={(project.intro.outro ?? "look") === "look"} onChange={() => setIntro({ outro: "look" })} className="accent-[var(--accent)]" /> the look’s own ({TRANSITIONS.find((x) => x.kind === introStyle(project.intro.style).outro.kind)?.name.toLowerCase() ?? introStyle(project.intro.style).outro.kind})
+                    </label>
+                    <label className="flex items-center gap-1">
+                      <input type="radio" name="intro-outro" checked={project.intro.outro === "open"} onChange={() => setIntro({ outro: "open" })} className="accent-[var(--accent)]" /> open to the full frame
+                    </label>
+                    <span className="basis-full text-faint">
+                      {project.intro.outro === "open"
+                        ? introStyle(project.intro.style).fx.letterbox
+                          ? "The title fades and the bars slide away over a dissolve into the video."
+                          : "The title fades over a dissolve into the video (this look has no bars to open)."
+                        : "The look’s own transition into the video; the card’s title and effects fade out with the picture."}
+                    </span>
+                  </div>
                 </div>
                 {introReg && (
                   <>
@@ -2694,7 +2712,7 @@ export function VideoEditorWidget() {
                                 </button>
                               </>
                             )}
-                            <button type="button" onClick={() => (isCard ? setIntro({ card: { ...project.intro.card, seconds: 0 } }) : applyIntro((p) => removeScene(p, c.id)))} className="text-faint hover:text-danger" aria-label={isCard ? "Remove the title card" : `Remove scene ${i + 1}`}>
+                            <button type="button" onClick={() => (isCard ? setCard({ enabled: false }) : applyIntro((p) => removeScene(p, c.id)))} className="text-faint hover:text-danger" aria-label={isCard ? "Remove the title card" : `Remove scene ${i + 1}`}>
                               <Trash2 size={13} />
                             </button>
                           </div>
@@ -2703,13 +2721,97 @@ export function VideoEditorWidget() {
                     </div>
                     <div className="space-y-1.5 rounded-[var(--radius-sm)] border border-edge p-2 text-[12px] text-muted" data-intro-card>
                       <div className="flex items-center justify-between gap-2">
-                        <span className="font-medium text-ink">Title card</span>
-                        <label className="flex items-center gap-1">
-                          <input type="number" min={0} max={10} step={0.5} value={project.intro.card.seconds} onChange={(e) => setIntro({ card: { ...project.intro.card, seconds: Math.max(0, Math.min(10, Number(e.target.value) || 0)) } })} className={cn(INPUT, "h-6 w-16 font-mono")} aria-label="Card seconds" /> s (0 for none)
+                        <label className="flex items-center gap-1.5 font-medium text-ink">
+                          <input type="checkbox" checked={hasCard(project.intro.card)} onChange={(e) => setCard({ enabled: e.target.checked, seconds: e.target.checked && !(project.intro.card.seconds > 0) ? DEFAULT_CARD.seconds : project.intro.card.seconds })} className="accent-[var(--accent)]" data-card-enabled /> Title card
                         </label>
+                        {hasCard(project.intro.card) && (
+                          <label className="flex items-center gap-1">
+                            <input type="number" min={0.5} max={10} step={0.5} value={project.intro.card.seconds} onChange={(e) => setCard({ seconds: Math.max(0.5, Math.min(10, Number(e.target.value) || 0.5)) })} className={cn(INPUT, "h-6 w-16 font-mono")} aria-label="Card seconds" /> s
+                          </label>
+                        )}
                       </div>
-                      <input value={project.intro.card.text} onChange={(e) => setIntro({ card: { ...project.intro.card, text: e.target.value } })} placeholder={project.name} className={INPUT} aria-label="Card title" />
-                      <input value={project.intro.card.subtitle} onChange={(e) => setIntro({ card: { ...project.intro.card, subtitle: e.target.value } })} placeholder="Subtitle (optional): a place, a date" className={INPUT} aria-label="Card subtitle" />
+                      {hasCard(project.intro.card) ? (
+                        <>
+                          <input value={project.intro.card.text} onChange={(e) => setCard({ text: e.target.value })} placeholder={project.name} className={INPUT} aria-label="Card title" />
+                          <input value={project.intro.card.subtitle} onChange={(e) => setCard({ subtitle: e.target.value })} placeholder="Subtitle (optional): a place, a date" className={INPUT} aria-label="Card subtitle" />
+                          <div className="flex flex-wrap items-center gap-x-3 gap-y-2" data-card-style>
+                            <span className="grid grid-cols-3 gap-0.5" title="Where the title sits" role="group" aria-label="Card position">
+                              {TITLE_POSITIONS.map((pos) => (
+                                <button key={pos} type="button" onClick={() => setCard({ position: pos })} aria-label={POSITION_NAMES[pos]} title={POSITION_NAMES[pos]} aria-pressed={introCard.position === pos} className={cn("h-4 w-4 rounded-[2px] border", introCard.position === pos ? "border-accent bg-accent" : "border-edge bg-base hover:border-accent")} data-card-position={pos} />
+                              ))}
+                            </span>
+                            <label className="flex items-center gap-1">
+                              Text
+                              <input type="color" value={toHex(introCard.color)} onChange={(e) => setCard({ color: e.target.value })} className="h-6 w-8 cursor-pointer rounded border border-edge bg-base p-0" aria-label="Card text colour" />
+                            </label>
+                            <label className="flex items-center gap-1">
+                              Font
+                              <select
+                                value={introCard.font in TITLE_FONTS || TITLE_FAMILIES.includes(introCard.font) || localFonts?.includes(introCard.font) ? introCard.font : "__other"}
+                                onChange={(e) => {
+                                  const v = e.target.value;
+                                  if (v === "__installed") return void listLocalFonts();
+                                  setCard({ font: v === "__other" ? "" : v });
+                                }}
+                                className={cn(SEL, "h-6 max-w-[160px] text-[12px]")}
+                                aria-label="Card font"
+                              >
+                                <optgroup label="Presets">
+                                  {(Object.keys(TITLE_FONTS) as TitleFont[]).map((f) => (
+                                    <option key={f} value={f}>
+                                      {f}
+                                    </option>
+                                  ))}
+                                </optgroup>
+                                <optgroup label="Common families">
+                                  {TITLE_FAMILIES.map((f) => (
+                                    <option key={f} value={f}>
+                                      {f}
+                                    </option>
+                                  ))}
+                                </optgroup>
+                                {localFonts ? (
+                                  <optgroup label={`Installed (${localFonts.length})`}>
+                                    {localFonts.map((f) => (
+                                      <option key={f} value={f}>
+                                        {f}
+                                      </option>
+                                    ))}
+                                  </optgroup>
+                                ) : (
+                                  <option value="__installed">Installed fonts…</option>
+                                )}
+                                <option value="__other">Other family…</option>
+                              </select>
+                              {!(introCard.font in TITLE_FONTS || TITLE_FAMILIES.includes(introCard.font) || localFonts?.includes(introCard.font)) && <input value={introCard.font} onChange={(e) => setCard({ font: e.target.value })} placeholder="Family name" className={cn(INPUT, "h-6 w-32 text-[12px]")} aria-label="Card font family name" style={{ fontFamily: introCard.font ? `"${introCard.font}"` : undefined }} />}
+                            </label>
+                            <label className="flex min-w-[140px] flex-1 items-center gap-1">
+                              Size
+                              <input type="range" min={0.04} max={0.2} step={0.005} value={introCard.size} onChange={(e) => setCard({ size: Number(e.target.value) })} className={RANGE} aria-label="Card text size" />
+                              <span className="font-mono tabular">{Math.round(introCard.size * 100)}%</span>
+                            </label>
+                          </div>
+                          <div className="flex flex-wrap items-center gap-x-3 gap-y-2" data-card-footage>
+                            <label className="flex min-w-[140px] flex-1 items-center gap-1" title="How dark the footage goes under the title">
+                              Dim
+                              <input type="range" min={0} max={0.9} step={0.05} value={introCard.dim} onChange={(e) => setCard({ dim: Number(e.target.value) })} className={RANGE} aria-label="Dim the footage" />
+                              <span className="font-mono tabular">{Math.round(introCard.dim * 100)}%</span>
+                            </label>
+                            <label className="flex items-center gap-1">
+                              <input type="checkbox" checked={introCard.blur} onChange={(e) => setCard({ blur: e.target.checked })} className="accent-[var(--accent)]" /> soften the footage
+                            </label>
+                            <label className="flex items-center gap-1">
+                              <input type="checkbox" checked={introCard.caps} onChange={(e) => setCard({ caps: e.target.checked })} className="accent-[var(--accent)]" /> subtitle in capitals
+                            </label>
+                            <label className="flex items-center gap-1">
+                              Fade in
+                              <input type="number" min={0} max={2} step={0.1} value={introCard.fade} onChange={(e) => setCard({ fade: Math.max(0, Math.min(2, Number(e.target.value) || 0)) })} className={cn(INPUT, "h-6 w-16 font-mono")} aria-label="Card fade in seconds" /> s
+                            </label>
+                          </div>
+                        </>
+                      ) : (
+                        <p className="text-faint">The intro ends on its last scene; tick Title card to end on the project name instead.</p>
+                      )}
                       <label className="flex items-center gap-1.5">
                         <input type="checkbox" checked={project.intro.keepAudio} onChange={(e) => setIntro({ keepAudio: e.target.checked })} className="accent-[var(--accent)]" /> keep the scenes’ own sound (otherwise they play quiet under the music)
                       </label>

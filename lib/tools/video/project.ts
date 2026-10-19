@@ -96,17 +96,54 @@ export const INTRO_ROLES: IntroRole[] = ["scene", "card"];
  * The intro that opens the video: its scenes are ordinary clips tagged with introRole at the head of the
  * timeline (see intro.ts); these settings say how they are styled and what the title card shows.
  */
+/** The title card that ends the intro: the project name set over the last scene's footage, dimmed and softened. */
+export interface IntroCard {
+  /** Empty = the project name. */
+  text: string;
+  subtitle: string;
+  /** Length in seconds (0 = no card). */
+  seconds: number;
+  /** false leaves the card out while keeping its settings. */
+  enabled?: boolean;
+  /** Where the title sits: top/middle/bottom × left/centre/right. */
+  position?: TitlePosition;
+  /** A preset key (sans, serif, mono, rounded) or any font family name. */
+  font?: string;
+  /** CSS colour of the text. */
+  color?: string;
+  /** Title height as a fraction of the frame height; the subtitle is 0.42 of it. */
+  size?: number;
+  /** How dark the footage goes under the title, 0 (as it is) to 0.9. */
+  dim?: number;
+  /** Soften the footage under the title. */
+  blur?: boolean;
+  /** The subtitle in spaced capitals. */
+  caps?: boolean;
+  /** Seconds the title takes to rise and fade in. */
+  fade?: number;
+}
+export const DEFAULT_CARD: Required<IntroCard> = { text: "", subtitle: "", seconds: 2.5, enabled: true, position: "mc", font: "sans", color: "#ffffff", size: 0.1, dim: 0.55, blur: true, caps: true, fade: 0.5 };
+/** The card's settings with every field filled in (projects saved before the options existed carry only the first three). */
+export const cardSettings = (card: IntroCard): Required<IntroCard> => ({ ...DEFAULT_CARD, ...card });
+/** Whether the intro ends on a card at all. */
+export const hasCard = (card: IntroCard) => card.enabled !== false && card.seconds > 0;
+/** How the intro hands over to the video: the look's own transition, or opening out — the title fades and the letterbox bars slide away over a dissolve. */
+export type IntroOutro = "look" | "open";
+export const INTRO_OUTROS: IntroOutro[] = ["look", "open"];
+
 export interface IntroSettings {
   /** One of the ten looks in intro.ts. */
   style: string;
   /** Timeline seconds per new scene; null takes the style's own. */
   sceneSeconds: number | null;
-  /** The title card that ends the intro: text (empty = the project name), subtitle, length in seconds (0 = no card). */
-  card: { text: string; subtitle: string; seconds: number };
+  /** The title card that ends the intro. */
+  card: IntroCard;
   /** Scenes keep their own sound (at their speed); off, they play quiet under the music. */
   keepAudio: boolean;
+  /** The ending; missing means the look's own. */
+  outro?: IntroOutro;
 }
-export const DEFAULT_INTRO: IntroSettings = { style: "cinematic", sceneSeconds: null, card: { text: "", subtitle: "", seconds: 2.5 }, keepAudio: false };
+export const DEFAULT_INTRO: IntroSettings = { style: "cinematic", sceneSeconds: null, card: { ...DEFAULT_CARD }, keepAudio: false, outro: "look" };
 
 export const CLIP_SPEEDS = [0.25, 0.5, 0.75, 1, 1.5, 2, 3, 4, 8, 16] as const;
 export const MIN_CLIP_SPEED = 0.1, MAX_CLIP_SPEED = 16;
@@ -241,7 +278,7 @@ export function normalizeTitle(t: Partial<Title> & { kind: Title["kind"] }): Tit
 
 /** A CSS colour the canvas will accept: #hex, rgb()/rgba(), or a plain name. */
 const COLOR_NAMES = new Set(["white", "black", "red", "green", "blue", "yellow", "orange", "cyan", "magenta", "gray", "grey", "silver", "gold", "navy", "teal", "olive", "maroon", "purple", "pink", "brown", "beige", "ivory", "coral", "salmon", "tomato", "crimson", "lime", "indigo", "violet", "turquoise", "lavender", "khaki", "tan", "wheat"]);
-const isCssColor = (v: unknown): v is string => typeof v === "string" && (/^#([0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/i.test(v) || /^(rgba?|hsla?)\(/i.test(v) || COLOR_NAMES.has(v.toLowerCase()));
+export const isCssColor = (v: unknown): v is string => typeof v === "string" && (/^#([0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/i.test(v) || /^(rgba?|hsla?)\(/i.test(v) || COLOR_NAMES.has(v.toLowerCase()));
 
 /**
  * The JSON to hand an LLM: what the video contains, what a title can be,
@@ -484,7 +521,8 @@ export function transitionWindows(placed: PlacedClip[], media?: Record<string, M
     if (!tr || !(tr.duration > 0) || b.joinedToPrevious) continue;
     const want = tr.duration;
     const la = a.end - a.start, lb = b.end - b.start, sa = clipSpeed(a), sb = clipSpeed(b);
-    const ma = media?.[a.media]?.duration, mb = media?.[b.media]?.duration;
+    // A title card's last frame is held under the transition out of the intro, so its side never runs short.
+    const ma = a.introRole === "card" ? undefined : media?.[a.media]?.duration, mb = media?.[b.media]?.duration;
     // After the cut the outgoing clip must supply footage past its end; before it the incoming clip, before its start.
     // (A recording's first and last HANDLE_MARGIN seconds are kept clear as well.)
     const roomAfter = Math.max(0, Math.min(lb / 2, ma !== undefined ? (ma - a.out - HANDLE_MARGIN) / sa : Infinity));
@@ -1135,6 +1173,7 @@ export function deserialize(json: string): Project | null {
     const intro: IntroSettings = { ...DEFAULT_INTRO, ...(p.intro ?? {}), card: { ...DEFAULT_INTRO.card, ...(p.intro?.card ?? {}) } };
     const stops: StopScan | null = p.stops && typeof p.stops === "object" && p.stops.runs && typeof p.stops.runs === "object" ? { ...p.stops, minSeconds: p.stops.minSeconds > 0 ? p.stops.minSeconds : 2, margin: p.stops.margin >= 0 ? p.stops.margin : 0.5 } : null;
     if (typeof intro.sceneSeconds !== "number" || !(intro.sceneSeconds > 0)) intro.sceneSeconds = null;
+    if (!INTRO_OUTROS.includes(intro.outro as IntroOutro)) intro.outro = "look";
     return { ...newProject(), ...p, clips, export: { ...DEFAULT_EXPORT, ...p.export, tags: { ...DEFAULT_TAGS, ...(p.export?.tags ?? {}) } }, preview: { ...DEFAULT_PREVIEW, ...(p.preview ?? (Object.values(p.proxies ?? {}).some((x) => x?.ready) ? { proxyHeight: 1080 } : {})) }, transition, intro, stops, titles: (p.titles ?? []).map((t) => normalizeTitle(t)) };
   } catch {
     return null;

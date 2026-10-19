@@ -13,6 +13,29 @@ const ease = (p: number) => {
 /** Eased progress across the sub-range [a, b] of the window. */
 const between = (p: number, a: number, b: number) => ease((p - a) / (b - a));
 
+/**
+ * How much of the incoming side shows at progress p of a transition: 0 while the outgoing picture is on, 1 once the
+ * incoming one has taken over. A dip is read against its black (or white): the outgoing side is gone by the midpoint.
+ * Spatial transitions (wipe, push) are read by how far across they are.
+ */
+export function incomingShare(kind: TransitionKind, p: number): number {
+  switch (kind) {
+    case "dissolve":
+    case "wipe":
+    case "push":
+      return ease(p);
+    case "dipBlack":
+    case "dipWhite":
+      return ease(Math.min(1, p * 2));
+    case "zoom":
+      return between(p, 0.3, 0.7);
+    case "blur":
+      return between(p, 0.35, 0.65);
+    default:
+      return p < 0.5 ? 0 : 1;
+  }
+}
+
 function drawScaled(ctx: Ctx, img: Frame, w: number, h: number, s: number) {
   const sw = w * s, sh = h * s;
   ctx.drawImage(img, (w - sw) / 2, (h - sh) / 2, sw, sh);

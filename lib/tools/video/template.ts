@@ -4,7 +4,7 @@
  * array or the older titles-only template still import (titles only).
  */
 import { INTRO_STYLES, introRegion, introStyle, minSceneSeconds, sceneHandle, sceneSecondsFor, type Moment } from "./intro";
-import { HANDLE_MARGIN, clipSpeed, parseTitlesImport, placeClips, titlesTemplate, type IntroSettings, type Project, type Title } from "./project";
+import { HANDLE_MARGIN, INTRO_OUTROS, TITLE_POSITIONS, cardSettings, clipSpeed, isCssColor, parseTitlesImport, placeClips, titlesTemplate, type IntroCard, type IntroOutro, type IntroSettings, type Project, type Title, type TitlePosition } from "./project";
 
 export const TEMPLATE_FORMAT = "bench-video-template/2";
 
@@ -42,7 +42,7 @@ export function videoTemplate(p: Project): Record<string, unknown> {
     project,
     instructions: [
       "This one file describes both the intro and the titles of a video. Fill it in, save it, and import it in the Intro or Titles tab of the Bench video editor (Import JSON): both parts are applied at once.",
-      "intro: set enabled to false for no intro. style is the id of one of options.introStyles (each lists its name and look). scenes (1–20) is how many moments are lifted from the footage when moments is empty — the editor then picks lively ones itself. sceneSeconds is seconds per scene (null = the style's own; never shorter than the style's transition plus 0.3 s). card ends the intro: text (empty = the project name), subtitle, and seconds (0 = no card). keepAudio keeps the scenes' own sound instead of playing them quiet under the music. moments, optional, names the exact moments to use, in order: file is one of project.clips files and at is seconds into that recording.",
+      "intro: set enabled to false for no intro. style is the id of one of options.introStyles (each lists its name and look). scenes (1–20) is how many moments are lifted from the footage when moments is empty — the editor then picks lively ones itself. sceneSeconds is seconds per scene (null = the style's own; never shorter than the style's transition plus 0.3 s). card ends the intro: enabled (false = no card), text (empty = the project name), subtitle, seconds (0 = no card), position (tl tc tr ml mc mr bl bc br), font (sans, serif, mono, rounded or a font family name), color (#rrggbb), size (title height as a fraction of the frame height, 0.04–0.2), dim (how dark the footage goes under the title, 0–0.9), blur (true softens the footage), caps (true sets the subtitle in spaced capitals) and fade (seconds the title takes to rise in). outro is how the intro hands over to the video: look (the look's own transition) or open (the title fades and the letterbox bars slide away over a dissolve into the video). keepAudio keeps the scenes' own sound instead of playing them quiet under the music. moments, optional, names the exact moments to use, in order: file is one of project.clips files and at is seconds into that recording.",
       "Avoid jumps: a cross dissolve shows the outgoing clip past its end and the incoming clip before its start, so each side of a cut needs its half of the transition plus a margin of handleMarginSeconds inside the recording. Pick every moment's at inside that clip's momentRange (recording seconds): it already leaves the handles and the margin on both sides of the scene; outside it the scene is moved or shortened, and a scene with no room would freeze. Likewise keep a title's start and end at least transitionSeconds / 2 + handleMarginSeconds away from a cut between clips (clips lists start and end on the timeline) unless the title spans the cut entirely.",
       ...base.instructions.slice(1),
     ],
@@ -52,13 +52,19 @@ export function videoTemplate(p: Project): Record<string, unknown> {
       introScenesRange: [1, 20],
       introSceneSecondsRange: [0.5, 10],
       introCardSecondsRange: [0, 10],
+      introCardPositions: TITLE_POSITIONS,
+      introCardSizeRange: [0.04, 0.2],
+      introCardDimRange: [0, 0.9],
+      introCardFadeRange: [0, 2],
+      introOutros: INTRO_OUTROS,
     },
     intro: {
       enabled: true,
       style: p.intro.style,
       scenes: reg?.scenes.length || 6,
       sceneSeconds: p.intro.sceneSeconds,
-      card: { ...p.intro.card },
+      card: cardSettings(p.intro.card),
+      outro: p.intro.outro ?? "look",
       keepAudio: p.intro.keepAudio,
       moments,
     },
@@ -86,7 +92,39 @@ function parseIntro(raw: unknown, p: Project, warnings: string[]): IntroImport {
     warnings.push(`intro: card seconds ${cardSeconds} is outside 0–10, clamped`);
     cardSeconds = Math.max(0, Math.min(10, cardSeconds));
   }
-  const card = { text: c && typeof c.text === "string" ? c.text.trim() : p.intro.card.text, subtitle: c && typeof c.subtitle === "string" ? c.subtitle.trim() : p.intro.card.subtitle, seconds: cardSeconds };
+  const was = cardSettings(p.intro.card);
+  const card: IntroCard = { ...p.intro.card, text: c && typeof c.text === "string" ? c.text.trim() : p.intro.card.text, subtitle: c && typeof c.subtitle === "string" ? c.subtitle.trim() : p.intro.card.subtitle, seconds: cardSeconds };
+  if (r.card === false) card.enabled = false;
+  if (c) {
+    if (typeof c.enabled === "boolean") card.enabled = c.enabled;
+    if (c.position !== undefined) {
+      if (typeof c.position === "string" && TITLE_POSITIONS.includes(c.position as TitlePosition)) card.position = c.position as TitlePosition;
+      else warnings.push(`intro: card position "${String(c.position)}" not understood, kept ${was.position}`);
+    }
+    if (typeof c.font === "string" && c.font.trim()) card.font = c.font.trim();
+    if (c.color !== undefined) {
+      if (isCssColor(c.color)) card.color = c.color;
+      else warnings.push(`intro: card colour "${String(c.color)}" not understood, kept ${was.color}`);
+    }
+    const ranged = (key: "size" | "dim" | "fade", lo: number, hi: number) => {
+      const v = num(c[key]);
+      if (c[key] === undefined) return;
+      if (v === undefined) return void warnings.push(`intro: card ${key} "${String(c[key])}" is not a number, kept ${was[key]}`);
+      if (v < lo || v > hi) warnings.push(`intro: card ${key} ${v} is outside ${lo}–${hi}, clamped`);
+      card[key] = Math.max(lo, Math.min(hi, v));
+    };
+    ranged("size", 0.04, 0.2);
+    ranged("dim", 0, 0.9);
+    ranged("fade", 0, 2);
+    if (typeof c.blur === "boolean") card.blur = c.blur;
+    if (typeof c.caps === "boolean") card.caps = c.caps;
+  }
+  let outro: IntroOutro = p.intro.outro ?? "look";
+  if (r.outro !== undefined) {
+    const o = typeof r.outro === "string" ? r.outro.trim().toLowerCase() : "";
+    if (INTRO_OUTROS.includes(o as IntroOutro)) outro = o as IntroOutro;
+    else warnings.push(`intro: outro "${String(r.outro)}" not understood (look or open), kept ${outro}`);
+  }
   const keepAudio = typeof r.keepAudio === "boolean" ? r.keepAudio : p.intro.keepAudio;
   let scenes = Math.round(num(r.scenes) ?? 6);
   if (scenes < 1 || scenes > 20) {
@@ -116,7 +154,7 @@ function parseIntro(raw: unknown, p: Project, warnings: string[]): IntroImport {
       moments.push({ clipId: clip.id, sourceTime, timelineT: clip.start + (sourceTime - clip.in) / clipSpeed(clip) });
     });
   }
-  return { enabled: true, settings: { style: style?.id ?? p.intro.style, sceneSeconds, card, keepAudio }, scenes, moments };
+  return { enabled: true, settings: { style: style?.id ?? p.intro.style, sceneSeconds, card, keepAudio, outro }, scenes, moments };
 }
 
 /** Read a filled template: titles (as before) and, when the file has an intro section, the intro. */
