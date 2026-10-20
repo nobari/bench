@@ -175,6 +175,7 @@ const WIDGETS: Record<WidgetKey, React.ComponentType<Record<string, unknown>>> =
     { ssr: false, loading: Skeleton },
   ),
   "bitcoin-wallet": dynamic(() => import("@/components/widgets/bitcoin-wallet").then((m) => m.BitcoinWalletWidget), { ssr: false, loading: Skeleton }),
+  "track-changes": dynamic(() => import("@/components/widgets/track-changes").then((m) => m.TrackChangesWidget), { ssr: false, loading: Skeleton }),
 };
 
 export function ToolMount({

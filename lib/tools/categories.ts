@@ -121,7 +121,7 @@ export const CATEGORIES: Category[] = [
     name: "Web & Dev",
     tagline: "Everyday developer utilities",
     description:
-      "Diff text, test regular expressions, preview Markdown and more.",
+      "Diff text, track changes in a revision, test regular expressions, preview Markdown and more.",
     icon: Globe,
     accentVar: "--cat-web",
   },
