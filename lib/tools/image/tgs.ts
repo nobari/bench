@@ -104,8 +104,13 @@ export function telegramChecks(info: LottieInfo, tgsBytes: number | null): Teleg
 
 export interface ColorUse {
   hex: string;
+  /** Uses as a fill, stroke, solid layer or gradient stop. */
   count: number;
+  /** How many of those uses are gradient stops. */
+  gradient: number;
 }
+
+export type ColorKind = "fill" | "stroke" | "gradient" | "solid";
 
 function clamp255(v: number): number {
   return Math.max(0, Math.min(255, Math.round(v * 255)));
@@ -126,64 +131,114 @@ export function hexToRgb(hex: string): [number, number, number] {
   ];
 }
 
+/** One color in the document: its current hex and a writer taking a replacement [r, g, b] (0–1 floats). */
+interface ColorSlot {
+  hex: string;
+  write: (rgb: [number, number, number]) => void;
+}
+
 /**
- * Visit every solid fill/stroke color in the document. Handles static values,
- * keyframed colors, and solid-layer `sc` hex strings. Gradients are left
- * alone. `visit` receives the current hex and may return a replacement
- * [r, g, b] (0–1 floats) to write back.
+ * Visit every color-bearing node in the document — solid fills and strokes (static or keyframed), gradient fills and
+ * strokes (every color stop, static or keyframed), and solid layers — with all of that node's colors together.
  */
-function walkColors(
-  node: unknown,
-  visit: (hex: string, write: (rgb: [number, number, number]) => void) => void,
-): void {
+function walkColorNodes(node: unknown, visit: (slots: ColorSlot[], kind: ColorKind) => void): void {
   if (Array.isArray(node)) {
-    for (const item of node) walkColors(item, visit);
+    for (const item of node) walkColorNodes(item, visit);
     return;
   }
   if (!node || typeof node !== "object") return;
   const obj = node as LottieJson;
 
+  const slot = (arr: number[], o: number): ColorSlot => ({
+    hex: rgbToHex(arr[o], arr[o + 1], arr[o + 2]),
+    write: (rgb) => {
+      arr[o] = rgb[0];
+      arr[o + 1] = rgb[1];
+      arr[o + 2] = rgb[2];
+    },
+  });
+
   if ((obj.ty === "fl" || obj.ty === "st") && obj.c && typeof obj.c === "object") {
-    const c = obj.c as LottieJson;
-    const k = c.k;
-    if (Array.isArray(k) && typeof k[0] === "number" && k.length >= 3) {
-      const arr = k as number[];
-      visit(rgbToHex(arr[0], arr[1], arr[2]), (rgb) => {
-        arr[0] = rgb[0];
-        arr[1] = rgb[1];
-        arr[2] = rgb[2];
-      });
-    } else if (Array.isArray(k)) {
+    const slots: ColorSlot[] = [];
+    const k = (obj.c as LottieJson).k;
+    if (Array.isArray(k) && typeof k[0] === "number" && k.length >= 3) slots.push(slot(k as number[], 0));
+    else if (Array.isArray(k)) {
       for (const kf of k as LottieJson[]) {
         const s = kf?.s;
-        if (Array.isArray(s) && typeof s[0] === "number" && s.length >= 3) {
-          const arr = s as number[];
-          visit(rgbToHex(arr[0], arr[1], arr[2]), (rgb) => {
-            arr[0] = rgb[0];
-            arr[1] = rgb[1];
-            arr[2] = rgb[2];
-          });
-        }
+        if (Array.isArray(s) && typeof s[0] === "number" && s.length >= 3) slots.push(slot(s as number[], 0));
       }
     }
+    if (slots.length) visit(slots, obj.ty === "fl" ? "fill" : "stroke");
+  }
+
+  // A gradient's stops are one flat array: [offset, r, g, b] × p color stops, then [offset, alpha] pairs.
+  if ((obj.ty === "gf" || obj.ty === "gs") && obj.g && typeof obj.g === "object") {
+    const g = obj.g as LottieJson;
+    const p = typeof g.p === "number" && g.p > 0 ? g.p : Infinity;
+    const slots: ColorSlot[] = [];
+    const stops = (arr: number[]) => {
+      const n = Math.min(p, Math.floor(arr.length / 4));
+      for (let i = 0; i < n; i++) slots.push(slot(arr, i * 4 + 1));
+    };
+    const kk = g.k && typeof g.k === "object" ? (g.k as LottieJson).k : undefined;
+    if (Array.isArray(kk) && typeof kk[0] === "number") stops(kk as number[]);
+    else if (Array.isArray(kk)) {
+      for (const kf of kk as LottieJson[]) {
+        const s = kf?.s;
+        if (Array.isArray(s) && typeof s[0] === "number") stops(s as number[]);
+      }
+    }
+    if (slots.length) visit(slots, "gradient");
   }
 
   if (typeof obj.sc === "string" && /^#[0-9a-fA-F]{6}$/.test(obj.sc)) {
-    visit(obj.sc.toLowerCase(), (rgb) => {
-      obj.sc = rgbToHex(rgb[0], rgb[1], rgb[2]);
-    });
+    visit(
+      [
+        {
+          hex: obj.sc.toLowerCase(),
+          write: (rgb) => {
+            obj.sc = rgbToHex(rgb[0], rgb[1], rgb[2]);
+          },
+        },
+      ],
+      "solid",
+    );
   }
 
-  for (const key of Object.keys(obj)) walkColors(obj[key], visit);
+  for (const key of Object.keys(obj)) walkColorNodes(obj[key], visit);
 }
 
-/** Unique solid colors used by fills/strokes/solids, most frequent first. */
+/** Visit every color in the document, one at a time, with what kind of use it is. */
+function walkColors(node: unknown, visit: (hex: string, write: ColorSlot["write"], kind: ColorKind) => void): void {
+  walkColorNodes(node, (slots, kind) => {
+    for (const s of slots) visit(s.hex, s.write, kind);
+  });
+}
+
+/**
+ * A copy in which only `spot` keeps its color (as mapped) — every other color becomes `dim`. A gradient that has
+ * `spot` among its stops is kept whole, since the stop paints the gradient's shape together with the others.
+ */
+export function highlightColor(anim: LottieJson, spot: string, map: Record<string, string>, dim = "#9a9a9a"): LottieJson {
+  const copy = structuredClone(anim);
+  const dimRgb = hexToRgb(dim);
+  walkColorNodes(copy, (slots) => {
+    const keep = slots.some((s) => s.hex === spot);
+    for (const s of slots) s.write(keep ? hexToRgb(map[s.hex] ?? s.hex) : dimRgb);
+  });
+  return copy;
+}
+
+/** Unique colors used by fills, strokes, gradient stops and solids, most frequent first. */
 export function collectColors(anim: LottieJson): ColorUse[] {
-  const counts = new Map<string, number>();
-  walkColors(anim, (hex) => counts.set(hex, (counts.get(hex) ?? 0) + 1));
-  return [...counts.entries()]
-    .map(([hex, count]) => ({ hex, count }))
-    .sort((a, b) => b.count - a.count);
+  const uses = new Map<string, ColorUse>();
+  walkColors(anim, (hex, _write, kind) => {
+    const u = uses.get(hex) ?? { hex, count: 0, gradient: 0 };
+    u.count++;
+    if (kind === "gradient") u.gradient++;
+    uses.set(hex, u);
+  });
+  return [...uses.values()].sort((a, b) => b.count - a.count);
 }
 
 /**
@@ -222,6 +277,58 @@ export function gunzipBytes(data: Uint8Array): Promise<Uint8Array> {
 export function serializeTgs(anim: LottieJson): Promise<Uint8Array> {
   const json = JSON.stringify({ ...anim, tgs: 1 });
   return pipe(new TextEncoder().encode(json), new CompressionStream("gzip"));
+}
+
+/* ------------------------------------------------------------------ links */
+
+/** Gzip of the plain animation JSON — what a share link carries. */
+export function gzipJson(anim: LottieJson): Promise<Uint8Array> {
+  return pipe(new TextEncoder().encode(JSON.stringify(anim)), new CompressionStream("gzip"));
+}
+
+export function bytesToBase64Url(bytes: Uint8Array): string {
+  let bin = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+export function base64UrlToBytes(text: string): Uint8Array {
+  const b64 = text.replace(/-/g, "+").replace(/_/g, "/");
+  const bin = atob(b64 + "=".repeat((4 - (b64.length % 4)) % 4));
+  return Uint8Array.from(bin, (c) => c.charCodeAt(0));
+}
+
+const HEX_RE = /^#[0-9a-f]{6}$/i;
+export const MAX_COLOR_MAP = 500;
+
+/** Keeps only `#rrggbb → #rrggbb` entries, lower-cased, capped in number. */
+export function parseColorMap(input: unknown): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (!input || typeof input !== "object" || Array.isArray(input)) return out;
+  let n = 0;
+  for (const [k, v] of Object.entries(input as Record<string, unknown>)) {
+    if (typeof v !== "string" || !HEX_RE.test(k) || !HEX_RE.test(v)) continue;
+    out[k.toLowerCase()] = v.toLowerCase();
+    if (++n >= MAX_COLOR_MAP) break;
+  }
+  return out;
+}
+
+/* ------------------------------------------------------------ pixel lookup */
+
+/** The palette entry closest to an on-screen pixel (0–255 channels), with the RGB distance (0–441). */
+export function nearestColor(rgb: [number, number, number], palette: string[]): { hex: string; distance: number } | null {
+  let best: { hex: string; distance: number } | null = null;
+  for (const hex of palette) {
+    const [r, g, b] = hexToRgb(hex);
+    const d = Math.hypot(r * 255 - rgb[0], g * 255 - rgb[1], b * 255 - rgb[2]);
+    if (!best || d < best.distance) best = { hex, distance: d };
+  }
+  return best;
+}
+
+export function pixelHex(r: number, g: number, b: number): string {
+  return "#" + [r, g, b].map((v) => Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, "0")).join("");
 }
 
 /* ------------------------------------------------------------- sample data */

@@ -8,6 +8,7 @@ import {
   Download,
   Loader,
   Pause,
+  Pipette,
   Play,
   Repeat,
   Sticker,
@@ -20,16 +21,25 @@ import { formatBytes } from "@/lib/tools/bytes";
 import {
   TGS_MAX_BYTES,
   applyColorMap,
+  base64UrlToBytes,
+  bytesToBase64Url,
   collectColors,
   gunzipBytes,
+  gzipJson,
+  highlightColor,
   isGzipData,
   isZipData,
+  nearestColor,
+  parseColorMap,
   parseLottieInfo,
+  pixelHex,
   sampleSticker,
   serializeTgs,
   telegramChecks,
   type LottieJson,
 } from "@/lib/tools/image/tgs";
+import { SHARE_SYNC_EVENT } from "@/components/share-button";
+import { readShareState, useShareState } from "@/lib/share-state";
 import { useUnsavedWork } from "@/lib/unsaved-work";
 
 interface Source {
@@ -41,6 +51,27 @@ interface Source {
 }
 
 const SPEEDS = [0.25, 0.5, 1, 2] as const;
+/** A share link carries the packed sticker up to this many characters (the shortener takes 200k); Telegram's own 64 KB cap is far below it. */
+const LINK_MAX_CHARS = 180_000;
+/** How far (RGB distance, 0–441) a pixel may sit from a swatch and still count as painted by it — antialiased edges blend. */
+const SWATCH_TOLERANCE = 64;
+/** Every other colour while one swatch is being shown in the preview. */
+const DIM_HEX = "#9a9a9a";
+
+/** A shared sticker: packed bytes, name and colour edits from the link hash. */
+function readLink(): { t: string; n: string; c: Record<string, string> } | null {
+  if (typeof window === "undefined") return null;
+  const hash = new URLSearchParams(window.location.hash.replace(/^#/, ""));
+  const t = hash.get("t");
+  if (!t) return null;
+  let c: Record<string, string> = {};
+  try {
+    c = parseColorMap(JSON.parse(hash.get("c") ?? "null"));
+  } catch {
+    /* no edits */
+  }
+  return { t, n: hash.get("n") ?? "", c };
+}
 
 const CHECKER: React.CSSProperties = {
   backgroundImage:
@@ -54,8 +85,21 @@ export function TgsStudioWidget() {
   const [colorMap, setColorMap] = useState<Record<string, string>>({});
   const [resetCount, setResetCount] = useState(0);
   const [playing, setPlaying] = useState(true);
-  const [loop, setLoop] = useState(true);
-  const [speed, setSpeed] = useState(1);
+  // How the link's reader looked at it, applied softly.
+  const [loop, setLoop] = useState(() => readShareState<{ loop: unknown }>("tgs")?.loop !== false);
+  const [speed, setSpeed] = useState(() => {
+    const v = readShareState<{ speed: unknown }>("tgs")?.speed;
+    return (SPEEDS as readonly number[]).includes(v as number) ? (v as number) : 1;
+  });
+  useShareState("tgs", { loop, speed });
+  const [link] = useState(readLink);
+  /** The sticker packed for the link, for the source it was made from. */
+  const [packed, setPacked] = useState<{ for: Source; data: string } | null>(null);
+  /** The swatch (original hex) under the pointer, the pixel colour there, the swatch pinned by a click, and the swatch shown alone in the preview. */
+  const [hot, setHot] = useState<string | null>(null);
+  const [pixel, setPixel] = useState<string | null>(null);
+  const [pinned, setPinned] = useState<string | null>(null);
+  const [spot, setSpot] = useState<string | null>(null);
   const [busy, setBusy] = useState<null | "tgs" | "png" | "gif">(null);
   const [gifProgress, setGifProgress] = useState(0);
   useUnsavedWork(busy ? "A sticker export is running; leaving now would abandon it." : src && Object.keys(colorMap).length ? "The sticker's colour edits would be lost." : null);
@@ -66,6 +110,8 @@ export function TgsStudioWidget() {
   const stageRef = useRef<HTMLDivElement>(null);
   const playerRef = useRef<AnimationItem | null>(null);
   const scrubRef = useRef<HTMLInputElement>(null);
+  const overlayRef = useRef<HTMLDivElement>(null);
+  const swatchRefs = useRef<Map<string, HTMLInputElement>>(new Map());
   const frameLabelRef = useRef<HTMLSpanElement>(null);
   const playingRef = useRef(true);
   const lastFrameRef = useRef(0);
@@ -84,6 +130,8 @@ export function TgsStudioWidget() {
     [info, src],
   );
   const baseName = src ? src.name.replace(/\.(tgs|json|lottie)$/i, "") || "sticker" : "sticker";
+  const packedData = packed && packed.for === src ? packed.data : null;
+  const linkTooLong = packedData !== null && packedData.length > LINK_MAX_CHARS;
 
   /* ------------------------------------------------------------ player */
 
@@ -119,6 +167,86 @@ export function TgsStudioWidget() {
     playerRef.current?.setSpeed(speed);
   }, [speed, anim, loop]);
 
+  // One swatch shown alone: a second player over the stage draws the sticker with every other colour greyed,
+  // on the same frame as the main one.
+  useEffect(() => {
+    const host = overlayRef.current;
+    const main = playerRef.current;
+    if (!spot || !src || !host || !main) return;
+    const inst = lottie.loadAnimation<"canvas">({
+      container: host,
+      renderer: "canvas",
+      loop: false,
+      autoplay: false,
+      animationData: highlightColor(src.anim, spot, colorMap, DIM_HEX),
+      rendererSettings: { preserveAspectRatio: "xMidYMid meet", clearCanvas: true },
+    });
+    const sync = () => inst.goToAndStop(main.currentFrame, true);
+    sync();
+    main.addEventListener("enterFrame", sync);
+    return () => {
+      main.removeEventListener("enterFrame", sync);
+      inst.destroy();
+    };
+  }, [spot, src, colorMap, loop]);
+
+  // The sticker is packed once per source, so Share can write it into the link at once.
+  useEffect(() => {
+    if (!src) return;
+    let active = true;
+    gzipJson(src.anim).then((bytes) => {
+      if (active) setPacked({ for: src, data: bytesToBase64Url(bytes) });
+    });
+    return () => {
+      active = false;
+    };
+  }, [src]);
+
+  // A link that carries a sticker: unpack it and apply its colour edits.
+  useEffect(() => {
+    if (!link) return;
+    let active = true;
+    (async () => {
+      try {
+        const bytes = base64UrlToBytes(link.t);
+        const parsed = JSON.parse(new TextDecoder().decode(await gunzipBytes(bytes))) as LottieJson;
+        parseLottieInfo(parsed);
+        if (!active) return;
+        lastFrameRef.current = 0;
+        playingRef.current = true;
+        setColorMap(link.c);
+        setResetCount((c) => c + 1);
+        setNote(null);
+        setPlaying(true);
+        setSrc({ anim: parsed, name: link.n || "shared-sticker.tgs", tgsSize: bytes.length });
+        setError(null);
+      } catch {
+        if (active) setError("The sticker in this link could not be read.");
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, [link]);
+
+  // Share: the packed sticker, its name and the colour edits go into the link (the sticker only while it fits).
+  useEffect(() => {
+    const sync = () => {
+      const h = new URLSearchParams();
+      if (src) {
+        if (packedData !== null && !linkTooLong) {
+          h.set("t", packedData);
+          h.set("n", src.name);
+        }
+        if (Object.keys(colorMap).length) h.set("c", JSON.stringify(colorMap));
+      }
+      const hs = h.toString();
+      window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}${hs ? `#${hs}` : ""}`);
+    };
+    window.addEventListener(SHARE_SYNC_EVENT, sync);
+    return () => window.removeEventListener(SHARE_SYNC_EVENT, sync);
+  }, [src, packedData, linkTooLong, colorMap]);
+
   useEffect(() => {
     const urls = urlsRef.current;
     const timers = colorTimers.current;
@@ -142,6 +270,10 @@ export function TgsStudioWidget() {
   const applySource = (next: Source) => {
     lastFrameRef.current = 0;
     playingRef.current = true;
+    setPinned(null);
+    setSpot(null);
+    setHot(null);
+    setPixel(null);
     setColorMap({});
     setResetCount((c) => c + 1);
     setNote(null);
@@ -203,6 +335,10 @@ export function TgsStudioWidget() {
 
   const clear = () => {
     setSrc(null);
+    setPinned(null);
+    setSpot(null);
+    setHot(null);
+    setPixel(null);
     setColorMap({});
     setError(null);
     setNote(null);
@@ -217,6 +353,49 @@ export function TgsStudioWidget() {
       from,
       setTimeout(() => setColorMap((m) => ({ ...m, [from]: to })), 120),
     );
+  };
+
+  /* ------------------------------------------------------------ pointer */
+
+  /** The colour drawn under the pointer and the swatch that paints it (by its original hex), or null off the sticker. */
+  const readPixel = (e: React.MouseEvent): { hex: string; swatch: string | null } | null => {
+    const canvas = stageRef.current?.querySelector("canvas");
+    if (!canvas) return null;
+    const rect = canvas.getBoundingClientRect();
+    if (!rect.width || !rect.height) return null;
+    const x = Math.floor(((e.clientX - rect.left) / rect.width) * canvas.width);
+    const y = Math.floor(((e.clientY - rect.top) / rect.height) * canvas.height);
+    if (x < 0 || y < 0 || x >= canvas.width || y >= canvas.height) return null;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return null;
+    const [r, g, b, a] = ctx.getImageData(x, y, 1, 1).data;
+    if (a < 24) return null;
+    const palette = baseColors.map((c) => colorMap[c.hex] ?? c.hex);
+    const near = nearestColor([r, g, b], palette);
+    const swatch = near && near.distance <= SWATCH_TOLERANCE ? baseColors[palette.indexOf(near.hex)].hex : null;
+    return { hex: pixelHex(r, g, b), swatch };
+  };
+  const onStageMove = (e: React.MouseEvent) => {
+    const p = readPixel(e);
+    setPixel(p?.hex ?? null);
+    setHot(p?.swatch ?? null);
+  };
+  const onStageLeave = () => {
+    setPixel(null);
+    setHot(null);
+  };
+  /** A click pins the swatch painting that spot and opens its picker, so the spot can be recoloured at once. */
+  const onStageClick = (e: React.MouseEvent) => {
+    const p = readPixel(e);
+    setPinned(p?.swatch ?? null);
+    if (!p?.swatch) return;
+    const input = swatchRefs.current.get(p.swatch);
+    input?.scrollIntoView({ block: "nearest" });
+    try {
+      input?.showPicker();
+    } catch {
+      /* needs a user gesture the browser did not count, or an unsupported browser — the swatch is still pinned */
+    }
   };
 
   /* ------------------------------------------------------------ exports */
@@ -443,7 +622,17 @@ export function TgsStudioWidget() {
             </div>
 
             <div className="flex flex-1 items-center justify-center bg-base p-4" style={CHECKER}>
-              <div ref={stageRef} className="aspect-square w-full max-w-[440px]" />
+              <div className="relative aspect-square w-full max-w-[440px]" data-tgs-stage>
+                <div
+                  ref={stageRef}
+                  onMouseMove={onStageMove}
+                  onMouseLeave={onStageLeave}
+                  onClick={onStageClick}
+                  title="Hover for the colour under the pointer; click to pick its swatch"
+                  className={cn("absolute inset-0 cursor-crosshair transition-opacity", spot && "opacity-15")}
+                />
+                {spot && <div ref={overlayRef} className="pointer-events-none absolute inset-0" data-tgs-highlight />}
+              </div>
             </div>
 
             <div className="flex flex-wrap items-center gap-3 border-t border-edge px-3 py-2">
@@ -489,6 +678,21 @@ export function TgsStudioWidget() {
               />
               <span className="shrink-0 font-mono text-xs tabular text-muted">
                 <span ref={frameLabelRef}>0</span>/{info.frames}
+              </span>
+              <span
+                className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-[var(--radius-sm)] border border-edge px-2 font-mono text-xs text-muted"
+                title="The colour under the pointer"
+                data-tgs-pixel={pixel ?? ""}
+              >
+                <Pipette size={12} className="text-faint" />
+                {pixel ? (
+                  <>
+                    <span className="inline-block h-3.5 w-3.5 rounded-[3px] border border-edge" style={{ background: pixel }} />
+                    <span className="tabular">{pixel}</span>
+                  </>
+                ) : (
+                  <span className="text-faint">hover the sticker</span>
+                )}
               </span>
               <select
                 value={speed}
@@ -544,9 +748,23 @@ export function TgsStudioWidget() {
                   {baseColors.map((c) => (
                     <label
                       key={`${c.hex}-${resetCount}`}
-                      className="flex cursor-pointer items-center gap-2 rounded-[var(--radius-sm)] border border-edge px-2 py-1.5 hover:border-accent"
+                      data-swatch={c.hex}
+                      data-hot={hot === c.hex ? "" : undefined}
+                      data-pinned={pinned === c.hex ? "" : undefined}
+                      onMouseEnter={() => setSpot(c.hex)}
+                      onMouseLeave={() => setSpot(null)}
+                      title="Hover to see where this colour is; pick a new colour to replace it"
+                      className={cn(
+                        "flex cursor-pointer items-center gap-2 rounded-[var(--radius-sm)] border px-2 py-1.5 hover:border-accent",
+                        hot === c.hex || pinned === c.hex ? "border-accent bg-raised" : "border-edge",
+                        pinned === c.hex && "ring-1 ring-accent",
+                      )}
                     >
                       <input
+                        ref={(el) => {
+                          if (el) swatchRefs.current.set(c.hex, el);
+                          else swatchRefs.current.delete(c.hex);
+                        }}
                         type="color"
                         defaultValue={colorMap[c.hex] ?? c.hex}
                         onChange={(e) => queueColor(c.hex, e.target.value)}
@@ -555,11 +773,13 @@ export function TgsStudioWidget() {
                       <span className="truncate font-mono text-[11px] text-muted">
                         {colorMap[c.hex] ?? c.hex}
                       </span>
-                      <span className="readout ml-auto shrink-0 text-[10px]">×{c.count}</span>
+                      <span className="readout ml-auto shrink-0 text-[10px]" title={c.gradient ? `${c.gradient} of ${c.count} uses are gradient stops` : undefined}>
+                        {c.gradient > 0 && <span className="mr-1 text-faint">grad</span>}×{c.count}
+                      </span>
                     </label>
                   ))}
                 </div>
-                <p className="readout mt-2 text-[10px]">Gradients are not recolored</p>
+                <p className="readout mt-2 text-[10px]">Fills, strokes and gradient stops · hover a swatch to see where it paints · click the sticker to pick the swatch under the pointer</p>
               </div>
             )}
 
@@ -600,6 +820,11 @@ export function TgsStudioWidget() {
               </div>
               {note && <p className="font-mono text-xs text-muted">{note}</p>}
               {error && <p className="font-mono text-xs text-danger">{error}</p>}
+              <p className="font-mono text-xs text-faint" data-tgs-link-note>
+                {linkTooLong
+                  ? `This sticker is too large to travel in a link (${formatBytes(Math.round(packedData.length * 0.75))} packed); Share carries the colour edits only.`
+                  : "Share puts the sticker and its colour edits in the link, so it reopens here as it is now."}
+              </p>
             </div>
           </div>
         </div>
