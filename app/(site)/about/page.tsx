@@ -1,44 +1,50 @@
+import { pageMetadata } from "@/lib/seo";
 import type { Metadata } from "next";
 import Link from "next/link";
 import { SITE } from "@/lib/site";
 import { TOOLS } from "@/lib/tools/registry";
 
-export const metadata: Metadata = {
-  title: "About",
-  description: `About ${SITE.name} — a fast, private, browser-based toolkit for everyday text, data, image and file tasks.`,
-  alternates: { canonical: "/about" },
-};
+export const metadata: Metadata = pageMetadata(
+  "About Bench",
+  "How Bench works: browser-based utilities, sharing, online services and open-source development.",
+  "/about",
+);
 
 export default function AboutPage() {
   return (
     <div className="px-4 py-6 sm:px-5 lg:px-8 lg:py-8">
       <div className="max-w-prose space-y-8 text-[14px] leading-relaxed text-muted">
         <div>
-          <h1 className="text-[22px] font-semibold text-ink">About {SITE.name}</h1>
+          <h1 className="text-[22px] font-semibold text-ink">
+            About {SITE.name}
+          </h1>
           <p className="mt-3">
-            {SITE.name} is a collection of {TOOLS.length} small utilities you reach for during a normal
-            working day: encode or decode text, inspect JSON, hash a string, convert a date, resize an
-            image, unpack an archive, shorten a link. Open the tool, do the task, get back to work.
+            {SITE.name} is a collection of {TOOLS.length} small utilities you
+            reach for during a normal working day: encode or decode text,
+            inspect JSON, hash a string, convert a date, resize an image, unpack
+            an archive, shorten a link. Open the tool, do the task, get back to
+            work.
           </p>
         </div>
 
         <section>
           <h2 className="text-[15px] font-semibold text-ink">How it works</h2>
           <p className="mt-2">
-            Every tool runs in your browser, so your text, files and images stay on your device and are
-            never uploaded. The pages are static: there is no account, no quota and nothing you paste is
-            tracked. The one exception is the{" "}
-            <Link href="/web/short-url" className="text-accent hover:underline">
-              URL shortener
-            </Link>
-            , which keeps only the destination of each short link you create so the link can work for
-            whoever opens it — and it says so on its page. Page views are counted anonymously with Google
-            Analytics, without query strings so your inputs never reach it, and not at all for browsers
-            that send Do Not Track or Global Privacy Control.
+            Most tools process text, files and images locally in your browser.
+            Network features are exceptions: the URL shortener stores
+            destinations on a server, wallet network lookups and broadcasts
+            contact the selected provider, and suggestions are published as
+            GitHub issues. Analytics and performance services receive usage
+            data; the Google Analytics integration strips query strings and
+            fragments from page views and respects Do Not Track and Global
+            Privacy Control.
           </p>
           <p className="mt-2">
-            The state of a tool lives in its URL, so the Share button on any page gives you a link that
-            reopens the same input and settings. Long links are shortened automatically.
+            The state of a tool lives in its URL, so the Share button on any
+            page gives you a link that reopens the same input and settings. Long
+            links are shortened automatically, which stores the complete
+            destination URL, including any input encoded in it, on the server.
+            Only share content you intend recipients to see.
           </p>
         </section>
 
@@ -54,7 +60,8 @@ export default function AboutPage() {
             >
               GitHub
             </a>{" "}
-            under the MIT license. Adding a tool is a small, well-documented change — contributions and{" "}
+            under the MIT license. Adding a tool is a small, well-documented
+            change — contributions and{" "}
             <Link href="/suggest" className="text-accent hover:underline">
               suggestions
             </Link>{" "}

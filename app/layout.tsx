@@ -2,7 +2,7 @@ import type { Metadata, Viewport } from "next";
 import { IBM_Plex_Sans, IBM_Plex_Mono } from "next/font/google";
 import { Analytics } from "@vercel/analytics/next";
 import { SpeedInsights } from "@vercel/speed-insights/next";
-import { SITE, absoluteUrl, getBaseUrl } from "@/lib/site";
+import { SITE, absoluteUrl, getBaseUrl, isPreview } from "@/lib/site";
 import { GoogleAnalytics } from "@/components/google-analytics";
 import { Providers } from "./providers";
 import "./globals.css";
@@ -53,7 +53,9 @@ export const metadata: Metadata = {
     title: `${SITE.name} — ${SITE.tagline}`,
     description: SITE.description,
   },
-  robots: { index: true, follow: true },
+  robots: isPreview
+    ? { index: false, follow: false }
+    : { index: true, follow: true, "max-image-preview": "large" },
   category: "technology",
 };
 
@@ -69,7 +71,11 @@ export default function RootLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html lang="en" className={`${sans.variable} ${mono.variable} h-full`} suppressHydrationWarning>
+    <html
+      lang="en"
+      className={`${sans.variable} ${mono.variable} h-full`}
+      suppressHydrationWarning
+    >
       <head>
         {/* Applies the remembered theme, the colour switch (or the one a share link carries) and the sidebar state before first paint (globals.css reads data-theme, data-color and data-nav). */}
         <script

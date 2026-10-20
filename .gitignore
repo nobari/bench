@@ -50,3 +50,7 @@ next-env.d.ts
 
 # git worktrees created by Claude Code agent sessions
 .claude/worktrees/
+
+# Playwright artifacts
+/test-results/
+/playwright-report/

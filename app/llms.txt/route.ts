@@ -13,7 +13,7 @@ export function GET() {
   lines.push(`> ${SITE.tagline}. ${SITE.description}`);
   lines.push("");
   lines.push(
-    "Every tool runs entirely client-side in the browser — no uploads, no accounts, no rate limits. Inputs and settings are encoded in the URL so results are directly shareable.",
+    "Most tools process inputs locally. Shortened share links store the full destination URL on a server; wallet network features contact external providers. Inputs and settings can be encoded in shared URLs. See /about and each tool for details.",
   );
   lines.push("");
 

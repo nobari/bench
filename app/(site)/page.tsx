@@ -9,14 +9,22 @@ import { jsonLdScript, toolItemListJsonLd, websiteJsonLd } from "@/lib/seo";
 export default function HomePage() {
   return (
     <div className="px-4 py-6 sm:px-5 lg:px-8 lg:py-8">
-      <script type="application/ld+json" dangerouslySetInnerHTML={jsonLdScript(websiteJsonLd())} />
-      <script type="application/ld+json" dangerouslySetInnerHTML={jsonLdScript(toolItemListJsonLd(TOOLS))} />
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={jsonLdScript(websiteJsonLd())}
+      />
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={jsonLdScript(toolItemListJsonLd(TOOLS))}
+      />
 
       <div className="max-w-2xl">
         <h1 className="text-[22px] font-semibold text-ink">All tools</h1>
         <p className="mt-1 text-[14px] text-muted">
-          {TOOLS.length} utilities for text, data, images and video, audio, files, hashing, time, color, math and the web.
-          Everything runs in your browser, and every result has a link you can share.
+          {TOOLS.length} utilities for text, data, images and video, audio,
+          files, hashing, time, color, math and the web. Most processing runs on
+          your device. Sharing and network tools use online services; see each
+          tool’s instructions.
         </p>
         <div className="mt-4">
           <CommandTrigger />
@@ -31,22 +39,36 @@ export default function HomePage() {
           const grouped = tree.length > 1;
           const Icon = cat.icon;
           return (
-            <section key={cat.slug} aria-labelledby={`cat-${cat.slug}`} className="min-w-0" data-cat={cat.slug} style={{ "--cat": `var(${cat.accentVar})` } as CSSProperties}>
+            <section
+              key={cat.slug}
+              aria-labelledby={`cat-${cat.slug}`}
+              className="min-w-0"
+              data-cat={cat.slug}
+              style={{ "--cat": `var(${cat.accentVar})` } as CSSProperties}
+            >
               <h2
                 id={`cat-${cat.slug}`}
                 className="flex items-center gap-2 border-b border-edge pb-2 text-[13px] font-semibold text-ink"
               >
                 <Icon size={14} style={{ color: `var(${cat.accentVar})` }} />
-                <Link href={`/${cat.slug}`} className="cat-name hover:text-accent">
+                <Link
+                  href={`/${cat.slug}`}
+                  className="cat-name hover:text-accent"
+                >
                   {cat.name}
                 </Link>
-                <span className="ml-auto text-[12px] font-normal tabular text-faint">{count}</span>
+                <span className="ml-auto text-[12px] font-normal tabular text-faint">
+                  {count}
+                </span>
               </h2>
               {tree.map(({ group, tools }) => (
                 <div key={group.id}>
                   {grouped && (
                     <h3 className="readout mt-2.5 text-[10.5px]">
-                      <Link href={`/${cat.slug}#${group.id}`} className="hover:text-muted">
+                      <Link
+                        href={`/${cat.slug}#${group.id}`}
+                        className="hover:text-muted"
+                      >
                         {group.name}
                       </Link>
                     </h3>

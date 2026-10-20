@@ -1,3 +1,4 @@
+import type { Metadata } from "next";
 import { SITE, absoluteUrl } from "@/lib/site";
 import type { FaqItem, ToolDef } from "@/lib/tools/types";
 
@@ -13,14 +14,8 @@ export function websiteJsonLd() {
     name: SITE.name,
     url: absoluteUrl("/"),
     description: SITE.description,
-    potentialAction: {
-      "@type": "SearchAction",
-      target: {
-        "@type": "EntryPoint",
-        urlTemplate: absoluteUrl("/?q={search_term_string}"),
-      },
-      "query-input": "required name=search_term_string",
-    },
+    "@id": absoluteUrl("/#website"),
+    inLanguage: "en",
   };
 }
 
@@ -54,9 +49,7 @@ export function softwareAppJsonLd(tool: ToolDef) {
   };
 }
 
-export function breadcrumbJsonLd(
-  crumbs: { name: string; path: string }[],
-) {
+export function breadcrumbJsonLd(crumbs: { name: string; path: string }[]) {
   return {
     "@context": "https://schema.org",
     "@type": "BreadcrumbList",
@@ -85,5 +78,40 @@ export function faqJsonLd(faq: FaqItem[]) {
 export function jsonLdScript(data: unknown) {
   return {
     __html: JSON.stringify(data).replace(/</g, "\\u003c"),
+  };
+}
+
+/** Keep social metadata page-specific instead of inheriting the homepage copy. */
+export function pageMetadata(
+  title: string,
+  description: string,
+  path: string,
+): Metadata {
+  return {
+    title,
+    description,
+    alternates: { canonical: path },
+    openGraph: {
+      type: "website",
+      siteName: SITE.name,
+      locale: SITE.locale,
+      title: `${title} · ${SITE.name}`,
+      description,
+      url: absoluteUrl(path),
+      images: [
+        {
+          url: absoluteUrl("/opengraph-image"),
+          width: 1200,
+          height: 630,
+          alt: SITE.tagline,
+        },
+      ],
+    },
+    twitter: {
+      card: "summary_large_image",
+      images: [absoluteUrl("/opengraph-image")],
+      title: `${title} · ${SITE.name}`,
+      description,
+    },
   };
 }

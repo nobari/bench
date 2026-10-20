@@ -8,18 +8,33 @@ import { getCategoryTree, getRelatedTools } from "@/lib/tools/registry";
 import { ToolMount } from "@/components/tool-mount";
 import { ToolCard } from "@/components/tool-card";
 import { ShareButton } from "@/components/share-button";
-import { breadcrumbJsonLd, faqJsonLd, jsonLdScript, softwareAppJsonLd } from "@/lib/seo";
+import {
+  breadcrumbJsonLd,
+  faqJsonLd,
+  jsonLdScript,
+  softwareAppJsonLd,
+} from "@/lib/seo";
 
 export function ToolShell({ tool }: { tool: ToolDef }) {
   const cat = getCategory(tool.category);
-  const group = cat && getCategoryTree(cat.slug).length > 1 ? cat.groups.find((g) => g.id === tool.group) : undefined;
+  const group =
+    cat && getCategoryTree(cat.slug).length > 1
+      ? cat.groups.find((g) => g.id === tool.group)
+      : undefined;
   const related = getRelatedTools(tool);
   const base = `/${tool.category}/${tool.slug}`;
   const Icon = tool.icon;
 
   return (
-    <div className="px-3 py-4 sm:px-4" data-cat={tool.category} style={{ "--cat": `var(${cat?.accentVar})` } as CSSProperties}>
-      <script type="application/ld+json" dangerouslySetInnerHTML={jsonLdScript(softwareAppJsonLd(tool))} />
+    <div
+      className="px-3 py-4 sm:px-4"
+      data-cat={tool.category}
+      style={{ "--cat": `var(${cat?.accentVar})` } as CSSProperties}
+    >
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={jsonLdScript(softwareAppJsonLd(tool))}
+      />
       <script
         type="application/ld+json"
         dangerouslySetInnerHTML={jsonLdScript(
@@ -31,13 +46,19 @@ export function ToolShell({ tool }: { tool: ToolDef }) {
         )}
       />
       {tool.faq?.length ? (
-        <script type="application/ld+json" dangerouslySetInnerHTML={jsonLdScript(faqJsonLd(tool.faq))} />
+        <script
+          type="application/ld+json"
+          dangerouslySetInnerHTML={jsonLdScript(faqJsonLd(tool.faq))}
+        />
       ) : null}
 
       {/* header: where you are, what this does, and the one primary action */}
       <header className="flex flex-wrap items-start justify-between gap-x-6 gap-y-3">
         <div className="min-w-0 flex-1">
-          <nav aria-label="Breadcrumb" className="flex items-center gap-1 text-[12.5px] text-muted">
+          <nav
+            aria-label="Breadcrumb"
+            className="flex items-center gap-1 text-[12.5px] text-muted"
+          >
             <Link href="/" className="hover:text-ink">
               All tools
             </Link>
@@ -48,7 +69,10 @@ export function ToolShell({ tool }: { tool: ToolDef }) {
             {group && (
               <>
                 <ChevronRight size={12} className="text-faint" />
-                <Link href={`/${tool.category}#${group.id}`} className="hover:text-ink">
+                <Link
+                  href={`/${tool.category}#${group.id}`}
+                  className="hover:text-ink"
+                >
                   {group.name}
                 </Link>
               </>
@@ -61,18 +85,28 @@ export function ToolShell({ tool }: { tool: ToolDef }) {
             >
               <Icon size={17} />
             </span>
-            <h1 className="text-[22px] font-semibold leading-tight text-ink">{tool.title}</h1>
+            <h1 className="text-[22px] font-semibold leading-tight text-ink">
+              {tool.title}
+            </h1>
             {tool.status === "beta" && (
               <span className="rounded border border-edge px-1.5 text-[11px] font-medium leading-5 text-muted">
                 beta
               </span>
             )}
           </div>
-          <p className="mt-1.5 max-w-2xl text-[14px] text-muted">{tool.tagline}</p>
+          <p className="mt-1.5 max-w-2xl text-[14px] text-muted">
+            {tool.tagline}
+          </p>
         </div>
         <ShareButton className="w-full sm:w-auto" />
       </header>
 
+      <noscript>
+        <p className="mt-4 text-[14px] text-muted">
+          Enable JavaScript to use this interactive tool. Its instructions,
+          questions and related tools remain available below.
+        </p>
+      </noscript>
       <div className="mt-5">
         <ToolMount widget={tool.widget} widgetProps={tool.widgetProps} />
       </div>
@@ -81,9 +115,13 @@ export function ToolShell({ tool }: { tool: ToolDef }) {
         <div className="min-w-0 space-y-10">
           {tool.howItWorks && (
             <section>
-              <h2 className="text-[15px] font-semibold text-ink">How it works</h2>
+              <h2 className="text-[15px] font-semibold text-ink">
+                How it works
+              </h2>
               <ReadMore className="mt-2 max-w-prose">
-                <p className="text-[14px] leading-relaxed text-muted">{tool.howItWorks}</p>
+                <p className="text-[14px] leading-relaxed text-muted">
+                  {tool.howItWorks}
+                </p>
               </ReadMore>
             </section>
           )}
@@ -101,7 +139,9 @@ export function ToolShell({ tool }: { tool: ToolDef }) {
                         className="shrink-0 text-faint transition-transform group-open:rotate-90"
                       />
                     </summary>
-                    <p className="mt-2 max-w-prose pr-8 text-[13.5px] leading-relaxed text-muted">{f.a}</p>
+                    <p className="mt-2 max-w-prose pr-8 text-[13.5px] leading-relaxed text-muted">
+                      {f.a}
+                    </p>
                   </details>
                 ))}
               </div>
@@ -132,7 +172,9 @@ export function ToolShell({ tool }: { tool: ToolDef }) {
 
           {related.length ? (
             <section>
-              <h2 className="text-[13px] font-semibold text-ink">Related tools</h2>
+              <h2 className="text-[13px] font-semibold text-ink">
+                Related tools
+              </h2>
               <ul className="-mx-2.5 mt-1">
                 {related.map((t) => (
                   <li key={`${t.category}/${t.slug}`}>

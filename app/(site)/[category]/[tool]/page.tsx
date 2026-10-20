@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { allToolParams, getTool } from "@/lib/tools/registry";
 import { ToolShell } from "@/components/tool-shell";
-import { absoluteUrl } from "@/lib/site";
+import { pageMetadata } from "@/lib/seo";
 
 export const dynamicParams = false;
 
@@ -23,21 +23,8 @@ export async function generateMetadata({
 
   const path = `/${tool.category}/${tool.slug}`;
   return {
-    title: tool.title,
-    description: tool.description,
+    ...pageMetadata(tool.title, tool.description, path),
     keywords: tool.keywords,
-    alternates: { canonical: path },
-    openGraph: {
-      type: "article",
-      title: tool.title,
-      description: tool.description,
-      url: absoluteUrl(path),
-    },
-    twitter: {
-      card: "summary_large_image",
-      title: tool.title,
-      description: tool.description,
-    },
   };
 }
 

@@ -1,6 +1,6 @@
 {
   "name": "bench",
-  "version": "1.61.0",
+  "version": "1.61.1",
   "private": true,
   "description": "A precision toolkit for the web — fast, private, client-side developer utilities.",
   "license": "MIT",
@@ -14,7 +14,9 @@
     "build": "next build",
     "postinstall": "node scripts/copy-vendor.mjs",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test": "playwright test",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@codemirror/autocomplete": "^6.20.3",
@@ -75,6 +77,7 @@
     "zxing-wasm": "^3.1.2"
   },
   "devDependencies": {
+    "@playwright/test": "1.56.1",
     "@tailwindcss/postcss": "^4",
     "@types/d3-geo": "^3.1.1",
     "@types/geojson": "^7946.0.16",

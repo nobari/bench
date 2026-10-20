@@ -11,7 +11,7 @@ export const SITE = {
   wordmark: "Bench",
   tagline: "Everyday tools for text, data, media and the web",
   description:
-    "Fast, private utilities for text, JSON, images and video, audio, files, hashing, time, color, math and the web. Every tool runs in your browser — no uploads, no accounts, no tracking of what you paste.",
+    "Free browser tools for text, JSON, images, video, audio and more. Most processing stays on your device; sharing and network tools use online services.",
   /** GitHub repo used by the “Suggest a tool” server action + footer link. */
   repo: "nobari/bench",
   links: {
@@ -26,26 +26,27 @@ export const SITE = {
   locale: "en_US",
 } as const;
 
-/**
- * Resolve the canonical base URL across environments.
- * Priority: explicit env → production domain (SITE.url) → Vercel preview → localhost.
- */
+/** Canonicals identify the public site, never an automatic preview or localhost host. */
 export function getBaseUrl(): string {
-  if (process.env.NEXT_PUBLIC_SITE_URL) {
-    return stripTrailingSlash(process.env.NEXT_PUBLIC_SITE_URL);
+  const url = new URL(process.env.NEXT_PUBLIC_SITE_URL || SITE.url);
+  if (url.protocol !== "https:" && url.protocol !== "http:") {
+    throw new Error("NEXT_PUBLIC_SITE_URL must be an HTTP(S) origin");
   }
-  if (process.env.VERCEL_ENV === "production") {
-    return SITE.url;
+  if (
+    url.username ||
+    url.password ||
+    url.pathname !== "/" ||
+    url.search ||
+    url.hash
+  ) {
+    throw new Error(
+      "NEXT_PUBLIC_SITE_URL must be an origin without credentials, path, query or fragment",
+    );
   }
-  if (process.env.VERCEL_URL) {
-    return `https://${process.env.VERCEL_URL}`;
-  }
-  return "http://localhost:3000";
+  return url.origin;
 }
 
-function stripTrailingSlash(url: string) {
-  return url.endsWith("/") ? url.slice(0, -1) : url;
-}
+export const isPreview = process.env.VERCEL_ENV === "preview";
 
 /** Absolute URL builder for canonical tags, OG, sitemap, etc. */
 export function absoluteUrl(path = "/"): string {

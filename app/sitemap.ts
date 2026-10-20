@@ -4,24 +4,23 @@ import { CATEGORIES } from "@/lib/tools/categories";
 import { TOOLS } from "@/lib/tools/registry";
 
 export default function sitemap(): MetadataRoute.Sitemap {
-  const now = new Date();
+  // Omit lastmod until reliable per-page edit dates are maintained.
+  // Build time is not a content modification date.
 
   const staticPages: MetadataRoute.Sitemap = [
-    { url: absoluteUrl("/"), lastModified: now, changeFrequency: "weekly", priority: 1 },
-    { url: absoluteUrl("/suggest"), lastModified: now, changeFrequency: "monthly", priority: 0.4 },
-    { url: absoluteUrl("/about"), lastModified: now, changeFrequency: "monthly", priority: 0.3 },
+    { url: absoluteUrl("/"), changeFrequency: "weekly", priority: 1 },
+    { url: absoluteUrl("/suggest"), changeFrequency: "monthly", priority: 0.4 },
+    { url: absoluteUrl("/about"), changeFrequency: "monthly", priority: 0.3 },
   ];
 
   const categoryPages: MetadataRoute.Sitemap = CATEGORIES.map((c) => ({
     url: absoluteUrl(`/${c.slug}`),
-    lastModified: now,
     changeFrequency: "weekly",
     priority: 0.6,
   }));
 
   const toolPages: MetadataRoute.Sitemap = TOOLS.map((t) => ({
     url: absoluteUrl(`/${t.category}/${t.slug}`),
-    lastModified: now,
     changeFrequency: "weekly",
     priority: 0.8,
   }));
