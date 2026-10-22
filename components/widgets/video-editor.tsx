@@ -2,12 +2,13 @@
 
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { AlertTriangle, Camera, Check, ChevronDown, ChevronRight, ChevronUp, Sparkles, Circle, Clapperboard, Crop, Download, FolderOpen, Loader, Maximize2, Minimize2, Music, Pause, Play, Repeat, Save, Scissors, SkipBack, SkipForward, SlidersHorizontal, StepBack, StepForward, Trash2, Type, Upload, Volume2, VolumeX, Keyboard, Search, Shuffle, X } from "lucide-react";
-import { DEFAULT_CLIP_GAIN_DB, DEFAULT_EXPORT, NEUTRAL_GRADE, NEUTRAL_TRANSFORM, TITLE_ALIGNS, TITLE_FAMILIES, TITLE_FONTS, TITLE_POSITIONS, TITLE_SHADOWS, TITLE_WEIGHTS, TRANSITIONS, addTransitionAt, appendMusic, applyAudioTo, applyGradeTo, applyTransitionToAll, clipAt, crossfades, dbToGain, effectiveMusicEnd, estimateExport, exportRange, fmtTime, musicGainAt, musicLength, newId, newProject, newTitle, orderRecordings, placeClips, planExport, removeRange, reorderMusic, setTransition, splitClip, timelineDuration, titleLanes, transitionAt, transitionWindows, CLIP_SPEEDS, canMergeWithNext, clipLength, clipSpeed, groupOf, sourceTimeAt, mergeWithNext, moveClip, unjoin, updateClip, visibleCuts, type Clip, type MediaRef, type MusicTrack, type Project, type ProxyHeight, type Title, type TitleFont, isFileLutKind, type FileLutKind, type LutKind, type MathLutKind, type TitleAlign, type TitlePosition, type TitleShadow, type Transition, type TransitionKind, type ExportTags, type IntroSettings, type IntroCard, DEFAULT_CARD, cardSettings, hasCard, reorderClip, parseTime, type SteadyLights, STEADY_FRAMES, clampMusicStart, musicUnused, shuffleFillMusic, describeWhere, type MediaWhere, exportFingerprint } from "@/lib/tools/video/project";
+import { AlertTriangle, Camera, Check, ChevronDown, ChevronRight, ChevronUp, Sparkles, Circle, Clapperboard, Crop, Download, FolderOpen, Gauge, Loader, Maximize2, Minimize2, Music, Pause, Play, Repeat, Save, Scissors, SkipBack, SkipForward, SlidersHorizontal, StepBack, StepForward, Trash2, Type, Upload, Volume2, VolumeX, Keyboard, Search, Shuffle, X } from "lucide-react";
+import { DEFAULT_EXPORT, NEUTRAL_GRADE, NEUTRAL_TRANSFORM, TITLE_ALIGNS, TITLE_FAMILIES, TITLE_FONTS, TITLE_POSITIONS, TITLE_SHADOWS, TITLE_WEIGHTS, TRANSITIONS, addTransitionAt, appendMusic, applyAudioTo, applyGradeTo, applyTransitionToAll, clipAt, crossfades, dbToGain, effectiveMusicEnd, estimateExport, exportRange, fmtTime, musicGainAt, musicLength, newId, newProject, newTitle, orderRecordings, placeClips, planExport, removeRange, reorderMusic, setTransition, splitClip, timelineDuration, titleLanes, transitionAt, transitionWindows, CLIP_SPEEDS, canMergeWithNext, clipLength, clipSpeed, groupOf, sourceTimeAt, mergeWithNext, moveClip, unjoin, updateClip, visibleCuts, type Clip, type MediaRef, type MusicTrack, type Project, type ProxyHeight, type Title, type TitleFont, isFileLutKind, type FileLutKind, type LutKind, type MathLutKind, type TitleAlign, type TitlePosition, type TitleShadow, type Transition, type TransitionKind, type ExportTags, type IntroSettings, type IntroCard, DEFAULT_CARD, cardSettings, hasCard, reorderClip, parseTime, type SteadyLights, STEADY_FRAMES, clampMusicStart, musicUnused, shuffleFillMusic, describeWhere, type MediaWhere, exportFingerprint, SOUND_MODES, SOUND_LABELS, soundLevels, applySoundLevels, soundState, type SoundMode, type SoundLevels } from "@/lib/tools/video/project";
+import { gainToReach, YOUTUBE_LUFS, type Loudness } from "@/lib/tools/video/loudness";
 import { drawTransition } from "@/lib/tools/video/transitions";
 import { LUT_OPTIONS, buildDlogLut, deriveLut, fetchOfficialLut, lutToCube, parseCube, type Lut3D } from "@/lib/tools/video/lut";
 import { fmtBytes, fmtDelta, fmtDuration, fmtMs, type EstimateSource, type ExportProgress, type SpeedPriors, type StepProgress } from "@/lib/tools/video/progress";
-import { buildProxy, drawOverlays, encoderSupport, exportProject, Grader, MAX_AUDIBLE_SPEED, MIN_AUDIBLE_SPEED, probe, renderFrame, renderSceneThumbs, scanMoments, scanMotion, Steadier, type ExportFault, type ExportManifest, type PartStore } from "@/lib/tools/video/engine";
+import { buildProxy, drawOverlays, encoderSupport, exportProject, fixLevel, Grader, MAX_AUDIBLE_SPEED, measureFile, measureLoudness, MIN_AUDIBLE_SPEED, probe, renderFrame, renderSceneThumbs, scanMoments, scanMotion, Steadier, type ExportFault, type ExportManifest, type PartStore } from "@/lib/tools/video/engine";
 import { INTRO_STYLES, addSceneAt, buildIntro, describeIntro, drawIntroFx, hasIntro, introCandidates, introFrameAt, introLength, introRegion, introStyle, mainClips, moveScene, pickMoments, removeIntro, removeScene, restyleIntro, sceneSecondsFor, scoreMoments, setSceneSeconds, shiftAfterIntro, styledGrade, sceneFootage, minSceneSeconds, introBlendAt } from "@/lib/tools/video/intro";
 import { ProjectStore, hasFileSystemAccess, AUTOSAVE_FILE, FRAMES_DIR, PROJECT_FILE, PROXY_DIR } from "@/lib/tools/video/store";
 import { cn } from "@/lib/utils";
@@ -27,6 +28,21 @@ const LANE_COLORS = ["#8a8f99", "#5ab3d6", "#d9a400"];
 const POSITION_NAMES: Record<TitlePosition, string> = { tl: "Top left", tc: "Top centre", tr: "Top right", ml: "Middle left", mc: "Centre", mr: "Middle right", bl: "Bottom left", bc: "Bottom centre", br: "Bottom right" };
 const KIND_LABELS: Record<Title["kind"], string> = { intro: "Intro", title: "Title", lowerThird: "Lower third" };
 const DEFAULT_PREVIEW_HEIGHT: ProxyHeight = 0;
+const fmtDb = (v: number) => (v <= -60 ? "off" : `${v > 0 ? "+" : ""}${v} dB`);
+const describeLoudness = (r: Loudness) => (r.integrated === null ? "silent" : `${r.integrated.toFixed(1)} LUFS · peaks ${r.peakDb.toFixed(1)} dBFS`);
+/** The export panel's one-line account of which clips and tracks sit at the mode's levels. */
+function describeSoundState(st: ReturnType<typeof soundState>, levels: SoundLevels): string {
+  const clips = st.clipsAt + st.clipsOff + st.clipsOther, music = st.musicAt + st.musicOff + st.musicOther;
+  if (!clips && !music) return "No clips or music yet.";
+  const part = (at: number, off: number, other: number, total: number, level: number, what: string) => {
+    if (!total) return `no ${what}`;
+    const bits = [`${at} of ${total} ${what} at ${fmtDb(level)}`];
+    if (other) bits.push(`${other} at another level`);
+    if (off) bits.push(`${off} off`);
+    return bits.join(", ");
+  };
+  return `${part(st.clipsAt, st.clipsOff, st.clipsOther, clips, levels.camera, "clips")} · ${part(st.musicAt, st.musicOff, st.musicOther, music, levels.music, "tracks")}.`;
+}
 const toHex = (c: string) => (/^#[0-9a-fA-F]{6}$/.test(c) ? c : "#ffffff");
 type Tab = "trim" | "intro" | "transform" | "colour" | "audio" | "titles" | "export";
 const TABS: [Tab, string, typeof Scissors][] = [
@@ -40,7 +56,7 @@ const TABS: [Tab, string, typeof Scissors][] = [
 ];
 
 interface Job {
-  kind: "proxy" | "export" | "frame" | "intro" | "stops";
+  kind: "proxy" | "export" | "frame" | "intro" | "stops" | "loudness" | "fix";
   label: string;
   fraction: number;
   message?: string;
@@ -197,6 +213,8 @@ const JOB_WORK: Record<Job["kind"], string> = {
   frame: "A frame is still being saved in the video editor.",
   intro: "The intro is still being made in the video editor; leaving now would abandon it.",
   stops: "The scan for stops is still running in the video editor; leaving now would abandon it.",
+  loudness: "A loudness measurement is running in the video editor; leaving now would abandon it.",
+  fix: "A fixed copy of a file is being written in the video editor; leaving now would abandon it.",
 };
 /** Holding Space this long (or the first key repeat) switches the preview to double speed instead of toggling play. */
 const HOLD_MS = 250;
@@ -261,6 +279,13 @@ export function VideoEditorWidget() {
   const suppressClickRef = useRef(false);
   const [timeEdit, setTimeEdit] = useState<string | null>(null);
   const [job, setJob] = useState<Job | null>(null);
+  /** The mix's measured loudness, keyed to the sound state it was measured in; predicted after a level change. */
+  const [loudness, setLoudness] = useState<{ fingerprint: string; result: Loudness; predicted?: boolean } | null>(null);
+  const [fixFile, setFixFile] = useState<{ file: File; loudness: Loudness } | null>(null);
+  const [fixTarget, setFixTarget] = useState(YOUTUBE_LUFS);
+  const [fixed, setFixed] = useState<{ name: string; bytes: number; gainDb: number } | null>(null);
+  const fixInput = useRef<HTMLInputElement>(null);
+  const progressAt = useRef(0);
   useUnsavedWork(job ? JOB_WORK[job.kind] : null);
   useKeepAwake(!!job, "bench-video-job");
   const [support, setSupport] = useState<{ hevc: boolean; avc: boolean } | null>(null);
@@ -517,6 +542,100 @@ export function VideoEditorWidget() {
   const setTags = (patch: Partial<ExportTags>) => setProject((p) => ({ ...p, export: { ...p.export, tags: { ...p.export.tags, ...patch } } }));
   const estimate = useMemo(() => estimateExport(project, spans), [project, spans]);
   const fingerprint = useMemo(() => exportFingerprint(project), [project]);
+  /** Everything the sound mix depends on; a measurement is current while this is unchanged. */
+  const audioKey = useMemo(
+    () =>
+      JSON.stringify({
+        c: placed.map((c) => [c.media, c.in, c.out, c.gainDb, c.muted, c.speed ?? 1]),
+        m: project.music.map((m) => [m.media, m.lane, m.start, m.in, m.out, m.gainDb, m.muted, m.fadeIn, m.fadeOut, m.keyframes]),
+        r: range,
+      }),
+    [placed, project.music, range],
+  );
+  const levels = soundLevels(project);
+  const soundSt = useMemo(() => soundState(project), [project]);
+  const matchGain = loudness && loudness.result.integrated !== null ? gainToReach(loudness.result.integrated, loudness.result.peakDb) : 0;
+  const fixGain = fixFile && fixFile.loudness.integrated !== null ? gainToReach(fixFile.loudness.integrated, fixFile.loudness.peakDb, fixTarget) : 0;
+
+  /** Progress for the small jobs, at most four times a second. */
+  const tick = (fraction: number, message?: string) => {
+    const now = performance.now();
+    if (now - progressAt.current < 250 && fraction < 1) return;
+    progressAt.current = now;
+    setJob((j) => (j ? { ...j, fraction: Math.max(0, Math.min(1, fraction)), message } : j));
+  };
+  const isAbort = (e: unknown) => e instanceof DOMException && e.name === "AbortError";
+  /** Runs the export's sound mix over the export range and measures it. */
+  const measureMix = async () => {
+    if (!placed.length || job) return;
+    const abort = new AbortController();
+    const from = range?.from ?? 0, to = range?.to ?? duration;
+    setJob({ kind: "loudness", label: "Measuring the mix", fraction: 0, abort });
+    setError(null);
+    try {
+      const result = await measureLoudness({ project, getFile: (id) => store.getFile(id), sampleRate: 48000, from, to, signal: abort.signal, onProgress: (done, total) => tick(done / Math.max(1e-6, total), fmtTime(done)) });
+      setLoudness({ fingerprint: audioKey, result });
+    } catch (e) {
+      if (!isAbort(e)) setError(e instanceof Error ? e.message : "The mix could not be measured.");
+    } finally {
+      setJob(null);
+    }
+  };
+  /** Raises or lowers every clip and track together so the mix lands at YouTube's level, as far as the peaks allow. */
+  const matchLevel = () => {
+    if (!loudness || loudness.result.integrated === null) return;
+    const g = gainToReach(loudness.result.integrated, loudness.result.peakDb);
+    if (Math.abs(g) < 0.05) return;
+    const r1 = (v: number) => Math.round(v * 10) / 10;
+    setProject((p) => ({
+      ...p,
+      clips: p.clips.map((c) => (c.muted || c.gainDb <= -60 ? c : { ...c, gainDb: r1(c.gainDb + g) })),
+      music: p.music.map((m) => (m.muted || m.gainDb <= -60 ? m : { ...m, gainDb: r1(m.gainDb + g), keyframes: m.keyframes.map((k) => ({ ...k, db: r1(k.db + g) })) })),
+    }));
+    setLoudness((l) => (l && l.result.integrated !== null ? { fingerprint: "", predicted: true, result: { ...l.result, integrated: l.result.integrated + g, peakDb: l.result.peakDb + g } } : l));
+  };
+  const loadFixFile = async (file: File) => {
+    if (job) return;
+    const abort = new AbortController();
+    setJob({ kind: "loudness", label: `Measuring ${file.name}`, fraction: 0, abort });
+    setFixed(null);
+    setError(null);
+    try {
+      const result = await measureFile(file, { signal: abort.signal, onProgress: (done, total) => tick(done / Math.max(1e-6, total), fmtTime(done)) });
+      setFixFile({ file, loudness: result });
+    } catch (e) {
+      if (!isAbort(e)) setError(`${file.name}: ${e instanceof Error ? e.message : "could not be read."}`);
+    } finally {
+      setJob(null);
+    }
+  };
+  /** Writes a copy of the opened file with its sound at the target level into the project folder. */
+  const runFix = async () => {
+    if (!fixFile || fixFile.loudness.integrated === null || job) return;
+    if (!store.hasFolder) return setError("Pick a project folder first — the fixed copy is written there.");
+    const gainDb = gainToReach(fixFile.loudness.integrated, fixFile.loudness.peakDb, fixTarget);
+    const name = `${fixFile.file.name.replace(/\.(mp4|mov|m4v)$/i, "")}-${fixTarget === YOUTUBE_LUFS ? "youtube-level" : `${Math.abs(fixTarget)}lufs`}.mp4`;
+    const abort = new AbortController();
+    setJob({ kind: "fix", label: `Writing ${name}`, fraction: 0, abort });
+    setError(null);
+    try {
+      const { writable } = await store.createWritable(name);
+      const result = await fixLevel({
+        file: fixFile.file,
+        writable: writable as unknown as WritableStream<import("mediabunny").StreamTargetChunk>,
+        gainDb,
+        audioBitrateKbps: project.export.audioBitrateKbps,
+        signal: abort.signal,
+        onProgress: (stage, fraction) => tick(stage === "video" ? fraction * 0.6 : stage === "audio" ? 0.6 + fraction * 0.35 : 0.95 + fraction * 0.05, stage === "video" ? "copying the picture" : stage === "audio" ? "re-levelling the sound" : "closing the file"),
+      });
+      setFixed({ name, bytes: result.bytes, gainDb });
+      setFilesVersion((v) => v + 1);
+    } catch (e) {
+      if (!isAbort(e)) setError(e instanceof Error ? e.message : "The fixed copy could not be written.");
+    } finally {
+      setJob(null);
+    }
+  };
   // A stopped export's finished parts, found in the project folder: what the Export tab offers to resume.
   const [resumable, setResumable] = useState<{ manifest: ExportManifest; folder: string; bytes: number } | null>(null);
   const loadResumable = useCallback(async () => {
@@ -927,7 +1046,7 @@ export function VideoEditorWidget() {
     setProject((p) => ({
       ...p,
       media: { ...p.media, ...Object.fromEntries(ordered.map((m) => [m.id, m])) },
-      clips: [...p.clips, ...ordered.map((m): Clip => ({ id: newId(), media: m.id, in: 0, out: m.duration, transform: { ...NEUTRAL_TRANSFORM, crop: { ...NEUTRAL_TRANSFORM.crop } }, grade: { ...NEUTRAL_GRADE }, gainDb: DEFAULT_CLIP_GAIN_DB, muted: false }))],
+      clips: [...p.clips, ...ordered.map((m): Clip => ({ id: newId(), media: m.id, in: 0, out: m.duration, transform: { ...NEUTRAL_TRANSFORM, crop: { ...NEUTRAL_TRANSFORM.crop } }, grade: { ...NEUTRAL_GRADE }, gainDb: soundLevels(p).camera, muted: false }))],
     }));
     void store.persistHandles(project.id);
     setFilesVersion((v) => v + 1);
@@ -1080,7 +1199,7 @@ export function VideoEditorWidget() {
         const info = await probe(f);
         const where = (await store.whereIs(h)) ?? undefined;
         const ref: MediaRef = { id, name: f.name, size: f.size, duration: info.duration, hasAudio: true, sampleRate: info.sampleRate, ...(where ? { where } : {}) };
-        setProject((p) => ({ ...p, media: { ...p.media, [id]: ref }, music: [...p.music, appendMusic(p.music, { id: newId(), media: id, lane: 0, in: 0, out: info.duration, gainDb: -12, muted: false, fadeIn: 2, fadeOut: 3, keyframes: [] }, 2, timelineDuration(p))] }));
+        setProject((p) => ({ ...p, media: { ...p.media, [id]: ref }, music: [...p.music, appendMusic(p.music, { id: newId(), media: id, lane: 0, in: 0, out: info.duration, gainDb: soundLevels(p).music, muted: false, fadeIn: 2, fadeOut: 3, keyframes: [] }, 2, timelineDuration(p))] }));
         await decodeMusic(id, f);
       } catch (e) {
         setError(`${f.name}: ${e instanceof Error ? e.message : "couldn't read the file."}`);
@@ -1635,6 +1754,12 @@ export function VideoEditorWidget() {
       exportOptions: (o: { partSeconds?: number }) => Object.assign(testExportOptions, o),
       getJob: () => job,
       getResumable: () => resumable,
+      measureMix,
+      matchLevel,
+      getLoudness: () => loudness,
+      loadFixFile,
+      runFix,
+      getFixed: () => fixed,
       audioState: () => ({ ctx: audioCtxRef.current?.state ?? null, nodes: musicNodes.current.size, buffers: musicBuffers.current.size, video: videoRef.current ? { muted: videoRef.current.muted, volume: videoRef.current.volume, paused: videoRef.current.paused } : null }),
     };
   });
@@ -2963,10 +3088,10 @@ export function VideoEditorWidget() {
                       <button type="button" onClick={() => setProject((p) => ({ ...p, clips: applyAudioTo(p.clips, current.id, "all") }))} disabled={project.clips.length < 2} className={cn(GHOST, "border-accent text-accent")} title="Give every clip this gain and mute setting">
                         Apply to all clips
                       </button>
-                      <button type="button" onClick={() => update(current.id, { gainDb: DEFAULT_CLIP_GAIN_DB })} className={GHOST}>
-                        Reset to {DEFAULT_CLIP_GAIN_DB} dB
+                      <button type="button" onClick={() => update(current.id, { gainDb: levels.camera })} className={GHOST}>
+                        Reset to {fmtDb(levels.camera)}
                       </button>
-                      <span className="text-[12px] text-faint">New clips start at {DEFAULT_CLIP_GAIN_DB} dB so the original sound sits under the music.</span>
+                      <span className="text-[12px] text-faint">New clips start at {fmtDb(levels.camera)} — the {SOUND_LABELS[project.sound ?? "footage"].toLowerCase()} mix; the Sound section of Export changes it.</span>
                     </div>
                   </>
                 )}
@@ -3343,6 +3468,112 @@ export function VideoEditorWidget() {
                       ))}
                     </select>
                   </label>
+                </div>
+                <div className="space-y-1.5 rounded-[var(--radius-sm)] border border-edge p-2 text-[12.5px]" data-export-sound>
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="font-medium text-ink">Sound</span>
+                    <select value={project.sound ?? "footage"} onChange={(e) => setProject((p) => ({ ...p, sound: e.target.value as SoundMode }))} className={SEL} aria-label="Sound mode" data-sound-mode>
+                      {SOUND_MODES.map((m) => (
+                        <option key={m} value={m}>
+                          {SOUND_LABELS[m]}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <p className="font-mono text-[12.5px] text-ink" data-sound-levels>
+                    Camera sound {fmtDb(levels.camera)} · Music {fmtDb(levels.music)}
+                  </p>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-muted" data-sound-state>
+                      {describeSoundState(soundSt, levels)}
+                    </span>
+                    {soundSt.clipsOther + soundSt.musicOther > 0 && (
+                      <button type="button" onClick={() => setProject((p) => applySoundLevels(p))} className={cn(GHOST, "border-accent text-accent")} data-sound-apply>
+                        Set every clip and track to these levels
+                      </button>
+                    )}
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2 border-t border-edge pt-1.5">
+                    <button type="button" onClick={() => void measureMix()} disabled={!placed.length || !!job} className={GHOST} data-measure-loudness>
+                      <Gauge size={13} /> Measure loudness
+                    </button>
+                    {loudness && (
+                      <span className={cn("font-mono text-[12.5px]", loudness.predicted || loudness.fingerprint === audioKey ? "text-ink" : "text-faint")} data-loudness-result>
+                        {loudness.predicted ? "about " : ""}
+                        {describeLoudness(loudness.result)}
+                        {loudness.predicted ? " after the change — measure again to confirm" : loudness.fingerprint !== audioKey ? " · measured before the last change" : ""}
+                      </span>
+                    )}
+                    {loudness && !loudness.predicted && loudness.result.integrated !== null && Math.abs(matchGain) >= 0.5 && (
+                      <button type="button" onClick={matchLevel} className={cn(GHOST, "border-accent text-accent")} data-match-level>
+                        Match YouTube level ({matchGain > 0 ? "+" : ""}
+                        {matchGain} dB)
+                      </button>
+                    )}
+                  </div>
+                  {loudness && !loudness.predicted && loudness.result.integrated !== null && (
+                    <p className={cn("text-[12px]", loudness.result.integrated < YOUTUBE_LUFS - 3 ? "text-warn" : "text-faint")} data-loudness-verdict>
+                      {loudness.result.integrated < YOUTUBE_LUFS - 1
+                        ? `This mix would play ${(YOUTUBE_LUFS - loudness.result.integrated).toFixed(1)} dB quieter than YouTube's level${matchGain < YOUTUBE_LUFS - loudness.result.integrated - 0.1 ? ` — its peaks allow raising it ${matchGain} dB` : ""}.`
+                        : loudness.result.integrated > YOUTUBE_LUFS + 1
+                          ? `YouTube would turn this mix down by ${(loudness.result.integrated - YOUTUBE_LUFS).toFixed(1)} dB.`
+                          : "At YouTube's level."}
+                    </p>
+                  )}
+                  <p className="text-[12px] text-faint">
+                    YouTube plays every video at {YOUTUBE_LUFS} LUFS: louder uploads are turned down, quieter ones stay quiet. Measuring runs the export&apos;s sound mix — camera sound, music, fades, crossfades and the limiter — over the {range ? "export range" : "whole timeline"} without writing anything; Match raises or lowers every clip and track together so the mix lands at {YOUTUBE_LUFS} LUFS, as far as the peaks allow.
+                  </p>
+                  <div className="space-y-1.5 border-t border-edge pt-1.5" data-fix-level>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="font-medium text-ink">Fix the level of an exported file</span>
+                      <input
+                        ref={fixInput}
+                        type="file"
+                        accept="video/mp4,.mp4,.mov,.m4v"
+                        hidden
+                        onChange={(e) => {
+                          const f = e.target.files?.[0];
+                          e.target.value = "";
+                          if (f) void loadFixFile(f);
+                        }}
+                      />
+                      <button type="button" onClick={() => fixInput.current?.click()} disabled={!!job} className={GHOST} data-fix-pick>
+                        <Upload size={13} /> Open file
+                      </button>
+                      {fixFile && (
+                        <span className="font-mono text-[12px] text-ink" data-fix-measured>
+                          {fixFile.file.name} · {describeLoudness(fixFile.loudness)}
+                        </span>
+                      )}
+                    </div>
+                    {fixFile && fixFile.loudness.integrated !== null && (
+                      <div className="flex flex-wrap items-center gap-2">
+                        <label className="flex items-center gap-1 text-muted">
+                          Target
+                          <select value={fixTarget} onChange={(e) => setFixTarget(Number(e.target.value))} className={SEL} aria-label="Target loudness" data-fix-target>
+                            {[-14, -16, -18, -23].map((t) => (
+                              <option key={t} value={t}>
+                                {t} LUFS{t === YOUTUBE_LUFS ? " (YouTube)" : t === -23 ? " (broadcast)" : ""}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <span className="font-mono text-[12.5px] text-ink" data-fix-gain>
+                          {fixGain > 0 ? "+" : ""}
+                          {fixGain} dB
+                        </span>
+                        <button type="button" onClick={() => void runFix()} disabled={!!job || Math.abs(fixGain) < 0.1} className={cn(PRIMARY, "h-8 px-3 text-[13px]")} data-fix-run>
+                          Write the fixed copy
+                        </button>
+                      </div>
+                    )}
+                    {fixed && (
+                      <p className="text-[12px] text-positive" data-fix-done>
+                        Written {fixed.name} ({fmtBytes(fixed.bytes)}) to the project folder: the picture copied as it was, the sound {fixed.gainDb > 0 ? "raised" : "lowered"} by {Math.abs(fixed.gainDb)} dB and limited at −1 dBFS, the tags kept.
+                      </p>
+                    )}
+                    <p className="text-[12px] text-faint">For a file already exported, by this editor or anything else: the picture is copied packet by packet and only the sound is decoded, re-levelled and encoded again, so even a 100 GB 8K export takes minutes. The copy lands next to the original in the project folder.</p>
+                  </div>
                 </div>
                 <Slider label="Video bitrate" value={project.export.bitrateMbps} min={10} max={300} step={5} onChange={(v) => setProject((p) => ({ ...p, export: { ...p.export, bitrateMbps: v } }))} format={(v) => `${v} Mbps${v >= 80 && v <= 160 ? " · YouTube 8K range" : ""}`} />
                 <label className="flex items-center gap-1.5 text-muted">

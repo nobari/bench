@@ -60,6 +60,24 @@ export const MEDIA_KINDS: { value: number; label: string }[] = [
   { value: 10, label: "TV show" },
 ];
 
+/**
+ * Finds every media-kind item whose data box carries the "implicit" type (0) and gives it the integer type (21) that
+ * ffmpeg and iTunes write, in place; the bytes may be a whole index or any stretch of one. Returns how many it set.
+ */
+export function patchKindType(bytes: Uint8Array): number {
+  let n = 0;
+  const u32 = (o: number) => ((bytes[o] << 24) | (bytes[o + 1] << 16) | (bytes[o + 2] << 8) | bytes[o + 3]) >>> 0;
+  for (let i = 4; i + 21 <= bytes.length; i++) {
+    if (bytes[i] !== 0x73 || bytes[i + 1] !== 0x74 || bytes[i + 2] !== 0x69 || bytes[i + 3] !== 0x6b) continue; // "stik"
+    if (u32(i - 4) !== 25 || u32(i + 4) !== 17) continue; // item box 25 bytes = header + a 17-byte data box
+    if (bytes[i + 8] !== 0x64 || bytes[i + 9] !== 0x61 || bytes[i + 10] !== 0x74 || bytes[i + 11] !== 0x61) continue; // "data"
+    if (u32(i + 12) !== 0) continue;
+    bytes[i + 15] = 21;
+    n++;
+  }
+  return n;
+}
+
 export function kindLabel(kind: number | null): string {
   if (kind === null) return "not set";
   return MEDIA_KINDS.find((k) => k.value === kind)?.label ?? `other (${kind})`;

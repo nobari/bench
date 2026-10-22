@@ -81,6 +81,8 @@ import {
 import pkg from "@/package.json";
 import type { MotionTrace } from "./stops";
 import { isSpaceError } from "./space";
+import { LoudnessMeter, softLimit, type Loudness } from "./loudness";
+import { patchKindType } from "./tags";
 
 export interface Probe {
   duration: number;
@@ -874,8 +876,8 @@ export async function mixAudio(
           mix[i * 2 + 1] += s[i * 2 + 1] * g;
         }
       }
-      // Soft clip.
-      for (let i = 0; i < mix.length; i++) mix[i] = Math.tanh(mix[i]);
+      // The limiter: nothing under −1.4 dBFS is touched, anything above is eased into the last stretch below full scale.
+      for (let i = 0; i < mix.length; i++) mix[i] = softLimit(mix[i]);
       await onBlock(mix, t);
     }
   } finally {
@@ -1215,12 +1217,15 @@ async function exportWithPulse(
   // Count what reaches a file: every chunk passes through here on its way to the folder. The tracker sees every
   // byte (parts included, for its rates); the result reports the file's own.
   let fileBytes = 0;
+  // While the file is being finalized its index goes out; the media-kind atom in it gets the integer type ffmpeg writes.
+  const finalizing = { on: false };
   const countedStream = (target: WritableStream<StreamTargetChunk>, isFinal: boolean) => {
     const fileWriter = target.getWriter();
     return new WritableStream<StreamTargetChunk>({
       write: async (chunk) => {
         tracker.addBytes(chunk.data.byteLength);
         if (isFinal) fileBytes += chunk.data.byteLength;
+        if (isFinal && finalizing.on) patchKindType(chunk.data);
         emit();
         for (;;) {
           try {
@@ -1790,6 +1795,7 @@ async function exportWithPulse(
     }
     tracker.beginStep("finalize");
     emit(true);
+    finalizing.on = true;
     await output!.finalize();
     tracker.endStep();
     emit(true);
@@ -2175,6 +2181,149 @@ export async function encoderSupport(
 }
 
 export type { ExportSpan, Clip, MediaRef, Title };
+/* ------------------------------------------------------------ loudness */
+
+/**
+ * The loudness of the export's sound mix over a stretch of the timeline — camera sound, music, fades, crossfades and
+ * the limiter, exactly as the file would carry it — without writing anything.
+ */
+export async function measureLoudness(
+  input: MixInput & { from: number; to: number; signal?: AbortSignal; onProgress?: (done: number, total: number) => void },
+): Promise<Loudness> {
+  const meter = new LoudnessMeter(input.sampleRate);
+  const total = Math.max(0, input.to - input.from);
+  await mixAudio(
+    input,
+    input.from,
+    input.to,
+    async (samples, t) => {
+      meter.add(samples);
+      input.onProgress?.(Math.min(total, t - input.from), total);
+    },
+    input.signal,
+  );
+  return meter.result();
+}
+
+/** Interleaved stereo floats from a decoded sample (a mono track is doubled). */
+function stereoOf(sample: AudioSample): Float32Array {
+  const frames = sample.numberOfFrames, ch = sample.numberOfChannels;
+  const tmp = new Float32Array(frames * ch);
+  sample.copyTo(tmp, { format: "f32", planeIndex: 0 });
+  if (ch === 2) return tmp;
+  const out = new Float32Array(frames * 2);
+  for (let i = 0; i < frames; i++) {
+    out[i * 2] = tmp[i * ch];
+    out[i * 2 + 1] = ch > 1 ? tmp[i * ch + 1] : tmp[i * ch];
+  }
+  return out;
+}
+
+/** The loudness of a file's sound track (video files included): only the audio is decoded, so it is quick. */
+export async function measureFile(file: File, opts: { signal?: AbortSignal; onProgress?: (done: number, total: number) => void } = {}): Promise<Loudness> {
+  const input = new Input({ source: new BlobSource(file), formats: ALL_FORMATS });
+  const audio = await input.getPrimaryAudioTrack();
+  if (!audio) throw new Error("The file has no sound track.");
+  const total = await input.computeDuration();
+  const meter = new LoudnessMeter(audio.sampleRate);
+  const sink = new AudioSampleSink(audio);
+  for await (const sample of sink.samples()) {
+    if (opts.signal?.aborted) {
+      sample.close();
+      throw new DOMException("Cancelled", "AbortError");
+    }
+    meter.add(stereoOf(sample));
+    opts.onProgress?.(Math.min(total, sample.timestamp), total);
+    sample.close();
+  }
+  return meter.result();
+}
+
+export interface FixLevelOptions {
+  file: File;
+  writable: WritableStream<StreamTargetChunk>;
+  /** Applied to the sound before the limiter, dB. */
+  gainDb: number;
+  audioBitrateKbps: number;
+  signal?: AbortSignal;
+  onProgress?: (stage: "video" | "audio" | "finalize", fraction: number) => void;
+}
+
+/**
+ * A copy of an exported file with its sound at a new level: the picture's packets are copied as they are (no
+ * re-encoding), the sound is decoded, raised or lowered, limited and encoded again, and the file's tags are kept —
+ * the media-kind atom with the integer type ffmpeg writes.
+ */
+export async function fixLevel(opts: FixLevelOptions): Promise<{ bytes: number; seconds: number }> {
+  const { file, signal } = opts;
+  const input = new Input({ source: new BlobSource(file), formats: ALL_FORMATS });
+  const video = await input.getPrimaryVideoTrack();
+  const audio = await input.getPrimaryAudioTrack();
+  if (!video || !audio) throw new Error("The file needs a picture and a sound track.");
+  const codec = video.codec;
+  if (!codec) throw new Error("The picture's codec is not one this browser can copy.");
+  const duration = Math.max(1e-6, await input.computeDuration());
+  const stats = await video.computePacketStats(200);
+  const fileWriter = opts.writable.getWriter();
+  const finalizing = { on: false };
+  let bytes = 0;
+  const counted = new WritableStream<StreamTargetChunk>({
+    write: async (chunk) => {
+      if (finalizing.on) patchKindType(chunk.data);
+      bytes += chunk.data.byteLength;
+      await fileWriter.write(chunk);
+    },
+    close: () => fileWriter.close(),
+    abort: (reason) => fileWriter.abort(reason),
+  });
+  const output = new Output({
+    format: new Mp4OutputFormat({ fastStart: false }),
+    target: new StreamTarget(counted, { chunked: true }),
+  });
+  const copied = new EncodedVideoPacketSource(codec);
+  output.addVideoTrack(copied, { frameRate: stats.averagePacketRate > 0 ? stats.averagePacketRate : 30 });
+  const audioSource = new AudioSampleSource({ codec: "aac", bitrate: opts.audioBitrateKbps * 1000 });
+  output.addAudioTrack(audioSource);
+  output.setMetadataTags(await input.getMetadataTags());
+  const check = () => {
+    if (signal?.aborted) throw new DOMException("Cancelled", "AbortError");
+  };
+  try {
+    await output.start();
+    const config = await video.getDecoderConfig();
+    let first = true;
+    for await (const packet of new EncodedPacketSink(video).packets()) {
+      check();
+      await copied.add(packet, first && config ? { decoderConfig: config } : undefined);
+      first = false;
+      opts.onProgress?.("video", Math.min(1, packet.timestamp / duration));
+    }
+    copied.close();
+    const g = 10 ** (opts.gainDb / 20);
+    for await (const sample of new AudioSampleSink(audio).samples()) {
+      if (signal?.aborted) sample.close();
+      check();
+      const data = stereoOf(sample);
+      for (let i = 0; i < data.length; i++) data[i] = softLimit(data[i] * g);
+      const out = new AudioSample({ data, format: "f32", numberOfChannels: 2, sampleRate: audio.sampleRate, timestamp: sample.timestamp });
+      await audioSource.add(out);
+      out.close();
+      opts.onProgress?.("audio", Math.min(1, sample.timestamp / duration));
+      sample.close();
+    }
+    audioSource.close();
+    opts.onProgress?.("finalize", 0);
+    finalizing.on = true;
+    await output.finalize();
+    opts.onProgress?.("finalize", 1);
+  } catch (e) {
+    await output.cancel().catch(() => undefined);
+    await fileWriter.abort(e).catch(() => undefined);
+    throw e;
+  }
+  return { bytes, seconds: duration };
+}
+
 export { EncodedPacketSink, EncodedVideoPacketSource };
 
 /**

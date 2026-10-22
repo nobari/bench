@@ -410,6 +410,46 @@ export interface Watermark {
   margin: number;
 }
 
+/**
+ * How the camera sound and the music are balanced. The mode sets what new clips and music start at; the export
+ * panel shows the levels and can set every clip and track to them. A music video keeps the camera sound well under
+ * the music, where it adds presence without masking it; footage keeps its own sound in front with the music under it.
+ */
+export type SoundMode = "music-video" | "footage";
+export const SOUND_MODES: SoundMode[] = ["music-video", "footage"];
+export interface SoundLevels {
+  /** Gain of the clips' own sound, dB. */
+  camera: number;
+  /** Gain of the music tracks, dB. */
+  music: number;
+}
+export const SOUND_LEVELS: Record<SoundMode, SoundLevels> = { "music-video": { camera: -22, music: 0 }, footage: { camera: -12, music: -12 } };
+export const SOUND_LABELS: Record<SoundMode, string> = { "music-video": "Music video", footage: "Footage with music under it" };
+export const soundLevels = (p: Pick<Project, "sound">): SoundLevels => SOUND_LEVELS[p.sound ?? "footage"];
+
+/** Every clip's sound and every music track set to the mode's levels; mutes, fades and keyframes stay. */
+export function applySoundLevels(p: Project): Project {
+  const { camera, music } = soundLevels(p);
+  return { ...p, clips: p.clips.map((c) => (c.gainDb === camera ? c : { ...c, gainDb: camera })), music: p.music.map((m) => (m.gainDb === music ? m : { ...m, gainDb: music })) };
+}
+
+/** Which clips and tracks sit at the mode's levels, for the export panel's summary. */
+export function soundState(p: Project): { clipsAt: number; clipsOff: number; clipsOther: number; musicAt: number; musicOff: number; musicOther: number } {
+  const { camera, music } = soundLevels(p);
+  const out = { clipsAt: 0, clipsOff: 0, clipsOther: 0, musicAt: 0, musicOff: 0, musicOther: 0 };
+  for (const c of p.clips) {
+    if (c.muted || c.gainDb <= -60) out.clipsOff++;
+    else if (c.gainDb === camera) out.clipsAt++;
+    else out.clipsOther++;
+  }
+  for (const m of p.music) {
+    if (m.muted || m.gainDb <= -60) out.musicOff++;
+    else if (m.gainDb === music) out.musicAt++;
+    else out.musicOther++;
+  }
+  return out;
+}
+
 export interface ExportSettings {
   codec: "hevc" | "avc";
   /** Target video bitrate, Mbps. */
@@ -735,6 +775,8 @@ export interface Project {
   preview: PreviewSettings;
   transition: TransitionSettings;
   intro: IntroSettings;
+  /** The balance of camera sound and music; projects from before it was recorded were mixed as "footage". */
+  sound?: SoundMode;
   /** A .cube the user loaded (expects the camera's log in, Rec.709 out), applied by clips whose lut is "custom". */
   customLut?: { name: string; cube: string } | null;
   /** Proxy state per media id: whether a proxy exists (and which file). */
@@ -769,7 +811,7 @@ export const newId = () => Math.random().toString(36).slice(2, 10);
 
 export function newProject(name = "Untitled project"): Project {
   const now = Date.now();
-  return { version: 1, id: newId(), name, createdAt: now, updatedAt: now, media: {}, clips: [], music: [], titles: [], watermark: { media: null, corner: "br", size: 0.08, opacity: 0.85, margin: 0.03 }, export: { ...DEFAULT_EXPORT }, preview: { ...DEFAULT_PREVIEW }, transition: { ...DEFAULT_TRANSITION }, intro: { ...DEFAULT_INTRO, card: { ...DEFAULT_INTRO.card } }, proxies: {}, stops: null };
+  return { version: 1, id: newId(), name, createdAt: now, updatedAt: now, media: {}, clips: [], music: [], titles: [], watermark: { media: null, corner: "br", size: 0.08, opacity: 0.85, margin: 0.03 }, export: { ...DEFAULT_EXPORT }, preview: { ...DEFAULT_PREVIEW }, transition: { ...DEFAULT_TRANSITION }, intro: { ...DEFAULT_INTRO, card: { ...DEFAULT_INTRO.card } }, sound: "music-video", proxies: {}, stops: null };
 }
 
 /* ---------------------------------------------------------- timeline */
@@ -1174,15 +1216,16 @@ export function deserialize(json: string): Project | null {
     const stops: StopScan | null = p.stops && typeof p.stops === "object" && p.stops.runs && typeof p.stops.runs === "object" ? { ...p.stops, minSeconds: p.stops.minSeconds > 0 ? p.stops.minSeconds : 2, margin: p.stops.margin >= 0 ? p.stops.margin : 0.5 } : null;
     if (typeof intro.sceneSeconds !== "number" || !(intro.sceneSeconds > 0)) intro.sceneSeconds = null;
     if (!INTRO_OUTROS.includes(intro.outro as IntroOutro)) intro.outro = "look";
-    return { ...newProject(), ...p, clips, export: { ...DEFAULT_EXPORT, ...p.export, tags: { ...DEFAULT_TAGS, ...(p.export?.tags ?? {}) } }, preview: { ...DEFAULT_PREVIEW, ...(p.preview ?? (Object.values(p.proxies ?? {}).some((x) => x?.ready) ? { proxyHeight: 1080 } : {})) }, transition, intro, stops, titles: (p.titles ?? []).map((t) => normalizeTitle(t)) };
+    const sound: SoundMode = SOUND_MODES.includes(p.sound as SoundMode) ? (p.sound as SoundMode) : "footage";
+    return { ...newProject(), ...p, clips, sound, export: { ...DEFAULT_EXPORT, ...p.export, tags: { ...DEFAULT_TAGS, ...(p.export?.tags ?? {}) } }, preview: { ...DEFAULT_PREVIEW, ...(p.preview ?? (Object.values(p.proxies ?? {}).some((x) => x?.ready) ? { proxyHeight: 1080 } : {})) }, transition, intro, stops, titles: (p.titles ?? []).map((t) => normalizeTitle(t)) };
   } catch {
     return null;
   }
 }
 
 /** Copy one clip's grade onto others — "match the whole drive". */
-/** New clips start with their road noise well under the music. */
-export const DEFAULT_CLIP_GAIN_DB = -12;
+/** What clips started at before the sound modes (1.64.0): the "footage" level. */
+export const DEFAULT_CLIP_GAIN_DB = SOUND_LEVELS.footage.camera;
 
 /** Copy one clip's original-audio gain and mute to the others. */
 export function applyAudioTo(clips: Clip[], fromId: string, toIds: string[] | "all"): Clip[] {
