@@ -18,6 +18,7 @@ import {
 import { CopyButton } from "@/components/copy-button";
 import { SHARE_SYNC_EVENT } from "@/components/share-button";
 import { cn } from "@/lib/utils";
+import { JsonBlock, JsonEditor } from "@/components/json-editor";
 
 const MODES = ["decode", "encode"] as const;
 
@@ -523,7 +524,7 @@ function JsonPanel({ label, color, value }: { label: string; color: string; valu
         </span>
         <CopyButton value={text} />
       </div>
-      <pre className="overflow-auto p-3 font-mono text-[12.5px] leading-relaxed text-ink">{text}</pre>
+      <JsonBlock value={text} className="p-3 text-[12.5px] leading-relaxed" />
     </div>
   );
 }
@@ -555,12 +556,7 @@ function TextPanel({
         </span>
         <div className="flex items-center gap-2">{actions}</div>
       </div>
-      <textarea
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        spellCheck={false}
-        className="min-h-[150px] flex-1 resize-y bg-transparent p-3 font-mono text-[12.5px] leading-relaxed text-ink outline-none"
-      />
+      <JsonEditor value={value} onChange={onChange} textClass="text-[12.5px] leading-relaxed" minHeight="min-h-[150px]" ariaLabel={label} />
       <div className={cn("border-t border-edge px-3 py-1.5 readout", error && "text-danger")}>{error ?? "valid JSON"}</div>
     </div>
   );

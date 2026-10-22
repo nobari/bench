@@ -61,6 +61,8 @@ export interface SchemaNode {
   requiredOrder: string[];
   /** Keywords the designer doesn't model, kept verbatim so imports round-trip. */
   extra: Record<string, unknown>;
+  /** The root's `$schema` as written; empty for none. Only the root node's is written out. */
+  schemaUri: string;
 }
 
 export interface PropertyEntry {
@@ -107,6 +109,7 @@ export function createNode(type: NodeType = "string", partial: Partial<SchemaNod
     defsKeyword: "$defs",
     requiredOrder: [],
     extra: {},
+    schemaUri: "",
     ...partial,
   };
 }
@@ -169,7 +172,7 @@ function parseConst(s: string): unknown {
 
 export function nodeToSchema(node: SchemaNode, root = true): Record<string, unknown> {
   const out: Record<string, unknown> = {};
-  if (root) out.$schema = DRAFT_2020;
+  if (root && node.schemaUri.trim()) out.$schema = node.schemaUri.trim();
   if (node.type === "ref") {
     if (node.ref.trim()) out.$ref = node.ref.trim();
   } else if (node.type !== "any") out.type = node.nullable ? [node.type, "null"] : node.type;
@@ -322,7 +325,8 @@ export function schemaToNode(schema: unknown, root = true): SchemaNode {
     if (HANDLED.has(k)) continue;
     extra[k] = v;
   }
-  if (!root && "$schema" in s) extra.$schema = s.$schema;
+  if (root) node.schemaUri = typeof s.$schema === "string" ? s.$schema : "";
+  else if ("$schema" in s) extra.$schema = s.$schema;
   if (type !== "object" && "additionalProperties" in s) extra.additionalProperties = s.additionalProperties;
   if (type !== "object" && ("minProperties" in s || "maxProperties" in s)) {
     if ("minProperties" in s) extra.minProperties = s.minProperties;
@@ -563,6 +567,10 @@ export function detectFormat(s: string): string {
 
 /** Infer a designer node from a sample value. Arrays merge their elements. */
 export function inferNode(value: unknown): SchemaNode {
+  return { ...inferNodeInner(value), schemaUri: DRAFT_2020 };
+}
+
+function inferNodeInner(value: unknown): SchemaNode {
   if (value === null) return createNode("null");
   if (Array.isArray(value)) {
     const node = createNode("array", { items: undefined });
@@ -581,7 +589,7 @@ export function inferNode(value: unknown): SchemaNode {
       node.properties = Object.entries(value as Record<string, unknown>).map(([key, v]) => ({
         key,
         required: true,
-        node: inferNode(v),
+        node: inferNodeInner(v),
       }));
       return node;
     }

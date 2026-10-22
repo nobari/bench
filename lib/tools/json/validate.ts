@@ -66,25 +66,42 @@ function toIssue(e: ErrorObject): ValidationIssue {
   };
 }
 
-/** Validate `data` against `schema`; `draftPref` "auto" follows `$schema`, else draft-07. */
-export function validateJson(schema: unknown, data: unknown, draftPref: Draft | "auto"): ValidationResult {
+export interface SchemaCheck {
+  draft: Draft;
+  /** Problems with the schema itself: meta-schema violations, a bad $ref, a keyword Ajv cannot compile. */
+  schemaErrors: string[];
+  /** Whether Ajv could compile it at all; without that no data can be checked. */
+  compiled: boolean;
+}
+
+/**
+ * The schema on its own: checked against its draft's meta-schema and compiled, with no data involved. `draftPref`
+ * "auto" follows `$schema`, else draft-07. The compiled validator comes along for a data run.
+ */
+export function checkSchema(schema: unknown, draftPref: Draft | "auto"): SchemaCheck & { validate: ((data: unknown) => boolean) & { errors?: ErrorObject[] | null } } {
   const draft: Draft = draftPref === "auto" ? (detectDraft(schema) ?? "draft-07") : draftPref;
   // A fresh instance per run: schemas with `$id` would otherwise collide in Ajv's cache.
   const ajv = makeAjv(draft);
   const schemaErrors: string[] = [];
-
   if (!ajv.validateSchema(schema as object)) {
     for (const e of ajv.errors ?? []) schemaErrors.push(`${prettyPath(e.instancePath)}: ${e.message ?? e.keyword}`);
   }
-
-  let validate;
+  let validate: ((data: unknown) => boolean) & { errors?: ErrorObject[] | null };
+  let compiled = true;
   try {
-    validate = ajv.compile(schema as object);
+    validate = ajv.compile(schema as object) as typeof validate;
   } catch (e) {
     schemaErrors.push(e instanceof Error ? e.message : String(e));
-    return { draft, schemaErrors, issues: [], valid: false };
+    validate = Object.assign(() => false, { errors: null });
+    compiled = false;
   }
+  return { draft, schemaErrors, compiled, validate };
+}
 
+/** Validate `data` against `schema`: the schema check first, then the data when the schema compiled. */
+export function validateJson(schema: unknown, data: unknown, draftPref: Draft | "auto"): ValidationResult {
+  const { draft, schemaErrors, compiled, validate } = checkSchema(schema, draftPref);
+  if (!compiled) return { draft, schemaErrors, issues: [], valid: false };
   const ok = validate(data);
   const issues = (validate.errors ?? []).map(toIssue);
   return { draft, schemaErrors, issues, valid: ok === true && schemaErrors.length === 0 };

@@ -3,7 +3,7 @@
 import { useDeferredValue, useEffect, useMemo, useState } from "react";
 import { useQueryState, parseAsStringLiteral } from "nuqs";
 import { compressToEncodedURIComponent, decompressFromEncodedURIComponent } from "lz-string";
-import { AlertTriangle, ArrowRight, Check, ChevronDown, ChevronRight, Link2, Plus, RotateCcw, Trash2, Wand2, X } from "lucide-react";
+import { AlignLeft, AlertTriangle, ArrowRight, Check, ChevronDown, ChevronRight, Link2, Minimize2, Play, Plus, RotateCcw, ShieldCheck, Trash2, Wand2, X } from "lucide-react";
 import {
   DRAFTS,
   NODE_TYPES,
@@ -17,12 +17,14 @@ import {
   schemaToNode,
   summarizeSchema,
   updateNode,
+  type Draft,
   type NodeType,
   type SchemaNode,
   type SchemaSummary,
 } from "@/lib/tools/json/schema";
-import { validateJson } from "@/lib/tools/json/validate";
+import { checkSchema, validateJson, type ValidationResult } from "@/lib/tools/json/validate";
 import { CopyButton } from "@/components/copy-button";
+import { JsonBlock, JsonEditor } from "@/components/json-editor";
 import { SHARE_SYNC_EVENT } from "@/components/share-button";
 import { cn } from "@/lib/utils";
 
@@ -79,8 +81,27 @@ function nodeFromText(text: string): SchemaNode | null {
 
 const F =
   "h-7 rounded-[var(--radius-sm)] border border-edge bg-base px-1.5 font-mono text-[11.5px] text-ink outline-none placeholder:text-faint focus:border-accent";
-const TA =
-  "min-h-[300px] flex-1 resize-y bg-transparent p-3 font-mono text-[13px] leading-relaxed text-ink outline-none placeholder:text-faint";
+/** Which draft a `$schema` names: a known one, "custom" for another URI, "none" when absent. */
+const draftOf = (uri: string): Draft | "custom" | "none" => DRAFTS.find((d) => d.uri === uri)?.id ?? (uri.trim() ? "custom" : "none");
+const draftLabel = (uri: string) => {
+  const d = draftOf(uri);
+  return d === "none" ? "no $schema" : d === "custom" ? "custom $schema" : DRAFTS.find((x) => x.id === d)!.label;
+};
+/** Pretty or compact JSON, or null when the text is not JSON. */
+const reformat = (text: string, mode: "pretty" | "mini"): string | null => {
+  const p = parseJsonText(text);
+  return p.ok ? (mode === "pretty" ? JSON.stringify(p.value, null, 2) : JSON.stringify(p.value)) : null;
+};
+/** A validation run, remembered with the inputs it looked at so a later edit shows as stale. */
+interface Run {
+  schemaText: string;
+  /** null: only the schema was checked. */
+  dataText: string | null;
+  draftPref: (typeof DRAFT_PREFS)[number];
+  draft: Draft;
+  schemaErrors: string[];
+  data: ValidationResult | null;
+}
 const GHOST =
   "inline-flex h-7 items-center gap-1 rounded-[var(--radius-sm)] border border-edge px-2 text-[12px] text-muted transition-colors hover:border-accent hover:text-accent disabled:pointer-events-none disabled:opacity-40";
 
@@ -103,17 +124,34 @@ export function JsonSchemaWidget() {
       const p = parseJsonText(initial.sample);
       if (p.ok) return inferNode(p.value);
     }
-    return nodeFromText(initial.schema) ?? createNode("object");
+    return nodeFromText(initial.schema) ?? createNode("object", { schemaUri: DRAFTS[0].uri });
   });
   const [note, setNote] = useState<string | null>(null);
 
+  // Only the JSON syntax is checked as you type; the schema and the data are validated when asked.
   const deferredSchema = useDeferredValue(schemaText);
   const deferredData = useDeferredValue(dataText);
-  const report = useMemo(() => {
-    const s = parseJsonText(deferredSchema);
-    const d = parseJsonText(deferredData);
-    return { schema: s, data: d, result: s.ok && d.ok ? validateJson(s.value, d.value, draftPref) : null };
-  }, [deferredSchema, deferredData, draftPref]);
+  const syntax = useMemo(() => ({ schema: parseJsonText(deferredSchema), data: parseJsonText(deferredData) }), [deferredSchema, deferredData]);
+  const [run, setRun] = useState<Run | null>(null);
+  const stale = run !== null && (run.schemaText !== schemaText || run.draftPref !== draftPref || (run.dataText !== null && run.dataText !== dataText));
+  const runSchemaCheck = () => {
+    const s = parseJsonText(schemaText);
+    if (!s.ok) return;
+    const c = checkSchema(s.value, draftPref);
+    setRun({ schemaText, dataText: null, draftPref, draft: c.draft, schemaErrors: c.schemaErrors, data: null });
+  };
+  const runValidation = () => {
+    const s = parseJsonText(schemaText), d = parseJsonText(dataText);
+    if (!s.ok || !d.ok) return;
+    const r = validateJson(s.value, d.value, draftPref);
+    setRun({ schemaText, dataText, draftPref, draft: r.draft, schemaErrors: r.schemaErrors, data: r });
+  };
+  const format = (which: "schema" | "data", mode: "pretty" | "mini") => {
+    const t = reformat(which === "schema" ? schemaText : dataText, mode);
+    if (t === null) return;
+    if (which === "schema") setSchemaText(t);
+    else setDataText(t);
+  };
 
   const generated = useMemo(() => nodeToSchema(root), [root]);
   const outputSchema = useMemo(() => JSON.stringify(generated, null, 2), [generated]);
@@ -136,8 +174,8 @@ export function JsonSchemaWidget() {
     setTreeKey((k) => k + 1);
   };
 
-  const schemaErr = report.schema.ok ? null : report.schema.error;
-  const dataErr = report.data.ok ? null : report.data.error;
+  const schemaErr = syntax.schema.ok ? null : syntax.schema.error;
+  const dataErr = syntax.data.ok ? null : syntax.data.error;
 
   useEffect(() => {
     const sync = () => {
@@ -180,12 +218,13 @@ export function JsonSchemaWidget() {
   };
 
   const status = (() => {
-    if (!report.schema.ok) return { tone: "warn", text: report.schema.error === "empty" ? "Paste a schema" : "Schema is not valid JSON" };
-    if (!report.data.ok) return { tone: "warn", text: report.data.error === "empty" ? "Paste data to validate" : "Data is not valid JSON" };
-    const r = report.result!;
-    if (r.schemaErrors.length) return { tone: "danger", text: `${r.schemaErrors.length} problem${r.schemaErrors.length > 1 ? "s" : ""} in the schema` };
-    if (r.valid) return { tone: "positive", text: `Valid · ${DRAFTS.find((d) => d.id === r.draft)?.label}` };
-    return { tone: "danger", text: `${r.issues.length} issue${r.issues.length > 1 ? "s" : ""}` };
+    if (!run) return { tone: "muted", text: "Not validated yet" };
+    if (stale) return { tone: "warn", text: "Changed since the last run" };
+    const label = DRAFTS.find((d) => d.id === run.draft)?.label;
+    if (run.schemaErrors.length) return { tone: "danger", text: `Schema: ${run.schemaErrors.length} problem${run.schemaErrors.length > 1 ? "s" : ""}` };
+    if (!run.data) return { tone: "positive", text: `Schema valid · ${label}` };
+    if (run.data.valid) return { tone: "positive", text: `Schema valid · data valid · ${label}` };
+    return { tone: "danger", text: `Schema valid · data: ${run.data.issues.length} issue${run.data.issues.length > 1 ? "s" : ""}` };
   })();
 
   return (
@@ -235,17 +274,33 @@ export function JsonSchemaWidget() {
         )}
 
         {mode === "validate" && (
-          <span
-            className={cn(
-              "ml-auto inline-flex items-center gap-1.5 text-[12.5px] font-medium",
-              status.tone === "positive" && "text-positive",
-              status.tone === "danger" && "text-danger",
-              status.tone === "warn" && "text-warn",
-            )}
-          >
-            {status.tone === "positive" ? <Check size={14} /> : <AlertTriangle size={14} />}
-            {status.text}
-          </span>
+          <>
+            <button onClick={runSchemaCheck} disabled={!syntax.schema.ok} className={GHOST} title="Check the schema against its draft's meta-schema and compile it — no data involved" data-check-schema>
+              <ShieldCheck size={13} /> Check schema
+            </button>
+            <button
+              onClick={runValidation}
+              disabled={!syntax.schema.ok || !syntax.data.ok}
+              className="inline-flex h-7 items-center gap-1.5 rounded-[var(--radius-sm)] bg-accent px-3 text-[12.5px] font-medium text-on-accent hover:bg-[var(--color-accent-hover)] disabled:opacity-40"
+              title="Check the schema, then validate the data against it"
+              data-validate-data
+            >
+              <Play size={13} /> Validate data
+            </button>
+            <span
+              className={cn(
+                "ml-auto inline-flex items-center gap-1.5 text-[12.5px] font-medium",
+                status.tone === "positive" && "text-positive",
+                status.tone === "danger" && "text-danger",
+                status.tone === "warn" && "text-warn",
+                status.tone === "muted" && "text-faint",
+              )}
+              data-run-status
+            >
+              {status.tone === "positive" ? <Check size={14} /> : status.tone === "muted" ? null : <AlertTriangle size={14} />}
+              {status.text}
+            </span>
+          </>
         )}
       </div>
 
@@ -267,71 +322,84 @@ export function JsonSchemaWidget() {
               value={schemaText}
               onChange={setSchemaText}
               placeholder='{ "type": "object", "properties": { … } }'
-              footer={report.schema.ok ? "valid JSON" : report.schema.error === "empty" ? "" : report.schema.error}
-              footerTone={report.schema.ok ? "muted" : "danger"}
+              footer={syntax.schema.ok ? "valid JSON" : syntax.schema.error === "empty" ? "" : syntax.schema.error}
+              footerTone={syntax.schema.ok ? "muted" : "danger"}
+              onFormat={syntax.schema.ok ? (m) => format("schema", m) : undefined}
               actions={
                 <button onClick={designCurrent} className={GHOST}>
                   <Wand2 size={13} /> Open in designer
                 </button>
               }
+              data-pane="schema"
             />
             <Editor
               label="Data"
               value={dataText}
               onChange={setDataText}
               placeholder="JSON to validate…"
-              footer={report.data.ok ? "valid JSON" : report.data.error === "empty" ? "" : report.data.error}
-              footerTone={report.data.ok ? "muted" : "danger"}
+              footer={syntax.data.ok ? "valid JSON" : syntax.data.error === "empty" ? "" : syntax.data.error}
+              footerTone={syntax.data.ok ? "muted" : "danger"}
+              onFormat={syntax.data.ok ? (m) => format("data", m) : undefined}
+              data-pane="data"
             />
           </div>
 
-          <div className={cn("panel", report.result && !report.result.valid && "border-danger/40")}>
-            <div className="flex items-center justify-between border-b border-edge px-3 py-2">
+          <div className={cn("panel", run && !stale && (run.schemaErrors.length > 0 || (run.data && !run.data.valid)) && "border-danger/40")} data-result>
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-edge px-3 py-2">
               <span className="readout">Result</span>
-              {report.result && (
-                <span className="text-[12px] text-faint">
-                  validated as {DRAFTS.find((d) => d.id === report.result!.draft)?.label}
+              {run && !stale && <span className="text-[12px] text-faint">checked as {DRAFTS.find((d) => d.id === run.draft)?.label}</span>}
+              {stale && (
+                <span className="inline-flex items-center gap-1 text-[12px] text-warn" data-result-stale>
+                  <AlertTriangle size={12} /> The {run?.dataText !== null && run?.dataText !== dataText ? "data" : "schema"} changed since this run — validate again.
                 </span>
               )}
+              <span className="ml-auto text-[12px] text-faint">{schemaErr && schemaErr !== "empty" ? `Schema: ${schemaErr}` : dataErr && dataErr !== "empty" ? `Data: ${dataErr}` : ""}</span>
             </div>
-            <div className="p-3">
-              {!report.result ? (
-                <p className="text-[13px] text-muted">
-                  {schemaErr !== null
-                    ? schemaErr === "empty"
-                      ? "Paste a JSON Schema on the left."
-                      : `Schema: ${schemaErr}`
-                    : dataErr === "empty"
-                      ? "Paste JSON data on the right."
-                      : `Data: ${dataErr}`}
-                </p>
-              ) : (
-                <>
-                  {report.result.schemaErrors.length > 0 && (
-                    <div className="mb-3">
-                      <p className="text-[13px] font-medium text-danger">The schema itself has problems</p>
-                      <ul className="mt-1 space-y-1">
-                        {report.result.schemaErrors.map((e, i) => (
-                          <li key={i} className="font-mono text-[12.5px] text-muted">
-                            {e}
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
-                  {report.result.valid ? (
-                    <p className="flex items-center gap-2 text-[13.5px] text-positive">
-                      <Check size={15} /> The data is valid against the schema.
-                    </p>
-                  ) : report.result.issues.length > 0 ? (
+            <div className={cn("grid gap-3 p-3 md:grid-cols-2", stale && "opacity-60")}>
+              <section data-result-schema>
+                <h4 className="mb-1.5 flex items-center gap-1.5 text-[12.5px] font-medium text-ink">
+                  <ShieldCheck size={13} className="text-muted" /> 1 · The schema itself
+                </h4>
+                {!run ? (
+                  <p className="text-[13px] text-muted">Is it a valid JSON Schema? Press <strong className="font-medium text-ink">Check schema</strong> (or Validate data, which checks it first).</p>
+                ) : run.schemaErrors.length ? (
+                  <>
+                    <p className="text-[13px] font-medium text-danger">{run.schemaErrors.length} problem{run.schemaErrors.length > 1 ? "s" : ""} — not a valid {DRAFTS.find((d) => d.id === run.draft)?.label} schema</p>
+                    <ul className="mt-1 space-y-1">
+                      {run.schemaErrors.map((e, i) => (
+                        <li key={i} className="font-mono text-[12.5px] text-muted">
+                          {e}
+                        </li>
+                      ))}
+                    </ul>
+                  </>
+                ) : (
+                  <p className="flex items-center gap-2 text-[13px] text-positive">
+                    <Check size={14} /> A valid {DRAFTS.find((d) => d.id === run.draft)?.label} schema; it compiles.
+                  </p>
+                )}
+              </section>
+              <section data-result-data>
+                <h4 className="mb-1.5 flex items-center gap-1.5 text-[12.5px] font-medium text-ink">
+                  <Play size={13} className="text-muted" /> 2 · The data against the schema
+                </h4>
+                {!run || run.data === null ? (
+                  <p className="text-[13px] text-muted">{run ? "Not run: Check schema looks at the schema only. " : ""}Press <strong className="font-medium text-ink">Validate data</strong>.</p>
+                ) : run.schemaErrors.length ? (
+                  <p className="text-[13px] text-muted">Skipped — fix the schema first.</p>
+                ) : run.data.valid ? (
+                  <p className="flex items-center gap-2 text-[13px] text-positive">
+                    <Check size={14} /> The data is valid against the schema.
+                  </p>
+                ) : (
+                  <>
+                    <p className="text-[13px] font-medium text-danger">{run.data.issues.length} issue{run.data.issues.length > 1 ? "s" : ""}</p>
                     <ol className="divide-y divide-edge">
-                      {report.result.issues.map((it, i) => (
+                      {run.data.issues.map((it, i) => (
                         <li key={i} className="flex flex-wrap items-baseline gap-x-3 gap-y-1 py-2 text-[13px]">
                           <code className="shrink-0 font-mono text-[12.5px] text-ink">{it.path}</code>
                           <span className="text-ink">{it.message}</span>
-                          <span className="rounded border border-edge px-1 font-mono text-[10.5px] text-muted">
-                            {it.keyword}
-                          </span>
+                          <span className="rounded border border-edge px-1 font-mono text-[10.5px] text-muted">{it.keyword}</span>
                           {Object.keys(it.params).length > 0 && (
                             <code className="min-w-0 truncate font-mono text-[11.5px] text-faint" title={it.schemaPath}>
                               {JSON.stringify(it.params)}
@@ -340,9 +408,9 @@ export function JsonSchemaWidget() {
                         </li>
                       ))}
                     </ol>
-                  ) : null}
-                </>
-              )}
+                  </>
+                )}
+              </section>
             </div>
           </div>
         </>
@@ -407,6 +475,30 @@ export function JsonSchemaWidget() {
             )}
 
             <div className="min-w-0 overflow-x-auto p-2" key={treeKey}>
+              <div className="flex flex-wrap items-center gap-2 border-b border-edge px-3 py-1.5 text-[12px] text-muted" data-root-schema>
+                <code className="font-mono text-[11.5px] text-ink">$schema</code>
+                <select
+                  value={draftOf(root.schemaUri)}
+                  onChange={(e) => setRoot((r) => ({ ...r, schemaUri: e.target.value === "none" ? "" : e.target.value === "custom" ? r.schemaUri : (DRAFTS.find((d) => d.id === e.target.value)?.uri ?? "") }))}
+                  className={cn(F, "pr-6")}
+                  aria-label="$schema draft"
+                  data-root-draft
+                >
+                  {DRAFTS.map((d) => (
+                    <option key={d.id} value={d.id}>
+                      {d.label}
+                    </option>
+                  ))}
+                  {draftOf(root.schemaUri) === "custom" && <option value="custom">custom</option>}
+                  <option value="none">none</option>
+                </select>
+                {root.schemaUri && <code className="min-w-0 truncate font-mono text-[11px] text-faint">{root.schemaUri}</code>}
+                {root.schemaUri && (
+                  <button onClick={() => setRoot((r) => ({ ...r, schemaUri: "" }))} aria-label="Remove $schema" title="Write the schema without a $schema keyword" className="flex h-6 w-6 items-center justify-center rounded-[var(--radius-sm)] text-faint hover:bg-raised hover:text-danger" data-root-schema-remove>
+                    <X size={12} />
+                  </button>
+                )}
+              </div>
               <NodeRow node={root} depth={0} label="root" ctx={rowCtx} />
 
               {/* definitions: reusable schemas, referenced by $ref */}
@@ -470,10 +562,10 @@ export function JsonSchemaWidget() {
           {/* output */}
           <div className="panel flex min-w-0 flex-col">
             <div className="flex items-center justify-between border-b border-edge px-3 py-2">
-              <span className="readout">Generated schema · 2020-12</span>
+              <span className="readout">Generated schema · {draftLabel(root.schemaUri)}</span>
               <CopyButton value={outputSchema} />
             </div>
-            <textarea value={outputSchema} readOnly spellCheck={false} className={cn(TA, "select-all")} />
+            <JsonBlock value={outputSchema} className="min-h-[300px] flex-1 select-all p-3 text-[13px] leading-relaxed" data-generated-schema="" />
             <div className="flex items-center gap-3 border-t border-edge px-3 py-1.5 readout tabular">
               <span>{outputSchema.length.toLocaleString()} ch</span>
               <span className="ml-auto">Unknown keywords from imported schemas are kept as-is.</span>
@@ -495,6 +587,8 @@ function Editor({
   footer,
   footerTone,
   actions,
+  onFormat,
+  ...data
 }: {
   label: string;
   value: string;
@@ -503,13 +597,21 @@ function Editor({
   footer: string;
   footerTone: "muted" | "danger";
   actions?: React.ReactNode;
-}) {
+  /** Present when the text parses: Prettify and Minify rewrite it. */
+  onFormat?: (mode: "pretty" | "mini") => void;
+} & Record<`data-${string}`, string>) {
   return (
-    <div className={cn("panel flex min-w-0 flex-col", footerTone === "danger" && "border-danger/50")}>
-      <div className="flex items-center justify-between gap-2 border-b border-edge px-3 py-2">
+    <div className={cn("panel flex min-w-0 flex-col", footerTone === "danger" && "border-danger/50")} {...data}>
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-edge px-3 py-2">
         <span className="readout">{label}</span>
-        <div className="flex items-center gap-1.5">
+        <div className="flex flex-wrap items-center gap-1.5">
           {actions}
+          <button onClick={() => onFormat?.("pretty")} disabled={!onFormat} className={GHOST} title="Rewrite with two-space indentation" data-prettify>
+            <AlignLeft size={13} /> Prettify
+          </button>
+          <button onClick={() => onFormat?.("mini")} disabled={!onFormat} className={GHOST} title="Rewrite on one line" data-minify>
+            <Minimize2 size={13} /> Minify
+          </button>
           {value && (
             <button onClick={() => onChange("")} className="inline-flex items-center gap-1 text-[12px] text-faint hover:text-danger">
               <X size={12} /> Clear
@@ -517,13 +619,7 @@ function Editor({
           )}
         </div>
       </div>
-      <textarea
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        spellCheck={false}
-        placeholder={placeholder}
-        className={TA}
-      />
+      <JsonEditor value={value} onChange={onChange} placeholder={placeholder} ariaLabel={label} />
       <div className={cn("flex items-center border-t border-edge px-3 py-1.5 readout", footerTone === "danger" && "text-danger")}>
         <span className="truncate">{footer || " "}</span>
         <span className="ml-auto tabular">{value.length.toLocaleString()} ch</span>
@@ -569,8 +665,9 @@ function nextDefName(root: SchemaNode): string {
 }
 
 const TYPE_LABELS: Record<NodeType, string> = { object: "object", array: "array", string: "string", number: "number", integer: "integer", boolean: "boolean", null: "null", any: "any", ref: "$ref" };
-/** Keywords shown as read-only chips: kept as written, edited in the JSON. */
-const CHIP_SKIP = new Set(["if", "then", "else", "oneOf", "anyOf", "allOf", "not", "dependentRequired", "$schema", "type"]);
+/** Keywords the designer keeps as written and shows as chips (× removes one); `type` oddities stay hidden. */
+const CONDITION_KEYS = ["if", "then", "else", "oneOf", "anyOf", "allOf", "not", "dependentRequired"] as const;
+const CHIP_SKIP = new Set<string>([...CONDITION_KEYS, "type"]);
 const compactJson = (v: unknown, max = 48) => {
   const t = JSON.stringify(v) ?? "";
   return t.length > max ? t.slice(0, max - 1) + "…" : t;
@@ -617,8 +714,19 @@ function NodeRow({
 
   const isRef = node.type === "ref";
   const hasChildren = (node.type === "object" && (node.properties.length > 0 || !!node.additionalSchema)) || (node.type === "array" && !!node.items) || isRef;
-  const conditions = describeConditions(node.extra);
+  // Rules kept as written, one chip per keyword (if/then/else as one), each removable.
+  const ifThenElse = (["if", "then", "else"] as const).filter((k) => k in node.extra);
+  const conditions: { keys: string[]; text: string }[] = [
+    ...(ifThenElse.length ? [{ keys: [...ifThenElse], text: describeConditions(Object.fromEntries(ifThenElse.map((k) => [k, node.extra[k]]))).join("; ") || ifThenElse.join("/") }] : []),
+    ...(["oneOf", "anyOf", "allOf", "not", "dependentRequired"] as const).filter((k) => k in node.extra).map((k) => ({ keys: [k], text: describeConditions({ [k]: node.extra[k] }).join("; ") || k })),
+  ];
   const chips = Object.entries(node.extra).filter(([k]) => !CHIP_SKIP.has(k));
+  const dropKeywords = (keys: string[]) =>
+    set((n) => {
+      const extra = { ...n.extra };
+      for (const k of keys) delete extra[k];
+      return { ...n, extra };
+    });
   const summary = isRef && open ? summarizeSchema({ $ref: node.ref.trim() }, ctx.rootSchema) : null;
   const refKnown = isRef && ctx.definitions.includes(node.ref.trim());
 
@@ -793,13 +901,19 @@ function NodeRow({
       {(conditions.length > 0 || chips.length > 0) && (
         <div className="flex flex-wrap items-center gap-1 pb-1 pl-7" data-kept-keywords>
           {conditions.map((c) => (
-            <span key={c} className="rounded border border-dashed border-edge-bright px-1.5 py-px text-[11px] text-muted" title="A rule kept as written; edit it in the JSON">
-              {c}
+            <span key={c.keys.join()} className="inline-flex items-center gap-1 rounded border border-dashed border-edge-bright px-1.5 py-px text-[11px] text-muted" title="A rule kept as written; edit it in the JSON, or remove it here" data-kept={c.keys.join(",")}>
+              {c.text}
+              <button onClick={() => dropKeywords(c.keys)} aria-label={`Remove ${c.keys.join(", ")}`} className="text-faint hover:text-danger" data-kept-remove>
+                <X size={10} />
+              </button>
             </span>
           ))}
           {chips.map(([k, v]) => (
-            <span key={k} className="rounded border border-dashed border-edge px-1.5 py-px font-mono text-[10.5px] text-faint" title={`${k} is kept as written; edit it in the JSON`}>
+            <span key={k} className="inline-flex items-center gap-1 rounded border border-dashed border-edge px-1.5 py-px font-mono text-[10.5px] text-faint" title={`${k} is kept as written; edit it in the JSON, or remove it here`} data-kept={k}>
               {k}: {compactJson(v)}
+              <button onClick={() => dropKeywords([k])} aria-label={`Remove ${k}`} className="hover:text-danger" data-kept-remove>
+                <X size={10} />
+              </button>
             </span>
           ))}
         </div>

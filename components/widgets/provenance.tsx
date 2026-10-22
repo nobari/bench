@@ -39,6 +39,7 @@ import {
 import { DEMO_CERT_CHAIN_PEM, DEMO_PRIVATE_KEY_PEM } from "@/lib/tools/image/demo-cert";
 import { cn } from "@/lib/utils";
 import { useUnsavedWork } from "@/lib/unsaved-work";
+import { JsonBlock } from "@/components/json-editor";
 
 /* ------------------------------------------------------------------ data */
 
@@ -596,7 +597,7 @@ function Json({ value, label, open = false }: { value: unknown; label: string; o
   return (
     <details open={open} className="rounded-[var(--radius-sm)] border border-edge">
       <summary className="cursor-pointer select-none px-2 py-1 text-[12.5px] text-muted hover:text-ink">{label}</summary>
-      <pre className="max-h-80 overflow-auto border-t border-edge p-2 font-mono text-[11.5px] leading-relaxed text-ink">{JSON.stringify(value, null, 2)}</pre>
+      <JsonBlock value={JSON.stringify(value, null, 2)} className="max-h-80 border-t border-edge p-2 text-[11.5px] leading-relaxed" />
     </details>
   );
 }

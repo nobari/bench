@@ -34,6 +34,7 @@ import { cn } from "@/lib/utils";
 import { SHARE_SYNC_EVENT } from "@/components/share-button";
 import { readShareState, useShareState } from "@/lib/share-state";
 import { useUnsavedWork } from "@/lib/unsaved-work";
+import { JsonEditor } from "@/components/json-editor";
 
 const SAMPLE = `{
   "name": "Bench",
@@ -202,13 +203,7 @@ export function JsonViewerWidget() {
           </div>
         </div>
 
-        <textarea
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          spellCheck={false}
-          placeholder='Paste JSON here — e.g. {"hello": "world"}'
-          className="flex-1 resize-none bg-transparent p-3 font-mono text-[13px] leading-relaxed text-ink outline-none placeholder:text-faint"
-        />
+        <JsonEditor value={text} onChange={setText} placeholder='Paste JSON here — e.g. {"hello": "world"}' minHeight="min-h-0" resize="resize-none" ariaLabel="JSON input" />
 
         <div className="flex items-center gap-3 border-t border-edge px-3 py-2 readout tabular">
           {isEmpty ? (
