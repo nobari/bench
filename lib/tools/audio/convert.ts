@@ -188,7 +188,8 @@ export async function convertAudio(file: File, opts: ConvertOptions, onProgress?
   return { blob: new Blob([buffer], { type: def.mime }), name: `${base}.${def.ext}`, bytes: buffer.byteLength, peakDb };
 }
 
-async function measurePeak(input: Input, start?: number, end?: number): Promise<number> {
+/** The highest absolute sample in the primary audio track (0–1), over the trimmed stretch. */
+export async function measurePeak(input: Input, start?: number, end?: number): Promise<number> {
   const track = await input.getPrimaryAudioTrack();
   if (!track) return 0;
   const sink = new AudioSampleSink(track);
@@ -205,7 +206,8 @@ async function measurePeak(input: Input, start?: number, end?: number): Promise<
   return peak;
 }
 
-function applyGain(sample: AudioSample, gain: number): AudioSample {
+/** A copy of the sample with a linear gain applied, hard-clipped at full scale; the original is closed. */
+export function applyGain(sample: AudioSample, gain: number): AudioSample {
   const buf = new Float32Array(sample.numberOfFrames * sample.numberOfChannels);
   sample.copyTo(buf, { format: "f32", planeIndex: 0 });
   for (let i = 0; i < buf.length; i++) buf[i] = Math.max(-1, Math.min(1, buf[i] * gain));
