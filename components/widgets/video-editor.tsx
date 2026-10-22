@@ -22,6 +22,8 @@ import { PART_SECONDS } from "@/lib/tools/video/engine";
 const SEL = "h-8 rounded-[var(--radius-sm)] border border-edge bg-base px-2 pr-7 text-[13px] text-ink outline-none focus:border-accent";
 const INPUT = "h-8 w-full rounded-[var(--radius-sm)] border border-edge bg-base px-2 text-[13px] text-ink outline-none focus:border-accent";
 const GHOST = "inline-flex h-8 items-center gap-1.5 rounded-[var(--radius-sm)] border border-edge px-2.5 text-[12.5px] text-muted transition-colors hover:border-accent hover:text-accent disabled:opacity-40";
+/** A key hint at the end of a button label. */
+const Key = ({ k }: { k: string }) => <kbd className="ml-auto rounded border border-edge px-1 font-mono text-[10px] leading-4 text-faint max-sm:hidden">{k}</kbd>;
 const PRIMARY = "inline-flex h-9 items-center gap-2 rounded-[var(--radius-sm)] bg-accent px-3.5 text-sm font-medium text-on-accent hover:bg-[var(--color-accent-hover)] disabled:opacity-40";
 const RANGE = "h-1.5 w-full cursor-pointer appearance-none rounded-full bg-raised accent-[var(--accent)]";
 const LANE_COLORS = ["#8a8f99", "#5ab3d6", "#d9a400"];
@@ -116,9 +118,13 @@ const SHORTCUTS: [string, string][] = [
   ["← / →", "Step one frame (⇧ for a second)"],
   ["↑ / ↓", "Jump to the previous or next cut"],
   ["Home / End", "Start or end of the timeline"],
+  ["Q / W", "Trim the clip under the playhead to start or end here"],
+  ["C", "Split the clip at the playhead"],
+  ["J", "Merge or join the selected clip with the next (⇧J unjoins it from the previous)"],
+  ["[ / ]", "Move the selected clip earlier or later"],
   ["M", "Mute the preview"],
   ["S", "Save a thumbnail of the frame (⇧S full-size JPEG, ⌥S PNG)"],
-  ["⌫", "Remove the selected transition"],
+  ["⌫", "Delete the selected clip or transition"],
   ["⌘Z", "Undo"],
   ["⌘S", "Save the project"],
   ["T", "Timeline summary in full screen"],
@@ -891,6 +897,70 @@ export function VideoEditorWidget() {
       active = false;
     };
   }, []);
+  /**
+   * The Trim tab's actions, shared by its buttons and the Q, W, C, ⌫, J and bracket keys. Those that act at the playhead
+   * take the clip under it; the rest take the selected clip. Each returns whether anything changed. The key handler reads
+   * them through a ref so it need not re-bind on every selection change.
+   */
+  const atPlayhead = () => {
+    const t = Math.min(playheadRef.current, Math.max(0, durationRef.current - 0.001));
+    return { t, under: clipAt(project.clips, t) };
+  };
+  const trimActions = {
+    trimStartHere: () => {
+      const { under } = atPlayhead();
+      // Less than a frame would remain: nothing to trim to.
+      if (!under || clipLength({ ...under.clip, in: under.sourceTime }) < 1 / fpsRef.current - 1e-6) return false;
+      setProject((p) => ({ ...p, clips: updateClip(p.clips, under.clip.id, { in: under.sourceTime }) }));
+      // The frame under the playhead is now the clip's first; clips sit end to end, so it moved to the clip's start. Park there.
+      stepTo(under.clip.start);
+      return true;
+    },
+    trimEndHere: () => {
+      const { under } = atPlayhead();
+      if (!under || clipLength({ ...under.clip, out: under.sourceTime }) < 1 / fpsRef.current - 1e-6) return false;
+      setProject((p) => ({ ...p, clips: updateClip(p.clips, under.clip.id, { out: under.sourceTime }) }));
+      return true;
+    },
+    splitHere: () => {
+      const { t, under } = atPlayhead();
+      if (!under) return false;
+      setProject((p) => ({ ...p, clips: splitClip(p.clips, under.clip.id, t) }));
+      return true;
+    },
+    deleteSelected: () => {
+      if (!selected) return false;
+      const id = selected;
+      setProject((p) => ({ ...p, clips: p.clips.filter((c) => c.id !== id) }));
+      setSelected(null);
+      return true;
+    },
+    mergeSelected: () => {
+      if (!selected || !canMergeWithNext(project.clips, selected)) return false;
+      const id = selected;
+      setProject((p) => ({ ...p, clips: mergeWithNext(p.clips, id) }));
+      return true;
+    },
+    unjoinSelected: () => {
+      if (!selected || !project.clips.find((c) => c.id === selected)?.joinedToPrevious) return false;
+      const id = selected;
+      setProject((p) => ({ ...p, clips: unjoin(p.clips, id) }));
+      return true;
+    },
+    moveSelected: (dir: -1 | 1) => {
+      if (!selected) return false;
+      const id = selected;
+      const i = project.clips.findIndex((c) => c.id === id);
+      if (i < 0 || (dir < 0 && i === 0) || (dir > 0 && i === project.clips.length - 1)) return false;
+      setProject((p) => ({ ...p, clips: moveClip(p.clips, id, dir) }));
+      return true;
+    },
+  };
+  const trimActionsRef = useRef(trimActions);
+  useEffect(() => {
+    trimActionsRef.current = trimActions;
+  });
+
   useEffect(() => {
     const onUnload = () => void store.flush();
     window.addEventListener("beforeunload", onUnload);
@@ -906,6 +976,9 @@ export function VideoEditorWidget() {
         const id = selectedTransitionRef.current;
         setProject((p) => ({ ...p, clips: setTransition(p.clips, id, null) }));
         setSelectedTransition(null);
+      } else if ((e.key === "Delete" || e.key === "Backspace") && !inField(e) && !e.metaKey && !e.ctrlKey) {
+        e.preventDefault();
+        if (!e.repeat) trimActionsRef.current.deleteSelected();
       } else if (e.key === "Control" && !inField(e)) {
         if (!e.repeat) beginSkim();
       } else if (e.key === " " && !inField(e)) {
@@ -933,6 +1006,12 @@ export function VideoEditorWidget() {
         }
         else if (e.key === "m" || e.key === "M") setPreviewMuted((m) => !m);
         else if (e.key === "s" || e.key === "S") void saveFrame(e.altKey ? "png" : e.shiftKey ? "jpeg" : "thumb");
+        // Trimming: a held key must not keep cutting, so repeats are ignored.
+        else if (e.key === "q" || e.key === "Q") { if (!e.repeat) trimActionsRef.current.trimStartHere(); }
+        else if (e.key === "w" || e.key === "W") { if (!e.repeat) trimActionsRef.current.trimEndHere(); }
+        else if (e.key === "c" || e.key === "C") { if (!e.repeat) trimActionsRef.current.splitHere(); }
+        else if (e.key === "j" || e.key === "J") { if (!e.repeat) (e.shiftKey ? trimActionsRef.current.unjoinSelected : trimActionsRef.current.mergeSelected)(); }
+        else if (e.key === "[" || e.key === "]") { if (!e.repeat) trimActionsRef.current.moveSelected(e.key === "[" ? -1 : 1); }
         else return;
         e.preventDefault();
       }
@@ -1747,6 +1826,7 @@ export function VideoEditorWidget() {
       overrideFreeSpace,
       missing: () => store.missing(Object.keys(project.media)),
       getProject: () => project,
+      getPlayhead: () => playhead,
       setProject: (fn: (p: Project) => Project) => setProject(fn),
       traceFrames: (fn: ((timelineT: number) => void) | null) => {
         frameTrace = fn;
@@ -2547,39 +2627,39 @@ export function VideoEditorWidget() {
             {tab === "trim" && (
               <>
                 <p className="text-muted">{current ? `${project.media[current.media]?.name} · ${fmtTime(current.in)} → ${fmtTime(current.out)} (${fmtTime(current.out - current.in)})` : "Select a clip on the timeline, or move the playhead and use the buttons."}</p>
-                <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-3" data-trim-actions>
-                  <button type="button" disabled={!under} onClick={() => under && setProject((p) => ({ ...p, clips: splitClip(p.clips, under.clip.id, playhead) }))} className={GHOST}>
-                    <Scissors size={13} /> Split at playhead
+                <div className="grid grid-cols-2 gap-1.5" data-trim-actions>
+                  <button type="button" disabled={!under} onClick={trimActions.splitHere} className={GHOST} title="Cut the clip under the playhead in two (C)" data-split>
+                    <Scissors size={13} /> Split at playhead <Key k="C" />
                   </button>
                   <button
                     type="button"
                     disabled={!current || !mergeKind}
-                    onClick={() => current && setProject((p) => ({ ...p, clips: mergeWithNext(p.clips, current.id) }))}
+                    onClick={trimActions.mergeSelected}
                     className={GHOST}
-                    title={mergeKind === "merge" ? "The next clip is the rest of this recording: make them one clip again, with no cut" : mergeKind === "join" ? "Hide the cut to the next clip: no marker or transition, and it takes this clip's grade, crop and audio so the seam is invisible" : "Select a clip that has one after it"}
+                    title={`${mergeKind === "merge" ? "The next clip is the rest of this recording: make them one clip again, with no cut" : mergeKind === "join" ? "Hide the cut to the next clip: no marker or transition, and it takes this clip's grade, crop and audio so the seam is invisible" : "Select a clip that has one after it"} (J)`}
                     data-merge-next
                   >
-                    {mergeKind === "join" ? "Join with next" : "Merge with next"}
+                    {mergeKind === "join" ? "Join with next" : "Merge with next"} <Key k="J" />
                   </button>
                   {current?.joinedToPrevious && (
-                    <button type="button" onClick={() => setProject((p) => ({ ...p, clips: unjoin(p.clips, current.id) }))} className={GHOST} title="Show the cut before this clip again" data-unjoin>
-                      Unjoin from previous
+                    <button type="button" onClick={trimActions.unjoinSelected} className={GHOST} title="Show the cut before this clip again (⇧J)" data-unjoin>
+                      Unjoin from previous <Key k="⇧J" />
                     </button>
                   )}
-                  <button type="button" disabled={!under} onClick={() => under && update(under.clip.id, { in: under.sourceTime })} className={GHOST}>
-                    Trim start to here
+                  <button type="button" disabled={!under} onClick={trimActions.trimStartHere} className={GHOST} title="Drop everything before the playhead from the clip under it; the playhead then sits on the clip's new first frame (Q)" data-trim-start>
+                    Trim start to here <Key k="Q" />
                   </button>
-                  <button type="button" disabled={!under} onClick={() => under && update(under.clip.id, { out: under.sourceTime })} className={GHOST}>
-                    Trim end to here
+                  <button type="button" disabled={!under} onClick={trimActions.trimEndHere} className={GHOST} title="Drop everything after the playhead from the clip under it (W)" data-trim-end>
+                    Trim end to here <Key k="W" />
                   </button>
-                  <button type="button" disabled={!current} onClick={() => current && setProject((p) => ({ ...p, clips: p.clips.filter((c) => c.id !== current.id) }))} className={cn(GHOST, "hover:border-danger hover:text-danger")}>
-                    <Trash2 size={13} /> Delete clip
+                  <button type="button" disabled={!current} onClick={trimActions.deleteSelected} className={cn(GHOST, "hover:border-danger hover:text-danger")} title="Remove the selected clip from the timeline (⌫)" data-delete-clip>
+                    <Trash2 size={13} /> Delete clip <Key k="⌫" />
                   </button>
-                  <button type="button" disabled={!current || placed.findIndex((c) => c.id === current.id) === 0} onClick={() => current && setProject((p) => ({ ...p, clips: moveClip(p.clips, current.id, -1) }))} className={GHOST} title="Play this clip before the previous one">
-                    ◀ Move earlier
+                  <button type="button" disabled={!current || placed.findIndex((c) => c.id === current.id) === 0} onClick={() => trimActions.moveSelected(-1)} className={GHOST} title="Play this clip before the previous one ([)" data-move-earlier>
+                    ◀ Move earlier <Key k="[" />
                   </button>
-                  <button type="button" disabled={!current || placed.findIndex((c) => c.id === current.id) === placed.length - 1} onClick={() => current && setProject((p) => ({ ...p, clips: moveClip(p.clips, current.id, 1) }))} className={GHOST} title="Play this clip after the next one">
-                    Move later ▶
+                  <button type="button" disabled={!current || placed.findIndex((c) => c.id === current.id) === placed.length - 1} onClick={() => trimActions.moveSelected(1)} className={GHOST} title="Play this clip after the next one (])" data-move-later>
+                    Move later ▶ <Key k="]" />
                   </button>
                 </div>
                 <div className="flex flex-wrap items-center gap-2 rounded-[var(--radius-sm)] border border-edge p-2" data-speed-box>
@@ -3923,7 +4003,7 @@ export function VideoEditorWidget() {
         </div>
         </div>
         <p className="mt-1.5 text-[11.5px] text-faint">
-          Click the ruler to seek · Space plays, hold it for double speed · hold Control to skim the cuts · <kbd className="rounded border border-edge px-1 font-mono">?</kbd> lists every shortcut.
+          Click the ruler to seek · Space plays, hold it for double speed · hold Control to skim the cuts · Q, W and C trim and split at the playhead · <kbd className="rounded border border-edge px-1 font-mono">?</kbd> lists every shortcut.
         </p>
       </div>
       {shortcutsOpen && (
