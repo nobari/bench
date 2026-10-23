@@ -1430,8 +1430,16 @@ async function exportWithPulse(
   // and the footage's frame grid do, or the file would carry a frame before its predecessor (and the muxer refuses
   // one that lands on a keyframe).
   let lastFrameT = -Infinity;
-  const addFrame = async (timelineT: number, duration: number) => {
-    const t = timelineT - offset;
+  // Every output frame sits on the export's frame grid: tick k shows at offset + k / fps. The muxer rounds each
+  // timestamp to its own ticks, so two frames closer together than one tick would share a timestamp — a zero-length
+  // sample that YouTube's processing never gets past. Frames are gated on their grid tick, not their time in seconds:
+  // strictly one per tick, the first at 0 (so no edit list), and no sub-frame slivers at the cuts.
+  let lastTick = -1;
+  const tickOf = (timelineT: number) => Math.round((timelineT - offset) * fps);
+  const gridTime = (tick: number) => offset + tick / fps;
+  const addFrame = async (tick: number) => {
+    const t = tick / fps;
+    const duration = 1 / fps;
     if (parts) {
       if (closeFailure) await settleCloses();
       if (!segment || t - segment.start >= partSeconds) {
@@ -1447,10 +1455,11 @@ async function exportWithPulse(
       seg.frames++;
       seg.end = t + duration;
     } else await videoSource!.add(t, duration);
-    lastFrameT = timelineT;
+    lastTick = tick;
+    lastFrameT = gridTime(tick);
     tracker.frame(progressAt(t));
     emit();
-    opts.onFrame?.(timelineT);
+    opts.onFrame?.(lastFrameT);
   };
 
   // Stretches left out after a frame failed and the user chose to go on (export time).
@@ -1588,12 +1597,12 @@ async function exportWithPulse(
             // not sit on the frame grid): it enters at the span's start for what is left of it, or is skipped when
             // almost nothing is left. Placed where it began, it would come before the previous span's last frame.
             const lead = Math.max(0, span.sourceIn - sample.timestamp);
-            const timelineT = span.start + Math.max(0, sample.timestamp - span.sourceIn);
             const shown = (sample.duration || frameDur) - lead;
-            if ((lead > 0 && shown < frameDur * 0.5) || timelineT <= lastFrameT || isSkipped(timelineT - offset)) continue;
-            pendingT = timelineT - offset;
-            await compose(sample, timelineT);
-            await addFrame(timelineT, Math.max(shown, frameDur * 0.25));
+            const tick = tickOf(span.start + Math.max(0, sample.timestamp - span.sourceIn));
+            if ((lead > 0 && shown < frameDur * 0.5) || tick <= lastTick || isSkipped(tick / fps)) continue;
+            pendingT = tick / fps;
+            await compose(sample, gridTime(tick));
+            await addFrame(tick);
             pendingT = null;
           } else {
             // This source frame is on screen until its successor's timeline time; emit every output tick inside.
@@ -1604,10 +1613,11 @@ async function exportWithPulse(
                 span.sourceIn) /
                 speed;
             while (nextTick < shownUntil - 1e-6 && nextTick < span.end - 1e-6) {
-              if (nextTick > lastFrameT && !isSkipped(nextTick - offset)) {
-                pendingT = nextTick - offset;
-                await compose(sample, nextTick);
-                await addFrame(nextTick, frameDur);
+              const tick = tickOf(nextTick);
+              if (tick > lastTick && !isSkipped(tick / fps)) {
+                pendingT = tick / fps;
+                await compose(sample, gridTime(tick));
+                await addFrame(tick);
                 pendingT = null;
               }
               nextTick += frameDur;
