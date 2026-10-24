@@ -18,6 +18,7 @@ import { formatBytes, formatDuration } from "@/lib/tools/audio/music";
 import type { AudioCodec, MetadataTags } from "mediabunny";
 import { cn } from "@/lib/utils";
 import { useUnsavedWork } from "@/lib/unsaved-work";
+import { SplitPane } from "@/components/ui/split-pane";
 
 const SEL = "h-8 rounded-[var(--radius-sm)] border border-edge bg-base px-2 pr-7 text-[13px] text-ink outline-none focus:border-accent";
 const INPUT = "h-8 w-full rounded-[var(--radius-sm)] border border-edge bg-base px-2 text-[13px] text-ink outline-none focus:border-accent";
@@ -148,9 +149,7 @@ export function AudioConverterWidget() {
   const singleInfo = jobs.length === 1 ? jobs[0].info : undefined;
 
   return (
-    <div className="grid gap-3 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
-      {/* sources & results */}
-      <div className="panel flex min-h-[280px] flex-col">
+    <SplitPane id="audio-converter" defaultRatio={0.600} minFirst={260} minSecond={260} collapsible="both" firstLabel="files" secondLabel="settings" stackBelow="lg" gap={12} first={<><div className="panel flex min-h-[280px] flex-col">
         <div className="flex items-center justify-between border-b border-edge px-3 py-2">
           <span className="readout">Files {jobs.length > 0 && `· ${jobs.length}`}</span>
           {jobs.length > 0 && (
@@ -232,10 +231,7 @@ export function AudioConverterWidget() {
             ))}
           </ul>
         )}
-      </div>
-
-      {/* settings */}
-      <div className="flex flex-col gap-3">
+      </div></>} second={<><div className="flex flex-col gap-3">
         <div className="panel space-y-3 p-3">
           <span className="readout">Output</span>
           <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-3 lg:grid-cols-2">
@@ -363,7 +359,6 @@ export function AudioConverterWidget() {
           )}
           {support && !support[def.id] && <span className="text-[12.5px] text-warn">This browser can&apos;t encode {def.label} — pick another format.</span>}
         </div>
-      </div>
-    </div>
+      </div></>} />
   );
 }

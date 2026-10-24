@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useUnsavedWork } from "@/lib/unsaved-work";
+import { SplitPane } from "@/components/ui/split-pane";
 
 interface Frame {
   id: string;
@@ -205,9 +206,7 @@ export function GifMakerWidget() {
   }, [frames, busy, width, height, reverse, boomerang, fit, bg, fps, colors, loopForever, result]);
 
   return (
-    <div className="grid gap-3 lg:grid-cols-[1.3fr_1fr]">
-      {/* ----------------------------------------------------- frames pane */}
-      <div className="panel registered flex min-h-[480px] flex-col">
+    <SplitPane id="gif-maker" defaultRatio={0.565} minFirst={260} minSecond={260} collapsible="both" firstLabel="frames" secondLabel="settings" stackBelow="lg" gap={12} first={<><div className="panel registered flex min-h-[480px] flex-col">
         <div className="flex items-center justify-between border-b border-edge p-2">
           <span className="readout px-1">
             Frames {frames.length > 0 && `· ${frames.length}`}
@@ -316,10 +315,7 @@ export function GifMakerWidget() {
             </div>
           </div>
         )}
-      </div>
-
-      {/* --------------------------------------------------- settings pane */}
-      <div className="flex flex-col gap-3">
+      </div></>} second={<><div className="flex flex-col gap-3">
         <div className="panel registered space-y-4 p-4">
           <p className="readout">Settings</p>
 
@@ -425,8 +421,7 @@ export function GifMakerWidget() {
             </p>
           )}
         </div>
-      </div>
-    </div>
+      </div></>} />
   );
 }
 

@@ -9,6 +9,7 @@ import { ANNOTATION_COLORS, CHEATSHEET, DEFAULT_TEMPLATE, PRINT_DIAGRAM_CONFIG, 
 import { CopyButton } from "@/components/copy-button";
 import { SHARE_SYNC_EVENT } from "@/components/share-button";
 import { cn } from "@/lib/utils";
+import { SplitPane } from "@/components/ui/split-pane";
 
 const DRAFT_KEY = "bench:mermaid:draft";
 const ANN_DRAFT_KEY = "bench:mermaid:annotations";
@@ -446,98 +447,9 @@ export function MermaidEditorWidget() {
   const showPreview = view !== "edit";
   const groups = [...new Set(TEMPLATES.map((t) => t.group))];
 
-  return (
-    <div className="space-y-3">
-      {/* toolbar */}
-      <div className="panel flex flex-wrap items-center gap-2 p-2">
-        <select aria-label="Insert a template" value="" onChange={(e) => e.target.value && applyTemplate(e.target.value)} className={cn(SEL, "max-w-[200px]")}>
-          <option value="">Templates…</option>
-          {groups.map((g) => (
-            <optgroup key={g} label={g}>
-              {TEMPLATES.filter((t) => t.group === g).map((t) => (
-                <option key={t.id} value={t.id}>
-                  {t.label}
-                </option>
-              ))}
-            </optgroup>
-          ))}
-        </select>
-        <select aria-label="Theme" value={themeId} onChange={(e) => setTheme(e.target.value === "default" ? null : e.target.value)} className={SEL}>
-          {THEMES.map(([id, label]) => (
-            <option key={id} value={id}>
-              {label}
-            </option>
-          ))}
-        </select>
-        <label className="flex items-center gap-1.5 text-[12.5px] text-muted">
-          <input type="checkbox" checked={handDrawn} onChange={(e) => setLook(e.target.checked ? "hand" : null)} className="accent-[var(--accent)]" />
-          Hand-drawn
-        </label>
-        {mono && <span className="text-[12px] text-faint">Greyscale only — safe for any printer or photocopier</span>}
-        <div className="flex rounded-[var(--radius-sm)] border border-edge p-0.5">
-          {(
-            [
-              ["edit", "Edit", Pencil],
-              ["split", "Split", Columns2],
-              ["preview", "Preview", Eye],
-            ] as const
-          ).map(([id, label, Icon]) => (
-            <button key={id} type="button" onClick={() => setView(id === "split" ? null : id)} aria-label={label} title={label} className={cn("flex h-7 items-center gap-1 rounded-[3px] px-2 text-[12.5px]", view === id ? "bg-accent font-medium text-on-accent" : "text-muted hover:text-ink")}>
-              <Icon size={13} />
-              <span className="hidden sm:inline">{label}</span>
-            </button>
-          ))}
-        </div>
-        <button type="button" onClick={() => setCheat((c) => !c)} className={cn(GHOST, cheat && "border-accent text-accent")}>
-          <PanelLeft size={13} /> Syntax
-        </button>
-        <div className="ml-auto flex flex-wrap items-center gap-1.5">
-          <button type="button" onClick={print} disabled={!svg} className={GHOST} title="Print the diagram">
-            <Printer size={13} /> Print
-          </button>
-          <select aria-label="Paper size" value={paper} onChange={(e) => setPaper(e.target.value as PaperSize)} className={cn(SEL, "h-8 text-[12.5px]")}>
-            {PAPER_SIZES.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.label}
-              </option>
-            ))}
-          </select>
-          <label className="flex items-center gap-1.5 text-[12px] text-muted" title="Append the Mermaid source below the diagram when printing">
-            <input type="checkbox" checked={printSource} onChange={(e) => setPrintSource(e.target.checked)} className="accent-[var(--accent)]" />
-            with source
-          </label>
-        </div>
-      </div>
-
-      {/* export row */}
-      <div className="panel flex flex-wrap items-center gap-1.5 p-2 text-[12.5px]">
-        <span className="mr-1 text-faint">Export</span>
-        <button type="button" onClick={() => svg && download(svgDoc, `${fileBase}.svg`, "image/svg+xml")} disabled={!svg} className={GHOST}>
-          <Download size={13} /> SVG
-        </button>
-        <button type="button" onClick={() => void exportPng(2)} disabled={!svg || !!busy} className={GHOST}>
-          {busy === "png" ? <Loader size={13} className="animate-spin" /> : <Download size={13} />} PNG 2×
-        </button>
-        <button type="button" onClick={() => void exportPng(4)} disabled={!svg || !!busy} className={GHOST}>
-          <Download size={13} /> PNG 4×
-        </button>
-        <button type="button" onClick={() => void copyPng()} disabled={!svg || !!busy} className={GHOST}>
-          {busy === "copy" ? <Loader size={13} className="animate-spin" /> : null} Copy image
-        </button>
-        <CopyButton value={svgDoc} label="Copy SVG" className="h-8 px-2.5 text-[12.5px]" disabled={!svg} />
-        <CopyButton value={markdownFence(code) + (annotations.length ? "\n\n" + annotationsMarkdown(annotations) : "")} label="Copy Markdown" className="h-8 px-2.5 text-[12.5px]" />
-        <button type="button" onClick={() => download(code, `${fileBase}.mmd`, "text/plain")} className={GHOST}>
-          <Download size={13} /> .mmd
-        </button>
-        {notice && <span className="ml-2 text-accent">{notice}</span>}
-        <span className="ml-auto font-mono text-[11.5px] text-faint">
-          {type || "no diagram"} · {lines} line{lines === 1 ? "" : "s"}
-        </span>
-      </div>
-
-      <div className={cn("grid gap-3", showEditor && showPreview && "lg:grid-cols-2", cheat && "lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_260px]")}>
-        {showEditor && (
-          <div className={cn("panel flex min-w-0 flex-col", render.kind === "error" && "border-danger/50")}>
+    // The editor pane, shown alone or in a split (see below).
+  const editorPane = (
+<div className={cn("panel flex min-w-0 flex-col", render.kind === "error" && "border-danger/50")}>
             <div className="flex items-center justify-between border-b border-edge px-3 py-2">
               <span className="readout">Mermaid source</span>
               <div className="flex items-center gap-2">
@@ -585,10 +497,10 @@ export function MermaidEditorWidget() {
               </p>
             )}
           </div>
-        )}
-
-        {showPreview && (
-          <div className={cn("panel flex min-w-0 flex-col", maximized && "fixed inset-2 z-50 shadow-dialog sm:inset-4")}>
+  );
+  // The preview pane, shown alone or in a split (see below).
+  const previewPane = (
+<div className={cn("panel flex min-w-0 flex-col", maximized && "fixed inset-2 z-50 shadow-dialog sm:inset-4")}>
             <div className="flex flex-wrap items-center gap-2 border-b border-edge px-3 py-2">
               <span className="readout">Preview{render.kind === "error" && lastGood ? " · last good render" : ""}</span>
               <div className="ml-auto flex items-center gap-1">
@@ -697,10 +609,10 @@ export function MermaidEditorWidget() {
             </div>
             <p className="border-t border-edge px-3 py-1.5 text-[11.5px] text-faint">{tool === "select" ? "Drag to pan · pinch or ⌘/Ctrl + scroll to zoom · double-click to fit · click an annotation to edit it, drag to move, Delete to remove." : TOOLS.find((t) => t.id === tool)?.hint + " · Esc to cancel."}</p>
           </div>
-        )}
-
-        {cheat && (
-          <div className="panel max-h-[640px] overflow-auto p-3 text-[12px]">
+  );
+  // The cheat pane, shown alone or in a split (see below).
+  const cheatPane = (
+<div className="panel max-h-[640px] overflow-auto p-3 text-[12px]">
             {CHEATSHEET.map((s) => (
               <div key={s.title} className="mb-3">
                 <div className="readout mb-1">{s.title}</div>
@@ -718,8 +630,105 @@ export function MermaidEditorWidget() {
               Full syntax reference ↗
             </a>
           </div>
-        )}
+  );
+return (
+    <div className="space-y-3">
+      {/* toolbar */}
+      <div className="panel flex flex-wrap items-center gap-2 p-2">
+        <select aria-label="Insert a template" value="" onChange={(e) => e.target.value && applyTemplate(e.target.value)} className={cn(SEL, "max-w-[200px]")}>
+          <option value="">Templates…</option>
+          {groups.map((g) => (
+            <optgroup key={g} label={g}>
+              {TEMPLATES.filter((t) => t.group === g).map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.label}
+                </option>
+              ))}
+            </optgroup>
+          ))}
+        </select>
+        <select aria-label="Theme" value={themeId} onChange={(e) => setTheme(e.target.value === "default" ? null : e.target.value)} className={SEL}>
+          {THEMES.map(([id, label]) => (
+            <option key={id} value={id}>
+              {label}
+            </option>
+          ))}
+        </select>
+        <label className="flex items-center gap-1.5 text-[12.5px] text-muted">
+          <input type="checkbox" checked={handDrawn} onChange={(e) => setLook(e.target.checked ? "hand" : null)} className="accent-[var(--accent)]" />
+          Hand-drawn
+        </label>
+        {mono && <span className="text-[12px] text-faint">Greyscale only — safe for any printer or photocopier</span>}
+        <div className="flex rounded-[var(--radius-sm)] border border-edge p-0.5">
+          {(
+            [
+              ["edit", "Edit", Pencil],
+              ["split", "Split", Columns2],
+              ["preview", "Preview", Eye],
+            ] as const
+          ).map(([id, label, Icon]) => (
+            <button key={id} type="button" onClick={() => setView(id === "split" ? null : id)} aria-label={label} title={label} className={cn("flex h-7 items-center gap-1 rounded-[3px] px-2 text-[12.5px]", view === id ? "bg-accent font-medium text-on-accent" : "text-muted hover:text-ink")}>
+              <Icon size={13} />
+              <span className="hidden sm:inline">{label}</span>
+            </button>
+          ))}
+        </div>
+        <button type="button" onClick={() => setCheat((c) => !c)} className={cn(GHOST, cheat && "border-accent text-accent")}>
+          <PanelLeft size={13} /> Syntax
+        </button>
+        <div className="ml-auto flex flex-wrap items-center gap-1.5">
+          <button type="button" onClick={print} disabled={!svg} className={GHOST} title="Print the diagram">
+            <Printer size={13} /> Print
+          </button>
+          <select aria-label="Paper size" value={paper} onChange={(e) => setPaper(e.target.value as PaperSize)} className={cn(SEL, "h-8 text-[12.5px]")}>
+            {PAPER_SIZES.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.label}
+              </option>
+            ))}
+          </select>
+          <label className="flex items-center gap-1.5 text-[12px] text-muted" title="Append the Mermaid source below the diagram when printing">
+            <input type="checkbox" checked={printSource} onChange={(e) => setPrintSource(e.target.checked)} className="accent-[var(--accent)]" />
+            with source
+          </label>
+        </div>
       </div>
+
+      {/* export row */}
+      <div className="panel flex flex-wrap items-center gap-1.5 p-2 text-[12.5px]">
+        <span className="mr-1 text-faint">Export</span>
+        <button type="button" onClick={() => svg && download(svgDoc, `${fileBase}.svg`, "image/svg+xml")} disabled={!svg} className={GHOST}>
+          <Download size={13} /> SVG
+        </button>
+        <button type="button" onClick={() => void exportPng(2)} disabled={!svg || !!busy} className={GHOST}>
+          {busy === "png" ? <Loader size={13} className="animate-spin" /> : <Download size={13} />} PNG 2×
+        </button>
+        <button type="button" onClick={() => void exportPng(4)} disabled={!svg || !!busy} className={GHOST}>
+          <Download size={13} /> PNG 4×
+        </button>
+        <button type="button" onClick={() => void copyPng()} disabled={!svg || !!busy} className={GHOST}>
+          {busy === "copy" ? <Loader size={13} className="animate-spin" /> : null} Copy image
+        </button>
+        <CopyButton value={svgDoc} label="Copy SVG" className="h-8 px-2.5 text-[12.5px]" disabled={!svg} />
+        <CopyButton value={markdownFence(code) + (annotations.length ? "\n\n" + annotationsMarkdown(annotations) : "")} label="Copy Markdown" className="h-8 px-2.5 text-[12.5px]" />
+        <button type="button" onClick={() => download(code, `${fileBase}.mmd`, "text/plain")} className={GHOST}>
+          <Download size={13} /> .mmd
+        </button>
+        {notice && <span className="ml-2 text-accent">{notice}</span>}
+        <span className="ml-auto font-mono text-[11.5px] text-faint">
+          {type || "no diagram"} · {lines} line{lines === 1 ? "" : "s"}
+        </span>
+      </div>
+
+      {showEditor && showPreview ? (
+        <SplitPane id="mermaid-editor" defaultRatio={0.5} minFirst={260} minSecond={260} collapsible="both" firstLabel="code" secondLabel="diagram" stackBelow="lg" gap={12} first={editorPane} second={cheat ? <SplitPane id="mermaid-editor-side" defaultRatio={0.62} minFirst={240} minSecond={200} collapsible="second" firstLabel="diagram" secondLabel="cheat sheet" stackBelow="lg" gap={12} first={previewPane} second={cheatPane} /> : previewPane} />
+      ) : (
+        <div className={cn("grid gap-3", cheat && "lg:grid-cols-[minmax(0,1fr)_260px]")}>
+          {showEditor && editorPane}
+          {showPreview && previewPane}
+          {cheat && cheatPane}
+        </div>
+      )}
     </div>
   );
 }

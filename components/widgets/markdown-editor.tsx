@@ -59,6 +59,7 @@ import { SHARE_SYNC_EVENT } from "@/components/share-button";
 import { readShareState, useShareState } from "@/lib/share-state";
 import { subscribeTheme } from "@/lib/theme";
 import { cn } from "@/lib/utils";
+import { SplitPane } from "@/components/ui/split-pane";
 
 const VIEWS = ["edit", "split", "preview"] as const;
 const DRAFT_KEY = "bench:markdown:draft";
@@ -587,7 +588,124 @@ export function MarkdownEditorWidget() {
   const showEditor = view !== "preview";
   const showPreview = view !== "edit";
 
-  return (
+    // The editor pane, shown alone or in a split (see below).
+  const editorPane = (
+<div className="panel flex min-w-0 flex-col">
+            <div className="flex items-center justify-between border-b border-edge px-3 py-2">
+              <span className="readout">Markdown</span>
+              <div className="flex items-center gap-2">
+                <div className="relative">
+                  <button onClick={() => setSamplesOpen((o) => !o)} className={cn("inline-flex items-center gap-1 text-[12px] text-faint hover:text-ink", samplesOpen && "text-ink")} aria-haspopup="menu" aria-expanded={samplesOpen} data-samples-button>
+                    Samples <ChevronDown size={11} />
+                  </button>
+                  {samplesOpen && (
+                    <div className="absolute right-0 top-full z-30 mt-1 w-80 rounded-[var(--radius)] border border-edge bg-base p-1 shadow-[0_8px_24px_rgba(0,0,0,0.18)]" role="menu" data-samples-menu>
+                      {SAMPLES.map((sample) => (
+                        <button
+                          key={sample.id}
+                          role="menuitem"
+                          onClick={() => {
+                            setText(sample.text);
+                            clearAnnotations();
+                            setSamplesOpen(false);
+                          }}
+                          className="block w-full rounded-[var(--radius-sm)] px-2.5 py-1.5 text-left hover:bg-raised"
+                          data-sample={sample.id}
+                        >
+                          <span className="block text-[13px] font-medium text-ink">{sample.title}</span>
+                          <span className="block text-[12px] text-muted">{sample.blurb}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                {text && (
+                  <button onClick={() => { setText(""); clearAnnotations(); }} className="inline-flex items-center gap-1 text-[12px] text-faint hover:text-danger">
+                    <X size={12} /> Clear
+                  </button>
+                )}
+              </div>
+            </div>
+            <textarea
+              ref={taRef}
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+              onKeyDown={onKeyDown}
+              onScroll={onEditorScroll}
+              spellCheck
+              placeholder="# Start writing…"
+              className="h-[560px] w-full resize-y bg-transparent p-3 font-mono text-[13px] leading-relaxed text-ink outline-none placeholder:text-faint"
+            />
+            <div className="flex items-center gap-4 border-t border-edge px-3 py-1.5 readout tabular">
+              <span>{stats.words.toLocaleString()} words</span>
+              <span>{stats.chars.toLocaleString()} ch</span>
+              <span>{stats.lines} ln</span>
+              <span>~{stats.minutes} min read</span>
+              <span className="ml-auto">{savedAt ? "Draft saved in this browser" : initial.source === "draft" ? "Draft restored" : ""}</span>
+            </div>
+          </div>
+  );
+  // The preview pane, shown alone or in a split (see below).
+  const previewPane = (
+<div ref={previewPanelRef} className={cn("panel flex min-w-0 flex-col md-panel", fill && "fixed inset-0 z-[60] rounded-none border-0", fullscreen && "rounded-none border-0")} data-preview-panel data-fill={fill ? "true" : undefined} data-fullscreen={fullscreen ? "true" : undefined}>
+            <div className="flex items-center justify-between gap-2 border-b border-edge px-3 py-2">
+              <span className="readout">Preview{fill || fullscreen ? ` — ${title}` : ""}</span>
+              <div className="flex items-center gap-1.5">
+                {rendered.headings.length > 0 && (
+                  <button onClick={() => setOutline((o) => !o)} className={cn(GHOST, outline && "border-accent text-accent")}>
+                    <ListTree size={13} /> Outline
+                  </button>
+                )}
+                <button onClick={() => setNotesOpen((o) => !o)} className={cn(GHOST, notesOpen && "border-accent text-accent")} title="Highlight stretches of the preview and comment on them" data-notes-toggle>
+                  <Highlighter size={13} /> Annotate{annotations.length ? ` (${annotations.length})` : ""}
+                </button>
+                {!fullscreen && (
+                  <button onClick={() => setFill((f) => !f)} className={cn(GHOST, fill && "border-accent text-accent")} title={fill ? "Back to the page (Esc)" : "Fill the browser window with the preview"} data-fill-toggle>
+                    {fill ? <Minimize2 size={13} /> : <Expand size={13} />} {fill ? "Exit" : "Fill window"}
+                  </button>
+                )}
+                <button onClick={toggleFullscreen} className={cn(GHOST, fullscreen && "border-accent text-accent")} title={fullscreen ? "Leave full screen (Esc)" : "Preview full screen"} data-fullscreen-toggle>
+                  <Maximize2 size={13} /> {fullscreen ? "Exit full screen" : "Full screen"}
+                </button>
+              </div>
+            </div>
+            {outline && rendered.headings.length > 0 && (
+              <nav aria-label="Outline" className="border-b border-edge bg-base-2 px-3 py-2">
+                <ul className="space-y-0.5">
+                  {rendered.headings.map((h, i) => (
+                    <li key={`${h.id}-${i}`} style={{ paddingLeft: (h.depth - 1) * 12 }}>
+                      <button onClick={() => jumpTo(h.id)} className="text-left text-[12.5px] text-muted hover:text-accent">
+                        {h.text}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </nav>
+            )}
+            {notesOpen && <AnnotationsPanel placed={placed} selected={selectedAnn} show={showMarks} onShow={setShowMarks} onSelect={selectAnnotation} onClear={clearAnnotations} markdown={annotationsMarkdown(placed)} />}
+            <div ref={previewRef} onScroll={onPreviewScroll} onClick={onPreviewClick} className={cn("relative overflow-auto p-4 sm:p-6", fill || fullscreen ? "min-h-0 flex-1" : "h-[560px]")}>
+              {text.trim() ? (
+                <div className={cn("md-preview", (fill || fullscreen) && "mx-auto max-w-3xl")} dangerouslySetInnerHTML={previewHtml} />
+              ) : (
+                <p className="text-[13px] text-faint">The preview appears here as you type.</p>
+              )}
+              {draftSel && !selectedAnn && <CreateAnnotationPopover pos={draftSel.pos} color={markColor} onCreate={createAnnotation} />}
+              {selectedAnn && selectedData && editorPos && (
+                <AnnotationEditor
+                  pos={editorPos}
+                  annotation={selectedData}
+                  number={selectedPlaced?.n ?? annotations.length}
+                  lost={!!selectedPlaced && !selectedPlaced.at}
+                  autoFocus={annFocus}
+                  onChange={(p) => patchAnnotation(selectedAnn, p)}
+                  onDelete={() => deleteAnnotation(selectedAnn)}
+                  onClose={() => setSelectedAnn(null)}
+                />
+              )}
+            </div>
+          </div>
+  );
+return (
     <div className="space-y-3">
       {picking && (
         <EmbedPicker
@@ -665,124 +783,14 @@ export function MarkdownEditorWidget() {
         </div>
       </div>
 
-      <div className={cn("grid gap-3", view === "split" && "lg:grid-cols-2")}>
-        {showEditor && (
-          <div className="panel flex min-w-0 flex-col">
-            <div className="flex items-center justify-between border-b border-edge px-3 py-2">
-              <span className="readout">Markdown</span>
-              <div className="flex items-center gap-2">
-                <div className="relative">
-                  <button onClick={() => setSamplesOpen((o) => !o)} className={cn("inline-flex items-center gap-1 text-[12px] text-faint hover:text-ink", samplesOpen && "text-ink")} aria-haspopup="menu" aria-expanded={samplesOpen} data-samples-button>
-                    Samples <ChevronDown size={11} />
-                  </button>
-                  {samplesOpen && (
-                    <div className="absolute right-0 top-full z-30 mt-1 w-80 rounded-[var(--radius)] border border-edge bg-base p-1 shadow-[0_8px_24px_rgba(0,0,0,0.18)]" role="menu" data-samples-menu>
-                      {SAMPLES.map((sample) => (
-                        <button
-                          key={sample.id}
-                          role="menuitem"
-                          onClick={() => {
-                            setText(sample.text);
-                            clearAnnotations();
-                            setSamplesOpen(false);
-                          }}
-                          className="block w-full rounded-[var(--radius-sm)] px-2.5 py-1.5 text-left hover:bg-raised"
-                          data-sample={sample.id}
-                        >
-                          <span className="block text-[13px] font-medium text-ink">{sample.title}</span>
-                          <span className="block text-[12px] text-muted">{sample.blurb}</span>
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
-                {text && (
-                  <button onClick={() => { setText(""); clearAnnotations(); }} className="inline-flex items-center gap-1 text-[12px] text-faint hover:text-danger">
-                    <X size={12} /> Clear
-                  </button>
-                )}
-              </div>
-            </div>
-            <textarea
-              ref={taRef}
-              value={text}
-              onChange={(e) => setText(e.target.value)}
-              onKeyDown={onKeyDown}
-              onScroll={onEditorScroll}
-              spellCheck
-              placeholder="# Start writing…"
-              className="h-[560px] w-full resize-y bg-transparent p-3 font-mono text-[13px] leading-relaxed text-ink outline-none placeholder:text-faint"
-            />
-            <div className="flex items-center gap-4 border-t border-edge px-3 py-1.5 readout tabular">
-              <span>{stats.words.toLocaleString()} words</span>
-              <span>{stats.chars.toLocaleString()} ch</span>
-              <span>{stats.lines} ln</span>
-              <span>~{stats.minutes} min read</span>
-              <span className="ml-auto">{savedAt ? "Draft saved in this browser" : initial.source === "draft" ? "Draft restored" : ""}</span>
-            </div>
-          </div>
-        )}
-
-        {showPreview && (
-          <div ref={previewPanelRef} className={cn("panel flex min-w-0 flex-col md-panel", fill && "fixed inset-0 z-[60] rounded-none border-0", fullscreen && "rounded-none border-0")} data-preview-panel data-fill={fill ? "true" : undefined} data-fullscreen={fullscreen ? "true" : undefined}>
-            <div className="flex items-center justify-between gap-2 border-b border-edge px-3 py-2">
-              <span className="readout">Preview{fill || fullscreen ? ` — ${title}` : ""}</span>
-              <div className="flex items-center gap-1.5">
-                {rendered.headings.length > 0 && (
-                  <button onClick={() => setOutline((o) => !o)} className={cn(GHOST, outline && "border-accent text-accent")}>
-                    <ListTree size={13} /> Outline
-                  </button>
-                )}
-                <button onClick={() => setNotesOpen((o) => !o)} className={cn(GHOST, notesOpen && "border-accent text-accent")} title="Highlight stretches of the preview and comment on them" data-notes-toggle>
-                  <Highlighter size={13} /> Annotate{annotations.length ? ` (${annotations.length})` : ""}
-                </button>
-                {!fullscreen && (
-                  <button onClick={() => setFill((f) => !f)} className={cn(GHOST, fill && "border-accent text-accent")} title={fill ? "Back to the page (Esc)" : "Fill the browser window with the preview"} data-fill-toggle>
-                    {fill ? <Minimize2 size={13} /> : <Expand size={13} />} {fill ? "Exit" : "Fill window"}
-                  </button>
-                )}
-                <button onClick={toggleFullscreen} className={cn(GHOST, fullscreen && "border-accent text-accent")} title={fullscreen ? "Leave full screen (Esc)" : "Preview full screen"} data-fullscreen-toggle>
-                  <Maximize2 size={13} /> {fullscreen ? "Exit full screen" : "Full screen"}
-                </button>
-              </div>
-            </div>
-            {outline && rendered.headings.length > 0 && (
-              <nav aria-label="Outline" className="border-b border-edge bg-base-2 px-3 py-2">
-                <ul className="space-y-0.5">
-                  {rendered.headings.map((h, i) => (
-                    <li key={`${h.id}-${i}`} style={{ paddingLeft: (h.depth - 1) * 12 }}>
-                      <button onClick={() => jumpTo(h.id)} className="text-left text-[12.5px] text-muted hover:text-accent">
-                        {h.text}
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              </nav>
-            )}
-            {notesOpen && <AnnotationsPanel placed={placed} selected={selectedAnn} show={showMarks} onShow={setShowMarks} onSelect={selectAnnotation} onClear={clearAnnotations} markdown={annotationsMarkdown(placed)} />}
-            <div ref={previewRef} onScroll={onPreviewScroll} onClick={onPreviewClick} className={cn("relative overflow-auto p-4 sm:p-6", fill || fullscreen ? "min-h-0 flex-1" : "h-[560px]")}>
-              {text.trim() ? (
-                <div className={cn("md-preview", (fill || fullscreen) && "mx-auto max-w-3xl")} dangerouslySetInnerHTML={previewHtml} />
-              ) : (
-                <p className="text-[13px] text-faint">The preview appears here as you type.</p>
-              )}
-              {draftSel && !selectedAnn && <CreateAnnotationPopover pos={draftSel.pos} color={markColor} onCreate={createAnnotation} />}
-              {selectedAnn && selectedData && editorPos && (
-                <AnnotationEditor
-                  pos={editorPos}
-                  annotation={selectedData}
-                  number={selectedPlaced?.n ?? annotations.length}
-                  lost={!!selectedPlaced && !selectedPlaced.at}
-                  autoFocus={annFocus}
-                  onChange={(p) => patchAnnotation(selectedAnn, p)}
-                  onDelete={() => deleteAnnotation(selectedAnn)}
-                  onClose={() => setSelectedAnn(null)}
-                />
-              )}
-            </div>
-          </div>
-        )}
-      </div>
+      {view === "split" ? (
+        <SplitPane id="markdown-editor" defaultRatio={0.5} minFirst={260} minSecond={260} collapsible="both" firstLabel="editor" secondLabel="preview" stackBelow="lg" gap={12} first={editorPane} second={previewPane} />
+      ) : (
+        <div className="grid gap-3">
+          {showEditor && editorPane}
+          {showPreview && previewPane}
+        </div>
+      )}
     </div>
   );
 }

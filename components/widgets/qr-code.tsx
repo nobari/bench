@@ -10,6 +10,7 @@ import QRCodeStyling, {
 } from "qr-code-styling";
 import { Download, ImageUp, Type, X } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { SplitPane } from "@/components/ui/split-pane";
 
 const LEVELS = ["L", "M", "Q", "H"] as const;
 const DOT_TYPES: [DotType, string][] = [
@@ -119,9 +120,7 @@ export function QrCodeWidget() {
     qr.current?.download({ name: "qr", extension });
 
   return (
-    <div className="grid gap-3 lg:grid-cols-[1.15fr_1fr]">
-      {/* controls */}
-      <div className="panel registered flex flex-col">
+    <SplitPane id="qr-code" defaultRatio={0.535} minFirst={260} minSecond={260} collapsible="both" firstLabel="content" secondLabel="code" stackBelow="lg" gap={12} first={<><div className="panel registered flex flex-col">
         <div className="flex items-center justify-between border-b border-edge px-3 py-2">
           <span className="readout">Content</span>
           <div className="flex items-center gap-2">
@@ -200,10 +199,7 @@ export function QrCodeWidget() {
             </div>
           )}
         </div>
-      </div>
-
-      {/* preview */}
-      <div className="panel registered flex flex-col p-4">
+      </div></>} second={<><div className="panel registered flex flex-col p-4">
         <div className="registered flex flex-1 items-center justify-center overflow-hidden rounded-[var(--radius)] border border-edge bg-base bg-ticks p-4">
           {content ? (
             <div ref={container} className="w-full max-w-[300px] [&_canvas]:h-auto [&_canvas]:w-full [&_canvas]:rounded [&_svg]:h-auto [&_svg]:w-full" />
@@ -221,8 +217,7 @@ export function QrCodeWidget() {
             </button>
           </div>
         )}
-      </div>
-    </div>
+      </div></>} />
   );
 }
 

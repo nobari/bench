@@ -41,6 +41,7 @@ import {
 import { SHARE_SYNC_EVENT } from "@/components/share-button";
 import { readShareState, useShareState } from "@/lib/share-state";
 import { useUnsavedWork } from "@/lib/unsaved-work";
+import { SplitPane } from "@/components/ui/split-pane";
 
 interface Source {
   /** The original (never-mutated) animation as loaded. */
@@ -593,9 +594,7 @@ export function TgsStudioWidget() {
       )}
 
       {src && info && (
-        <div className="grid gap-3 lg:grid-cols-[1.2fr_1fr]">
-          {/* player */}
-          <div className="panel registered flex flex-col overflow-hidden">
+        <SplitPane id="tgs-studio" defaultRatio={0.545} minFirst={260} minSecond={260} collapsible="both" firstLabel="sticker" secondLabel="controls" stackBelow="lg" gap={12} first={<><div className="panel registered flex flex-col overflow-hidden">
             <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-edge p-2">
               <Sticker size={15} className="shrink-0 text-accent" />
               <div className="min-w-0 flex-1">
@@ -707,10 +706,7 @@ export function TgsStudioWidget() {
                 ))}
               </select>
             </div>
-          </div>
-
-          {/* side panels */}
-          <div className="flex flex-col gap-3">
+          </div></>} second={<><div className="flex flex-col gap-3">
             <div className="panel registered p-4">
               <p className="readout mb-3">Telegram sticker checks</p>
               <ul className="space-y-1.5">
@@ -826,8 +822,7 @@ export function TgsStudioWidget() {
                   : "Share puts the sticker and its colour edits in the link, so it reopens here as it is now."}
               </p>
             </div>
-          </div>
-        </div>
+          </div></>} />
       )}
     </div>
   );

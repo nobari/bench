@@ -19,6 +19,7 @@ import { CopyButton } from "@/components/copy-button";
 import { SHARE_SYNC_EVENT } from "@/components/share-button";
 import { cn } from "@/lib/utils";
 import { JsonBlock, JsonEditor } from "@/components/json-editor";
+import { SplitPane } from "@/components/ui/split-pane";
 
 const MODES = ["decode", "encode"] as const;
 
@@ -263,9 +264,7 @@ export function JwtWidget() {
           </div>
 
           {decoded.ok && (
-            <div className="grid gap-3 lg:grid-cols-2">
-              <JsonPanel label="Header" color={PART_COLORS.header} value={decoded.value.header} />
-              <div className="space-y-3">
+            <SplitPane id="jwt-1" defaultRatio={0.500} minFirst={260} minSecond={260} collapsible="both" firstLabel="token" secondLabel="decoded" stackBelow="lg" gap={12} first={<><JsonPanel label="Header" color={PART_COLORS.header} value={decoded.value.header} /></>} second={<><div className="space-y-3">
                 <JsonPanel label="Payload" color={PART_COLORS.payload} value={decoded.value.payload} />
                 {claims.length > 0 && (
                   <div className="panel">
@@ -304,8 +303,7 @@ export function JwtWidget() {
                     </dl>
                   </div>
                 )}
-              </div>
-            </div>
+              </div></>} />
           )}
 
           {decoded.ok && (
@@ -374,9 +372,7 @@ export function JwtWidget() {
         </>
       ) : (
         <>
-          <div className="grid gap-3 lg:grid-cols-2">
-            <TextPanel label="Header" color={PART_COLORS.header} value={headerText} onChange={setHeaderText} />
-            <TextPanel
+          <SplitPane id="jwt-2" defaultRatio={0.500} minFirst={260} minSecond={260} collapsible="both" firstLabel="token" secondLabel="decoded" stackBelow="lg" gap={12} first={<><TextPanel label="Header" color={PART_COLORS.header} value={headerText} onChange={setHeaderText} /></>} second={<><TextPanel
               label="Payload"
               color={PART_COLORS.payload}
               value={payloadText}
@@ -386,8 +382,7 @@ export function JwtWidget() {
                   iat / exp = now + 1 h
                 </button>
               }
-            />
-          </div>
+            /></>} />
 
           <div className="panel">
             <div className="flex flex-wrap items-center gap-2 border-b border-edge px-3 py-2">
@@ -425,15 +420,13 @@ export function JwtWidget() {
                   </label>
                 </div>
               ) : (
-                <div className="grid gap-2 lg:grid-cols-2">
-                  <textarea
+                <SplitPane id="jwt-3" defaultRatio={0.500} minFirst={260} minSecond={260} collapsible="both" firstLabel="token" secondLabel="decoded" stackBelow="lg" gap={8} first={<><textarea
                     value={encKey}
                     onChange={(e) => setEncKey(e.target.value)}
                     spellCheck={false}
                     placeholder={"-----BEGIN PRIVATE KEY-----\n…\n-----END PRIVATE KEY-----"}
                     className={cn(F, "min-h-[120px] w-full resize-y py-2")}
-                  />
-                  <div className="flex min-w-0 flex-col gap-1">
+                  /></>} second={<><div className="flex min-w-0 flex-col gap-1">
                     <textarea
                       value={encPublic}
                       readOnly
@@ -446,8 +439,7 @@ export function JwtWidget() {
                         <CopyButton value={encPublic} label="Copy public key" />
                       </div>
                     )}
-                  </div>
-                </div>
+                  </div></>} />
               )}
               {encError && (
                 <p className="flex items-center gap-2 text-[12.5px] text-danger">

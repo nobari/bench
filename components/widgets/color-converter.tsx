@@ -18,6 +18,7 @@ import {
 } from "@/lib/tools/color/convert";
 import { CopyButton } from "@/components/copy-button";
 import { cn } from "@/lib/utils";
+import { SplitPane } from "@/components/ui/split-pane";
 
 const WHITE: RGBA = { r: 255, g: 255, b: 255, a: 1 };
 const BLACK: RGBA = { r: 0, g: 0, b: 0, a: 1 };
@@ -123,9 +124,7 @@ export function ColorConverterWidget() {
 
   return (
     <div className="space-y-3">
-      <div className="grid gap-3 lg:grid-cols-[1fr_1.25fr]">
-        {/* ---------------------------------------------------- picker */}
-        <div className="panel registered space-y-3 p-3">
+      <SplitPane id="color-converter-1" defaultRatio={0.444} minFirst={260} minSecond={260} collapsible="both" firstLabel="colour" secondLabel="formats" stackBelow="lg" gap={12} first={<><div className="panel registered space-y-3 p-3">
           <SVArea hsv={hsv} hueHex={hueHex} onChange={(s, v) => apply(hsv.h, s, v, alpha)} />
 
           <Bar
@@ -167,10 +166,7 @@ export function ColorConverterWidget() {
               <Shuffle size={15} />
             </button>
           </div>
-        </div>
-
-        {/* ---------------------------------------------------- formats */}
-        <div className="space-y-3">
+        </div></>} second={<><div className="space-y-3">
           <div className="panel">
             <div className="flex items-center justify-between border-b border-edge px-3 py-2">
               <span className="readout">Formats · ~{name}</span>
@@ -194,12 +190,10 @@ export function ColorConverterWidget() {
             <ContrastChip bg="#ffffff" fg={hex} label="on white" ratio={cWhite} />
             <ContrastChip bg="#000000" fg={hex} label="on black" ratio={cBlack} />
           </div>
-        </div>
-      </div>
+        </div></>} />
 
       {/* ----------------------------------------------- harmonies + shades */}
-      <div className="grid gap-3 lg:grid-cols-2">
-        <div className="panel p-3">
+      <SplitPane id="color-converter-2" defaultRatio={0.500} minFirst={260} minSecond={260} collapsible="both" firstLabel="colour" secondLabel="formats" stackBelow="lg" gap={12} first={<><div className="panel p-3">
           <p className="readout mb-2.5">Harmonies</p>
           <div className="space-y-2">
             {HARMONIES.map((h) => (
@@ -219,9 +213,7 @@ export function ColorConverterWidget() {
               </div>
             ))}
           </div>
-        </div>
-
-        <div className="panel p-3">
+        </div></>} second={<><div className="panel p-3">
           <p className="readout mb-2.5">Tints & shades</p>
           <div className="flex overflow-hidden rounded-[var(--radius-sm)]">
             {shadeRamp(hsv.h, hsv.s, 11).map((hx, i) => (
@@ -238,8 +230,7 @@ export function ColorConverterWidget() {
               </button>
             ))}
           </div>
-        </div>
-      </div>
+        </div></>} />
 
       {/* ---------------------------------------------------- gradient builder */}
       <GradientBuilder seed={hex} accentComplement={harmony(hsv.h, hsv.s, hsv.v, [180])[0]} />

@@ -52,6 +52,7 @@ import { CopyButton } from "@/components/copy-button";
 import { SHARE_SYNC_EVENT } from "@/components/share-button";
 import { readShareState, useShareState } from "@/lib/share-state";
 import { cn } from "@/lib/utils";
+import { SplitPane } from "@/components/ui/split-pane";
 
 const DRAFT_KEY = "bench:track-changes:draft";
 const VIEWS = ["inline", "split", "final"] as const;
@@ -442,9 +443,7 @@ export function TrackChangesWidget() {
       </div>
 
       {/* texts */}
-      <div className="grid gap-3 lg:grid-cols-2">
-        <Pane id="original" label="Original" placeholder="Paste the text you were given…" value={original} onChange={setOriginal} />
-        <Pane
+      <SplitPane id="track-changes" defaultRatio={0.500} minFirst={260} minSecond={260} collapsible="both" firstLabel="editor" secondLabel="redline" stackBelow="lg" gap={12} first={<><Pane id="original" label="Original" placeholder="Paste the text you were given…" value={original} onChange={setOriginal} /></>} second={<><Pane
           id="revision"
           label="Revision"
           placeholder="Edit the text here — every change shows below"
@@ -452,8 +451,7 @@ export function TrackChangesWidget() {
           onChange={setRevision}
           mirrored={revision === null}
           spell
-        />
-      </div>
+        /></>} />
 
       {/* redline */}
       <div className="panel flex flex-col" data-track-redline>

@@ -19,6 +19,7 @@ import {
 import { CopyButton } from "@/components/copy-button";
 import { SHARE_SYNC_EVENT } from "@/components/share-button";
 import { cn } from "@/lib/utils";
+import { SplitPane } from "@/components/ui/split-pane";
 
 const GRANULARITIES = ["line", "word", "char"] as const;
 const VIEWS = ["unified", "split"] as const;
@@ -205,10 +206,7 @@ export function DiffCheckerWidget() {
       </div>
 
       {/* inputs */}
-      <div className="grid gap-3 lg:grid-cols-2">
-        <Pane label="Original" value={a} onChange={setA} />
-        <Pane label="Changed" value={b} onChange={setB} />
-      </div>
+      <SplitPane id="diff-checker" defaultRatio={0.500} minFirst={260} minSecond={260} collapsible="both" firstLabel="original" secondLabel="changed" stackBelow="lg" gap={12} first={<><Pane label="Original" value={a} onChange={setA} /></>} second={<><Pane label="Changed" value={b} onChange={setB} /></>} />
 
       {patchOpen && (
         <div className="panel">

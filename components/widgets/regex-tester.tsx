@@ -9,6 +9,7 @@ import type { RegexRequest } from "./regex.worker";
 import { CopyButton } from "@/components/copy-button";
 import { SHARE_SYNC_EVENT } from "@/components/share-button";
 import { cn } from "@/lib/utils";
+import { SplitPane } from "@/components/ui/split-pane";
 
 const TIMEOUT_MS = 2500;
 const MATCH_LIMIT = 5000;
@@ -227,9 +228,7 @@ export function RegexTesterWidget() {
         </div>
       )}
 
-      <div className="grid gap-3 lg:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)]">
-        {/* test text with highlight overlay */}
-        <div className="panel flex min-w-0 flex-col">
+      <SplitPane id="regex-tester" defaultRatio={0.565} minFirst={260} minSecond={260} collapsible="both" firstLabel="pattern" secondLabel="matches" stackBelow="lg" gap={12} first={<><div className="panel flex min-w-0 flex-col">
           <div className="flex items-center justify-between border-b border-edge px-3 py-2">
             <span className="readout">Test text</span>
             {text && (
@@ -263,10 +262,7 @@ export function RegexTesterWidget() {
             <span>{[...text].length.toLocaleString()} ch</span>
             <span>{text ? text.split("\n").length : 0} ln</span>
           </div>
-        </div>
-
-        {/* matches */}
-        <div className="panel flex min-w-0 flex-col">
+        </div></>} second={<><div className="panel flex min-w-0 flex-col">
           <div className="flex items-center justify-between border-b border-edge px-3 py-2">
             <span className="readout">Matches</span>
             {matches.length > 0 && <CopyButton value={matches.map((m) => m.text).join("\n")} label="Copy all" />}
@@ -309,8 +305,7 @@ export function RegexTesterWidget() {
             )}
             {matches.length > LIST_LIMIT && <p className="px-3 py-2 text-[12px] text-faint">Showing the first {LIST_LIMIT} of {matches.length.toLocaleString()} matches.</p>}
           </div>
-        </div>
-      </div>
+        </div></>} />
 
       {/* replace */}
       <div className="panel">

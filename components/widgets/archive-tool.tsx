@@ -29,6 +29,7 @@ import {
 import { buildZip } from "@/lib/tools/files/zip-write";
 import { buildTarGz } from "@/lib/tools/files/tar-write";
 import { useUnsavedWork } from "@/lib/unsaved-work";
+import { SplitPane } from "@/components/ui/split-pane";
 
 // Same self-hosted worker + wasm as the comic reader (scripts/copy-vendor.mjs).
 Archive.init({ workerUrl: "/vendor/libarchive/worker-bundle.js" });
@@ -545,9 +546,7 @@ export function ArchiveCreateWidget() {
   };
 
   return (
-    <div className="grid gap-3 lg:grid-cols-[1.3fr_1fr]">
-      {/* sources */}
-      <div className="panel registered flex min-h-[380px] flex-col">
+    <SplitPane id="archive-tool" defaultRatio={0.565} minFirst={260} minSecond={260} collapsible="both" firstLabel="archive" secondLabel="files" stackBelow="lg" gap={12} first={<><div className="panel registered flex min-h-[380px] flex-col">
         <div className="flex items-center justify-between border-b border-edge p-2">
           <span className="readout px-1">
             Files {files.length > 0 && `· ${files.length} · ${formatBytes(totalIn)}`}
@@ -619,10 +618,7 @@ export function ArchiveCreateWidget() {
             </button>
           </div>
         )}
-      </div>
-
-      {/* settings + result */}
-      <div className="flex flex-col gap-3">
+      </div></>} second={<><div className="flex flex-col gap-3">
         <div className="panel registered space-y-4 p-4">
           <p className="readout">Output format</p>
           <div className="flex rounded-[var(--radius-sm)] border border-edge p-0.5">
@@ -689,7 +685,6 @@ export function ArchiveCreateWidget() {
             </a>
           </div>
         )}
-      </div>
-    </div>
+      </div></>} />
   );
 }

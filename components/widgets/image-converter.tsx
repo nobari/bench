@@ -5,6 +5,7 @@ import { useQueryState, parseAsString, parseAsInteger } from "nuqs";
 import { Download, ImagePlus, Loader, Trash2, Upload } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useUnsavedWork } from "@/lib/unsaved-work";
+import { SplitPane } from "@/components/ui/split-pane";
 
 interface Src {
   id: string;
@@ -135,9 +136,7 @@ export function ImageConverterWidget() {
   }, [srcs, busy, maxWidth, mime, lossy, quality, format, outs]);
 
   return (
-    <div className="grid gap-3 lg:grid-cols-[1.3fr_1fr]">
-      {/* sources */}
-      <div className="panel registered flex min-h-[440px] flex-col">
+    <SplitPane id="image-converter" defaultRatio={0.565} minFirst={260} minSecond={260} collapsible="both" firstLabel="images" secondLabel="settings" stackBelow="lg" gap={12} first={<><div className="panel registered flex min-h-[440px] flex-col">
         <div className="flex items-center justify-between border-b border-edge p-2">
           <span className="readout px-1">Source {srcs.length > 0 && `· ${srcs.length}`}</span>
           {srcs.length > 0 && (
@@ -176,10 +175,7 @@ export function ImageConverterWidget() {
             </button>
           </div>
         )}
-      </div>
-
-      {/* settings + results */}
-      <div className="flex flex-col gap-3">
+      </div></>} second={<><div className="flex flex-col gap-3">
         <div className="panel registered space-y-4 p-4">
           <p className="readout">Output</p>
           <div className="flex rounded-[var(--radius-sm)] border border-edge p-0.5">
@@ -228,7 +224,6 @@ export function ImageConverterWidget() {
             ))}
           </div>
         )}
-      </div>
-    </div>
+      </div></>} />
   );
 }

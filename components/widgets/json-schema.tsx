@@ -27,6 +27,7 @@ import { CopyButton } from "@/components/copy-button";
 import { JsonBlock, JsonEditor } from "@/components/json-editor";
 import { SHARE_SYNC_EVENT } from "@/components/share-button";
 import { cn } from "@/lib/utils";
+import { SplitPane } from "@/components/ui/split-pane";
 
 const MODES = ["validate", "design"] as const;
 const DRAFT_PREFS = ["auto", "2020-12", "2019-09", "draft-07", "draft-06", "draft-04"] as const;
@@ -316,8 +317,7 @@ export function JsonSchemaWidget() {
 
       {mode === "validate" ? (
         <>
-          <div className="grid gap-3 lg:grid-cols-2">
-            <Editor
+          <SplitPane id="json-schema-1" defaultRatio={0.500} minFirst={260} minSecond={260} collapsible="both" firstLabel="designer" secondLabel="schema" stackBelow="lg" gap={12} first={<><Editor
               label="Schema"
               value={schemaText}
               onChange={setSchemaText}
@@ -331,8 +331,7 @@ export function JsonSchemaWidget() {
                 </button>
               }
               data-pane="schema"
-            />
-            <Editor
+            /></>} second={<><Editor
               label="Data"
               value={dataText}
               onChange={setDataText}
@@ -341,8 +340,7 @@ export function JsonSchemaWidget() {
               footerTone={syntax.data.ok ? "muted" : "danger"}
               onFormat={syntax.data.ok ? (m) => format("data", m) : undefined}
               data-pane="data"
-            />
-          </div>
+            /></>} />
 
           <div className={cn("panel", run && !stale && (run.schemaErrors.length > 0 || (run.data && !run.data.valid)) && "border-danger/40")} data-result>
             <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-edge px-3 py-2">
@@ -415,9 +413,7 @@ export function JsonSchemaWidget() {
           </div>
         </>
       ) : (
-        <div className="grid gap-3 lg:grid-cols-[minmax(0,1.15fr)_minmax(0,1fr)]">
-          {/* designer */}
-          <div className="panel flex min-w-0 flex-col">
+        <SplitPane id="json-schema-2" defaultRatio={0.535} minFirst={260} minSecond={260} collapsible="both" firstLabel="designer" secondLabel="schema" stackBelow="lg" gap={12} first={<><div className="panel flex min-w-0 flex-col">
             <div className="flex flex-wrap items-center gap-2 border-b border-edge px-3 py-2">
               <span className="readout">Designer</span>
               <div className="ml-auto flex flex-wrap items-center gap-1.5">
@@ -557,10 +553,7 @@ export function JsonSchemaWidget() {
                 ))}
               </datalist>
             </div>
-          </div>
-
-          {/* output */}
-          <div className="panel flex min-w-0 flex-col">
+          </div></>} second={<><div className="panel flex min-w-0 flex-col">
             <div className="flex items-center justify-between border-b border-edge px-3 py-2">
               <span className="readout">Generated schema · {draftLabel(root.schemaUri)}</span>
               <CopyButton value={outputSchema} />
@@ -570,8 +563,7 @@ export function JsonSchemaWidget() {
               <span>{outputSchema.length.toLocaleString()} ch</span>
               <span className="ml-auto">Unknown keywords from imported schemas are kept as-is.</span>
             </div>
-          </div>
-        </div>
+          </div></>} />
       )}
     </div>
   );

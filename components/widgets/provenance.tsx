@@ -40,6 +40,7 @@ import { DEMO_CERT_CHAIN_PEM, DEMO_PRIVATE_KEY_PEM } from "@/lib/tools/image/dem
 import { cn } from "@/lib/utils";
 import { useUnsavedWork } from "@/lib/unsaved-work";
 import { JsonBlock } from "@/components/json-editor";
+import { SplitPane } from "@/components/ui/split-pane";
 
 /* ------------------------------------------------------------------ data */
 
@@ -1040,8 +1041,7 @@ function SignDemo({ file, analysis, hasManifest, onSigned }: { file: File | null
   }
 
   return (
-    <div className="grid gap-3 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
-      <div className="panel space-y-3 p-4">
+    <SplitPane id="provenance" defaultRatio={0.600} minFirst={260} minSecond={260} collapsible="both" firstLabel="file" secondLabel="details" stackBelow="lg" gap={12} first={<><div className="panel space-y-3 p-4">
         <span className="readout">Add Content Credentials to this file</span>
         <p className="text-[13px] leading-relaxed text-muted">
           This signs the loaded file with a <strong className="text-ink">public C2PA test certificate</strong> (“C2PA Test Signing Cert — FOR TESTING ONLY”, from the c2pa-rs project). The result is a real, spec-compliant manifest: the content is hashed, the
@@ -1083,8 +1083,7 @@ function SignDemo({ file, analysis, hasManifest, onSigned }: { file: File | null
             </span>
           )}
         </div>
-      </div>
-      <div className="panel p-4 text-[13px] leading-relaxed text-muted">
+      </div></>} second={<><div className="panel p-4 text-[13px] leading-relaxed text-muted">
         <span className="readout">What happens under the hood</span>
         <ol className="mt-2 list-decimal space-y-1.5 pl-5">
           <li>The SDK (c2pa-rs compiled to WebAssembly) builds a claim: title, format, a <span className="font-mono text-[12px]">c2pa.actions</span> assertion with your digital source type, and a <span className="font-mono text-[12px]">c2pa.hash.data</span> assertion that hashes every byte of the file except the manifest itself.</li>
@@ -1092,8 +1091,7 @@ function SignDemo({ file, analysis, hasManifest, onSigned }: { file: File | null
           <li>Claim, assertions and signature are packed into JUMBF boxes and written into the container — APP11 segments for JPEG, a <span className="font-mono text-[12px]">caBX</span> chunk for PNG, a <span className="font-mono text-[12px]">uuid</span> box for MP4/HEIF, and so on.</li>
           <li>Any C2PA reader can now verify the hash and signature. Only a certificate on a published trust list makes the result <em>trusted</em> — that&apos;s the step a public test key can&apos;t take.</li>
         </ol>
-      </div>
-    </div>
+      </div></>} />
   );
 }
 

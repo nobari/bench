@@ -35,6 +35,7 @@ import { SHARE_SYNC_EVENT } from "@/components/share-button";
 import { readShareState, useShareState } from "@/lib/share-state";
 import { useUnsavedWork } from "@/lib/unsaved-work";
 import { JsonEditor } from "@/components/json-editor";
+import { SplitPane } from "@/components/ui/split-pane";
 
 const SAMPLE = `{
   "name": "Bench",
@@ -164,9 +165,7 @@ export function JsonViewerWidget() {
   const bytes = new TextEncoder().encode(text).length;
 
   return (
-    <div className="grid gap-3 lg:grid-cols-2">
-      {/* ---------------------------------------------------------- editor */}
-      <div className="panel registered flex min-h-[480px] flex-col">
+    <SplitPane id="json-viewer" defaultRatio={0.500} minFirst={260} minSecond={260} collapsible="both" firstLabel="input" secondLabel="tree" stackBelow="lg" gap={12} first={<><div className="panel registered flex min-h-[480px] flex-col">
         <div className="flex flex-wrap items-center gap-1.5 border-b border-edge p-2">
           <span className="readout mr-1 px-1">Source</span>
           <ToolbarBtn onClick={onFormat} disabled={!parsed?.ok} icon={AlignLeft} label="Format" />
@@ -222,10 +221,7 @@ export function JsonViewerWidget() {
           )}
           <span className="ml-auto text-faint">{bytes} B</span>
         </div>
-      </div>
-
-      {/* ------------------------------------------------------------ view */}
-      <div className="panel registered flex min-h-[480px] flex-col">
+      </div></>} second={<><div className="panel registered flex min-h-[480px] flex-col">
         <div className="flex flex-wrap items-center gap-1.5 border-b border-edge p-2">
           <div className="flex rounded-[var(--radius-sm)] border border-edge p-0.5">
             <TabBtn active={view === "tree"} onClick={() => setView("tree")} icon={ListTree} label="Tree" />
@@ -296,8 +292,7 @@ export function JsonViewerWidget() {
             </div>
           )}
         </div>
-      </div>
-    </div>
+      </div></>} />
   );
 }
 

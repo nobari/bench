@@ -13,6 +13,7 @@ import {
 } from "@/lib/tools/text/transforms";
 import { CopyButton } from "@/components/copy-button";
 import { cn } from "@/lib/utils";
+import { SplitPane } from "@/components/ui/split-pane";
 
 interface Props {
   preset?: string;
@@ -92,9 +93,7 @@ export function TextTransformWidget({ preset, featured }: Props) {
       </div>
 
       {/* io grid */}
-      <div className="grid gap-3 lg:grid-cols-2">
-        {/* input */}
-        <div className="panel registered flex flex-col">
+      <SplitPane id="text-transform" defaultRatio={0.500} minFirst={260} minSecond={260} collapsible="both" firstLabel="input" secondLabel="output" stackBelow="lg" gap={12} first={<><div className="panel registered flex flex-col">
           <div className="flex items-center justify-between border-b border-edge px-3 py-2">
             <span className="readout">Input</span>
             {input && (
@@ -114,10 +113,7 @@ export function TextTransformWidget({ preset, featured }: Props) {
             className="min-h-[260px] flex-1 resize-y bg-transparent p-3 font-mono text-sm leading-relaxed text-ink outline-none placeholder:text-faint"
           />
           <StatBar stats={inStats} />
-        </div>
-
-        {/* output */}
-        <div
+        </div></>} second={<><div
           className={cn(
             "panel registered flex flex-col",
             error && "border-danger/50",
@@ -146,8 +142,7 @@ export function TextTransformWidget({ preset, featured }: Props) {
             />
           )}
           <StatBar stats={outStats} />
-        </div>
-      </div>
+        </div></>} />
     </div>
   );
 }

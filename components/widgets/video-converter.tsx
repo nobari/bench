@@ -42,6 +42,7 @@ import { buildZip } from "@/lib/tools/files/zip-write";
 import { cn } from "@/lib/utils";
 import { useUnsavedWork } from "@/lib/unsaved-work";
 import type { AudioCodec, Rotation, StreamTargetChunk, VideoCodec } from "mediabunny";
+import { SplitPane } from "@/components/ui/split-pane";
 
 const SEL = "h-8 rounded-[var(--radius-sm)] border border-edge bg-base px-2 pr-7 text-[13px] text-ink outline-none focus:border-accent";
 const INPUT = "h-8 w-full rounded-[var(--radius-sm)] border border-edge bg-base px-2 text-[13px] text-ink outline-none focus:border-accent";
@@ -356,9 +357,7 @@ export function VideoConverterWidget() {
   const speedOf = (j: Job) => (j.processed && j.startedAt ? j.processed / Math.max(0.001, (performance.now() - j.startedAt) / 1000) : null);
 
   return (
-    <div className="grid gap-3 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
-      {/* files & results */}
-      <div className="panel flex min-h-[320px] flex-col">
+    <SplitPane id="video-converter" defaultRatio={0.600} minFirst={260} minSecond={260} collapsible="both" firstLabel="files" secondLabel="settings" stackBelow="lg" gap={12} first={<><div className="panel flex min-h-[320px] flex-col">
         <div className="flex items-center justify-between border-b border-edge px-3 py-2">
           <span className="readout">Files {jobs.length > 0 && `· ${jobs.length}`}</span>
           <div className="flex items-center gap-3">
@@ -485,10 +484,7 @@ export function VideoConverterWidget() {
             ))}
           </ul>
         )}
-      </div>
-
-      {/* settings */}
-      <div className="flex flex-col gap-3">
+      </div></>} second={<><div className="flex flex-col gap-3">
         <div className="panel space-y-3 p-3">
           <div className="flex flex-wrap items-center gap-1.5" data-convert-presets>
             <span className="readout mr-1">Presets</span>
@@ -798,7 +794,6 @@ export function VideoConverterWidget() {
           </div>
           <p className="text-[12px] text-faint">Streams whose codec already fits the container are copied as they are unless something about them changes, so a remux or a trim is lossless and takes seconds; re-encoding runs at the speed of this device&apos;s encoders.</p>
         </div>
-      </div>
-    </div>
+      </div></>} />
   );
 }
