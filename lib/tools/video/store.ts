@@ -413,6 +413,37 @@ export class ProjectStore {
     }
   }
 
+  /** Files at the top of the project folder (sub-folders excluded), newest first. */
+  async listFiles(): Promise<{ name: string; size: number; lastModified: number }[]> {
+    if (!this.dir) return [];
+    const out: { name: string; size: number; lastModified: number }[] = [];
+    try {
+      for await (const [name, h] of this.dir as unknown as AsyncIterable<[string, FileSystemHandle]>) {
+        if (h.kind !== "file") continue;
+        try {
+          const f = await (h as FileSystemFileHandle).getFile();
+          out.push({ name, size: f.size, lastModified: f.lastModified });
+        } catch {
+          /* unreadable entry */
+        }
+      }
+    } catch {
+      /* not iterable */
+    }
+    return out.sort((a, b) => b.lastModified - a.lastModified);
+  }
+
+  /** The handle of a file in the folder (or a sub-folder), for writing to it in place; null when it is not there. */
+  async fileHandle(name: string, sub?: string): Promise<FileSystemFileHandle | null> {
+    if (!this.dir) return null;
+    try {
+      const parent = sub ? await this.dir.getDirectoryHandle(sub) : this.dir;
+      return await parent.getFileHandle(name);
+    } catch {
+      return null;
+    }
+  }
+
   /** Names of the sub-folders of the project folder. */
   async subFolders(): Promise<string[]> {
     if (!this.dir) return [];

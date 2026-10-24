@@ -2,12 +2,12 @@
 
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { AlertTriangle, Camera, Check, ChevronDown, ChevronRight, ChevronUp, Sparkles, Circle, Clapperboard, Crop, Download, FolderOpen, Gauge, Loader, Maximize2, Minimize2, Music, Pause, Play, Repeat, Save, Scissors, SkipBack, SkipForward, SlidersHorizontal, StepBack, StepForward, Trash2, Type, Upload, Volume2, VolumeX, Keyboard, Search, Shuffle, X } from "lucide-react";
+import { AlertTriangle, Camera, ChevronDown, ChevronRight, ChevronUp, Sparkles, Clapperboard, Crop, Download, FolderOpen, Gauge, Loader, Maximize2, Minimize2, Music, Pause, Play, Repeat, Save, Scissors, SkipBack, SkipForward, SlidersHorizontal, StepBack, StepForward, Trash2, Type, Upload, Volume2, VolumeX, Keyboard, Search, Shuffle, X } from "lucide-react";
 import { DEFAULT_EXPORT, NEUTRAL_GRADE, NEUTRAL_TRANSFORM, TITLE_ALIGNS, TITLE_FAMILIES, TITLE_FONTS, TITLE_POSITIONS, TITLE_SHADOWS, TITLE_WEIGHTS, TRANSITIONS, addTransitionAt, appendMusic, applyAudioTo, applyGradeTo, applyTransitionToAll, clipAt, crossfades, dbToGain, effectiveMusicEnd, estimateExport, exportRange, fmtTime, musicGainAt, musicLength, newId, newProject, newTitle, orderRecordings, placeClips, planExport, removeRange, reorderMusic, setTransition, splitClip, timelineDuration, titleLanes, transitionAt, transitionWindows, CLIP_SPEEDS, canMergeWithNext, clipLength, clipSpeed, groupOf, sourceTimeAt, mergeWithNext, moveClip, unjoin, updateClip, visibleCuts, type Clip, type MediaRef, type MusicTrack, type Project, type ProxyHeight, type Title, type TitleFont, isFileLutKind, type FileLutKind, type LutKind, type MathLutKind, type TitleAlign, type TitlePosition, type TitleShadow, type Transition, type TransitionKind, type ExportTags, type IntroSettings, type IntroCard, DEFAULT_CARD, cardSettings, hasCard, reorderClip, parseTime, type SteadyLights, STEADY_FRAMES, clampMusicStart, musicUnused, shuffleFillMusic, describeWhere, type MediaWhere, exportFingerprint, SOUND_MODES, SOUND_LABELS, soundLevels, applySoundLevels, soundState, type SoundMode, type SoundLevels } from "@/lib/tools/video/project";
 import { gainToReach, YOUTUBE_LUFS, type Loudness } from "@/lib/tools/video/loudness";
 import { drawTransition } from "@/lib/tools/video/transitions";
 import { LUT_OPTIONS, buildDlogLut, deriveLut, fetchOfficialLut, lutToCube, parseCube, type Lut3D } from "@/lib/tools/video/lut";
-import { fmtBytes, fmtDelta, fmtDuration, fmtMs, type EstimateSource, type ExportProgress, type SpeedPriors, type StepProgress } from "@/lib/tools/video/progress";
+import { fmtBytes, fmtDuration, fmtMs, type ExportProgress, type SpeedPriors, type StepProgress } from "@/lib/tools/video/progress";
 import { buildProxy, drawOverlays, encoderSupport, exportProject, fixLevel, Grader, MAX_AUDIBLE_SPEED, measureFile, measureLoudness, MIN_AUDIBLE_SPEED, probe, renderFrame, renderSceneThumbs, scanMoments, scanMotion, Steadier, type ExportFault, type ExportManifest, type PartStore } from "@/lib/tools/video/engine";
 import { INTRO_STYLES, addSceneAt, buildIntro, describeIntro, drawIntroFx, hasIntro, introCandidates, introFrameAt, introLength, introRegion, introStyle, mainClips, moveScene, pickMoments, removeIntro, removeScene, restyleIntro, sceneSecondsFor, scoreMoments, setSceneSeconds, shiftAfterIntro, styledGrade, sceneFootage, minSceneSeconds, introBlendAt } from "@/lib/tools/video/intro";
 import { ProjectStore, hasFileSystemAccess, AUTOSAVE_FILE, FRAMES_DIR, PROJECT_FILE, PROXY_DIR } from "@/lib/tools/video/store";
@@ -18,14 +18,15 @@ import { useUnsavedWork } from "@/lib/unsaved-work";
 import { useKeepAwake } from "@/lib/keep-awake";
 import { ENOUGH_SPACE, LOW_SPACE, estimateFree, overrideFreeSpace } from "@/lib/tools/video/space";
 import { PART_SECONDS } from "@/lib/tools/video/engine";
+import { GHOST, INPUT, PRIMARY, RANGE, SEL } from "./video-styles";
+import { ExportDone, ExportFiles, ExportRun, ExportSummary, PHASE_LABEL, Preflight, PresetsRow, Section, type DoneResult, type ExportJobView, type FileEntry, type FixState, type ResumableView, type RunEvent, type Skip } from "./video-export";
+import { applyPreset, matchPreset } from "@/lib/tools/video/export-presets";
+import { preflight, preflightBlocks } from "@/lib/tools/video/preflight";
+import { applyRepair, checkMp4, planRepair, type Mp4Check } from "@/lib/tools/video/check";
+import { defaultSpeeds } from "@/lib/tools/video/progress";
 
-const SEL = "h-8 rounded-[var(--radius-sm)] border border-edge bg-base px-2 pr-7 text-[13px] text-ink outline-none focus:border-accent";
-const INPUT = "h-8 w-full rounded-[var(--radius-sm)] border border-edge bg-base px-2 text-[13px] text-ink outline-none focus:border-accent";
-const GHOST = "inline-flex h-8 items-center gap-1.5 rounded-[var(--radius-sm)] border border-edge px-2.5 text-[12.5px] text-muted transition-colors hover:border-accent hover:text-accent disabled:opacity-40";
 /** A key hint at the end of a button label. */
 const Key = ({ k }: { k: string }) => <kbd className="ml-auto rounded border border-edge px-1 font-mono text-[10px] leading-4 text-faint max-sm:hidden">{k}</kbd>;
-const PRIMARY = "inline-flex h-9 items-center gap-2 rounded-[var(--radius-sm)] bg-accent px-3.5 text-sm font-medium text-on-accent hover:bg-[var(--color-accent-hover)] disabled:opacity-40";
-const RANGE = "h-1.5 w-full cursor-pointer appearance-none rounded-full bg-raised accent-[var(--accent)]";
 const LANE_COLORS = ["#8a8f99", "#5ab3d6", "#d9a400"];
 const POSITION_NAMES: Record<TitlePosition, string> = { tl: "Top left", tc: "Top centre", tr: "Top right", ml: "Middle left", mc: "Centre", mr: "Middle right", bl: "Bottom left", bc: "Bottom centre", br: "Bottom right" };
 const KIND_LABELS: Record<Title["kind"], string> = { intro: "Intro", title: "Title", lowerThird: "Lower third" };
@@ -57,27 +58,12 @@ const TABS: [Tab, string, typeof Scissors][] = [
   ["export", "Export", Download],
 ];
 
-interface Job {
-  kind: "proxy" | "export" | "frame" | "intro" | "stops" | "loudness" | "fix";
-  label: string;
+/** A running job; the export fields (progress, output, pause, faults, parts) are what the run view shows. */
+interface Job extends ExportJobView {
+  kind: "proxy" | "export" | "frame" | "intro" | "stops" | "loudness" | "fix" | "check";
   fraction: number;
   message?: string;
   abort: AbortController;
-  /** Export only: the live numbers, the output file, and whether it is paused. */
-  progress?: ExportProgress;
-  output?: { name: string; codec: string; width: number; height: number; bitrateMbps: number; preset: string; estimatedBytes: number };
-  paused?: boolean;
-  /** Export only: paused by the space watchdog (or a failed write) until the disk has room again. */
-  lowSpace?: boolean;
-  /** Free space as the browser last reported it. */
-  freeBytes?: number | null;
-  /** Export only: a frame failed and the engine waits for an answer. */
-  fault?: { fault: ExportFault; resolve: (answer: "skip" | "stop", all?: boolean) => void };
-  /** Export only: written in parts that survive a stop, and where this run picked up. */
-  partsMode?: boolean;
-  resumedFrom?: number;
-  /** Export only: how the parts are being joined into the file. */
-  join?: import("@/lib/tools/video/engine").JoinInfo;
 }
 
 /**
@@ -221,7 +207,10 @@ const JOB_WORK: Record<Job["kind"], string> = {
   stops: "The scan for stops is still running in the video editor; leaving now would abandon it.",
   loudness: "A loudness measurement is running in the video editor; leaving now would abandon it.",
   fix: "A fixed copy of a file is being written in the video editor; leaving now would abandon it.",
+  check: "A file's index is being checked or repaired in the video editor.",
 };
+/** Which export sections are open, remembered per browser. */
+const SECTIONS_KEY = "bench:video:export-sections";
 /** Holding Space this long (or the first key repeat) switches the preview to double speed instead of toggling play. */
 const HOLD_MS = 250;
 /** Browsers refuse playback rates above 16× on a video element, and silence the sound above 4×. */
@@ -285,12 +274,28 @@ export function VideoEditorWidget() {
   const suppressClickRef = useRef(false);
   const [timeEdit, setTimeEdit] = useState<string | null>(null);
   const [job, setJob] = useState<Job | null>(null);
+  // The export views: set-up or the Files list; the file name when the user typed one; which sections are open.
+  const [exportView, setExportView] = useState<"setup" | "files">("setup");
+  const [exportName, setExportName] = useState<string | null>(null);
+  const [openSections, setOpenSections] = useState<Record<string, boolean>>({});
+  /** How the last export ended, shown as a card until dismissed; the run's log; stretches skipped; the live frame. */
+  const [done, setDone] = useState<DoneResult | null>(null);
+  const [events, setEvents] = useState<RunEvent[]>([]);
+  const [skipped, setSkipped] = useState<Skip[]>([]);
+  const liveRef = useRef<HTMLCanvasElement | null>(null);
+  const [liveAt, setLiveAt] = useState<number | null>(null);
+  /** What the pre-flight needs from the machine: free space, power, learned speeds. */
+  const [freeBytes, setFreeBytes] = useState<number | null>(null);
+  const [onBattery, setOnBattery] = useState<boolean | null>(null);
+  const [priors, setPriors] = useState<SpeedPriors | undefined>(undefined);
+  /** Videos in the project folder besides the recordings, for the Files view. */
+  const [files, setFiles] = useState<FileEntry[]>([]);
+  const [filesLoading, setFilesLoading] = useState(false);
   /** The mix's measured loudness, keyed to the sound state it was measured in; predicted after a level change. */
   const [loudness, setLoudness] = useState<{ fingerprint: string; result: Loudness; predicted?: boolean } | null>(null);
   const [fixFile, setFixFile] = useState<{ file: File; loudness: Loudness } | null>(null);
   const [fixTarget, setFixTarget] = useState(YOUTUBE_LUFS);
   const [fixed, setFixed] = useState<{ name: string; bytes: number; gainDb: number } | null>(null);
-  const fixInput = useRef<HTMLInputElement>(null);
   const progressAt = useRef(0);
   useUnsavedWork(job ? JOB_WORK[job.kind] : null);
   useKeepAwake(!!job, "bench-video-job");
@@ -442,6 +447,48 @@ export function VideoEditorWidget() {
     if (on && "Notification" in window && Notification.permission === "default") void Notification.requestPermission().then((perm) => setNotifyPermission(perm));
   };
   const notifyAt = useRef(0);
+  useEffect(() => {
+    queueMicrotask(() => {
+      try {
+        const v = localStorage.getItem(SECTIONS_KEY);
+        if (v) setOpenSections(JSON.parse(v) as Record<string, boolean>);
+      } catch {
+        /* storage unavailable or unreadable */
+      }
+    });
+  }, []);
+  const toggleSection = (id: string) =>
+    setOpenSections((o) => {
+      const next = { ...o, [id]: !o[id] };
+      try {
+        localStorage.setItem(SECTIONS_KEY, JSON.stringify(next));
+      } catch {
+        /* storage unavailable */
+      }
+      return next;
+    });
+  // Battery state, where the browser tells (Chrome does): a long export on battery deserves a word.
+  useEffect(() => {
+    type Battery = EventTarget & { charging: boolean };
+    const nav = navigator as Navigator & { getBattery?: () => Promise<Battery> };
+    if (!nav.getBattery) return;
+    let battery: Battery | null = null;
+    const update = () => setOnBattery(battery ? !battery.charging : null);
+    let active = true;
+    nav
+      .getBattery()
+      .then((b) => {
+        if (!active) return;
+        battery = b;
+        b.addEventListener("chargingchange", update);
+        update();
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+      battery?.removeEventListener("chargingchange", update);
+    };
+  }, []);
   /** Every ten seconds while the tab is hidden, and on a phase change, replace the progress notification. */
   const maybeNotify = (title: string, p: ExportProgress) => {
     if (!notify || document.visibilityState === "visible") return;
@@ -546,7 +593,6 @@ export function VideoEditorWidget() {
   }, [range]);
   const setRange = (r: { from: number; to: number } | null) => setProject((p) => ({ ...p, export: { ...p.export, range: r } }));
   const setTags = (patch: Partial<ExportTags>) => setProject((p) => ({ ...p, export: { ...p.export, tags: { ...p.export.tags, ...patch } } }));
-  const estimate = useMemo(() => estimateExport(project, spans), [project, spans]);
   const fingerprint = useMemo(() => exportFingerprint(project), [project]);
   /** Everything the sound mix depends on; a measurement is current while this is unchanged. */
   const audioKey = useMemo(
@@ -679,6 +725,219 @@ export function VideoEditorWidget() {
     await store.remove(null, resumable.folder);
     setResumable(null);
   };
+  /* ------------------------------------------------------------ export set-up: name, estimate, pre-flight, files */
+  const firstMedia = project.media[project.clips[0]?.media ?? ""];
+  const outH = project.export.resolution === "source" ? (firstMedia?.height ?? 4320) : project.export.resolution;
+  const outW = firstMedia?.width && firstMedia.height ? Math.round((firstMedia.width * (outH / firstMedia.height)) / 2) * 2 : Math.round((outH * 16) / 9);
+  const sizeLabel = outH >= 4320 ? "8K" : outH >= 2160 ? "4K" : `${outH}p`;
+  const autoName = `${project.name.replace(/[^\w-]+/g, "-")}-${sizeLabel}${range ? `-${Math.round(range.from)}s-${Math.round(range.to)}s` : ""}.mp4`;
+  const fileName = exportName === null ? autoName : /\.mp4$/i.test(exportName) ? exportName : `${exportName}.mp4`;
+  const speedProfile = `${firstMedia?.height ?? 0}>${outH}:${project.export.codec}:${project.export.preset}`;
+  // Which encoders exist at the output size (the header's warning is about 8K; a 1080p export may well have H.264).
+  const [outSupport, setOutSupport] = useState<{ hevc: boolean; avc: boolean; w: number; h: number } | null>(null);
+  useEffect(() => {
+    let active = true;
+    encoderSupport(outW, outH)
+      .then((sup) => active && setOutSupport({ ...sup, w: outW, h: outH }))
+      .catch(() => active && setOutSupport({ hevc: false, avc: false, w: outW, h: outH }));
+    return () => {
+      active = false;
+    };
+  }, [outW, outH]);
+  useEffect(() => {
+    let active = true;
+    queueMicrotask(() => {
+      if (active) setPriors(loadPriors(speedProfile, `${outH}p ${project.export.codec.toUpperCase()}`));
+    });
+    return () => {
+      active = false;
+    };
+  }, [speedProfile, outH, project.export.codec, done]);
+  // Free space, looked up while the Export tab shows and refreshed every so often.
+  useEffect(() => {
+    if (tab !== "export") return;
+    let active = true;
+    const look = () => void estimateFree().then((free) => active && setFreeBytes(free));
+    look();
+    const id = setInterval(look, 15000);
+    return () => {
+      active = false;
+      clearInterval(id);
+    };
+  }, [tab, done, job]);
+  const fps = firstMedia?.fps || 30;
+  const guess = defaultSpeeds((firstMedia?.width ?? outW) * (firstMedia?.height ?? outH), outW * outH);
+  const estimate = useMemo(() => estimateExport(project, spans, (priors?.encode ?? guess.encode) * fps, 0.4, priors?.closeBytesPerS ?? guess.closeBytesPerS), [project, spans, priors, fps, guess.encode, guess.closeBytesPerS]);
+  const estimateBasis = priors?.label ? `speed of ${priors.label}` : "a first guess; your first export teaches it";
+  const resumableView: ResumableView | null = resumable
+    ? (() => {
+        const live = resumable.manifest.parts.filter((p) => !p.consumed);
+        const consumed = resumable.manifest.parts.filter((p) => p.consumed);
+        return { name: resumable.manifest.name, parts: live.length, bytes: resumable.bytes, endAt: live.length ? Math.max(...live.map((p) => p.end)) : 0, total: resumable.manifest.total, matches: resumable.manifest.fingerprint === fingerprint, folder: resumable.folder, consumedParts: consumed.length, consumedSeconds: consumed.reduce((a, p) => a + (p.end - p.start), 0), skipped: resumable.manifest.skipped.length };
+      })()
+    : null;
+  const checks = preflight(project, estimate, outH, {
+    fileSystem: hasFileSystemAccess(),
+    folderName: folder,
+    missing: missingMedia.length,
+    freeBytes,
+    support: outSupport && outSupport.w === outW && outSupport.h === outH ? outSupport : null,
+    loudness: loudness ? { integrated: loudness.result.integrated, peakDb: loudness.result.peakDb, stale: loudness.fingerprint !== audioKey, predicted: !!loudness.predicted, matchGain: Math.round(matchGain * 10) / 10 } : null,
+    resumable: resumableView,
+    onBattery,
+  });
+  const blockers = preflightBlocks(checks).map((i) => i.title);
+  const codecLabel = project.export.codec === "hevc" ? "HEVC" : "H.264";
+  const presetLabel = { quality: "quality", balanced: "balanced", fast: "fast" }[project.export.preset];
+  const pictureLine = `${codecLabel} · ${outW}×${outH} · ${project.export.bitrateMbps} Mbps · ${presetLabel} encoder · smart copy ${project.export.smartCopy ? "on" : "off"}${project.export.steadyLights && project.export.steadyLights !== "off" ? " · steady lights" : ""}`;
+  const soundLine = `${SOUND_LABELS[project.sound ?? "footage"]} · camera ${fmtDb(levels.camera)} · music ${fmtDb(levels.music)} · AAC ${project.export.audioBitrateKbps} kbps`;
+  const tagsLine = project.export.tags.title.trim() ? `${project.export.tags.kind === "music-video" ? "Music video" : "Video"} · “${project.export.tags.title}”${project.export.tags.artist ? ` · ${project.export.tags.artist}` : ""}${project.export.tags.album ? ` · ${project.export.tags.album}` : ""}` : `${project.export.tags.kind === "music-video" ? "Music video" : "Video"} · no title yet (the project name is used)`;
+  const previewScopeLabel = { around: "30 s around the playhead", intro: "the intro", range: "the export range", all: "the whole timeline" }[previewOpts.scope];
+  const testLine = `${Math.min(previewOpts.height, firstMedia?.height ?? previewOpts.height)}p · ${previewScopeLabel}`;
+  const optionsLine = `${notify ? "Notifications on" : "No notifications"} · test render ${testLine}`;
+  const summaryLines = [range ? `${fmtTime(range.to - range.from)} of ${fmtTime(duration)}` : fmtTime(duration), `${outW}×${outH} ${codecLabel} ${project.export.bitrateMbps} Mbps`, `AAC ${project.export.audioBitrateKbps} kbps · ${SOUND_LABELS[project.sound ?? "footage"]}`];
+  const onPreflightAction = (id: string) => {
+    if (id === "pick-folder") void chooseFolder();
+    else if (id === "locate") void relinkFiles();
+    else if (id === "use-avc") setProject((p) => ({ ...p, export: { ...p.export, codec: "avc" } }));
+    else if (id === "use-hevc") setProject((p) => ({ ...p, export: { ...p.export, codec: "hevc" } }));
+    else if (id === "lower-resolution") setProject((p) => ({ ...p, export: { ...p.export, resolution: 2160 } }));
+    else if (id === "whole-timeline") setRange(null);
+    else if (id === "apply-levels") setProject((p) => applySoundLevels(p));
+    else if (id === "measure") void measureMix();
+    else if (id === "match") matchLevel();
+    else if (id.startsWith("set-bitrate:")) setProject((p) => ({ ...p, export: { ...p.export, bitrateMbps: Number(id.slice("set-bitrate:".length)) } }));
+    else if (id === "open-tags") setOpenSections((o) => ({ ...o, tags: true }));
+    else if (id === "resume") void runExport(resumable);
+    else if (id === "discard") void discardParts();
+  };
+  /** The frame the engine just composed, scaled into the run view's small canvas. */
+  const drawLive = (frame: OffscreenCanvas, t: number) => {
+    const c = liveRef.current;
+    if (!c) return;
+    const w = 320, h = Math.max(1, Math.round((w * frame.height) / frame.width));
+    if (c.width !== w || c.height !== h) {
+      c.width = w;
+      c.height = h;
+    }
+    c.getContext("2d")?.drawImage(frame, 0, 0, w, h);
+    setLiveAt(t);
+  };
+  const logEvent = (kind: RunEvent["kind"], text: string) => setEvents((l) => [...l, { at: Date.now(), kind, text }]);
+  /** Checks the index of a file just written (the result card) and keeps the verdict with it. */
+  const checkWritten = async (name: string) => {
+    setDone((d) => (d && d.name === name ? { ...d, checking: true, checkError: undefined } : d));
+    try {
+      const f = await store.fileIn(name);
+      if (!f) throw new Error("it is not in the project folder any more");
+      const check = await checkMp4(f);
+      setDone((d) => (d && d.name === name ? { ...d, checking: false, check } : d));
+    } catch (e) {
+      setDone((d) => (d && d.name === name ? { ...d, checking: false, checkError: e instanceof Error ? e.message : String(e) } : d));
+    }
+  };
+  /**
+   * Repairs a file's index in place: only the moov at the tail is rewritten, after the old one is saved beside the
+   * file as a backup; the picture and sound are not read or written.
+   */
+  const repairIndexOf = async (name: string): Promise<{ changes: string[]; check: Mp4Check } | null> => {
+    if (job) return null;
+    const f = await store.fileIn(name);
+    const h = await store.fileHandle(name);
+    if (!f || !h) {
+      setError(`${name} is not in the project folder any more.`);
+      return null;
+    }
+    const abort = new AbortController();
+    setJob({ kind: "check", label: `Repairing the index of ${name}`, fraction: 0, abort });
+    setError(null);
+    try {
+      const plan = await planRepair(f);
+      if (!plan) return null;
+      if (!window.confirm(`Rewrite the index of ${name}?\n\nOnly the ${fmtBytes(plan.oldSize)} index at the end of the file changes; the picture and sound stay exactly as they are. The old index is saved first as ${name}.index.bak.\n\n${plan.changes.join("\n")}`)) return null;
+      const backup = await store.createWritable(`${name}.index.bak`);
+      await backup.writable.write(f.slice(plan.moovAt, plan.moovAt + plan.oldSize));
+      await backup.writable.close();
+      await applyRepair(h, plan);
+      const after = await store.fileIn(name);
+      const check = after ? await checkMp4(after) : null;
+      if (!check) throw new Error("the repaired file could not be read back");
+      setStatus(`Repaired the index of ${name} — ${plan.changes.join("; ")}`);
+      return { changes: plan.changes, check };
+    } catch (e) {
+      setError(`${name}: ${e instanceof Error ? e.message : String(e)}`);
+      return null;
+    } finally {
+      setJob(null);
+      setFilesVersion((v) => v + 1);
+    }
+  };
+  const repairWritten = async (name: string) => {
+    const r = await repairIndexOf(name);
+    if (r) setDone((d) => (d && d.name === name ? { ...d, check: r.check, repaired: r.changes } : d));
+  };
+  const isFixedCopy = (name: string) => /-(youtube-level|\d+lufs)\.mp4$/i.test(name);
+  /** The videos in the project folder that are not recordings; checks run in the background for the ones not yet checked. */
+  const loadFiles = async () => {
+    if (!store.hasFolder) return setFiles([]);
+    setFilesLoading(true);
+    try {
+      const list = await store.listFiles();
+      const recordings = new Set(Object.values(project.media).map((m) => m.name));
+      const videos = list.filter((f) => /\.(mp4|mov|m4v)$/i.test(f.name) && !recordings.has(f.name));
+      // A file that changed (a repair, a re-export) is checked again; what a repair did stays with it.
+      const next: FileEntry[] = videos.map((f) => {
+        const old = files.find((o) => o.name === f.name);
+        if (old && old.size === f.size && old.lastModified === f.lastModified) return old;
+        return { name: f.name, size: f.size, lastModified: f.lastModified, kind: f.name.startsWith("preview-") ? "preview" : isFixedCopy(f.name) ? "fixed" : "export", repaired: old?.repaired };
+      });
+      setFiles(next);
+      for (const f of next) if (!f.check && !f.error && !f.checking) await checkFile(f.name);
+    } finally {
+      setFilesLoading(false);
+    }
+  };
+  const checkFile = async (name: string) => {
+    setFiles((l) => l.map((f) => (f.name === name ? { ...f, checking: true, error: undefined } : f)));
+    try {
+      const f = await store.fileIn(name);
+      if (!f) throw new Error("not in the folder any more");
+      const check = await checkMp4(f);
+      setFiles((l) => l.map((x) => (x.name === name ? { ...x, checking: false, check } : x)));
+    } catch (e) {
+      setFiles((l) => l.map((x) => (x.name === name ? { ...x, checking: false, error: e instanceof Error ? e.message : String(e) } : x)));
+    }
+  };
+  const repairFile = async (name: string) => {
+    const r = await repairIndexOf(name);
+    if (r) setFiles((l) => l.map((x) => (x.name === name ? { ...x, check: r.check, repaired: r.changes } : x)));
+  };
+  const fixByName = async (name: string) => {
+    const f = await store.fileIn(name);
+    if (!f) return setError(`${name} is not in the project folder any more.`);
+    await loadFixFile(f);
+  };
+  const deleteFile = async (name: string) => {
+    if (!window.confirm(`Delete ${name} from the project folder? This cannot be undone.`)) return;
+    await store.remove(name);
+    setFiles((l) => l.filter((f) => f.name !== name));
+    if (fixFile?.file.name === name) setFixFile(null);
+    setFilesVersion((v) => v + 1);
+  };
+  useEffect(() => {
+    if (tab !== "export" || exportView !== "files" || !folder) return;
+    let active = true;
+    queueMicrotask(() => {
+      if (active) void loadFiles();
+    });
+    return () => {
+      active = false;
+    };
+    // The list is reloaded when the view opens and whenever a file is written or removed.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab, exportView, folder, filesVersion]);
+  const fixView: FixState | null = fixFile ? { name: fixFile.file.name, loudness: fixFile.loudness, target: fixTarget, gain: fixGain, setTarget: setFixTarget, run: () => void runFix(), done: fixed } : null;
+
   const current = selected ? project.clips.find((c) => c.id === selected) : undefined;
   const currentMusic = selectedMusic ? project.music.find((m) => m.id === selectedMusic) : undefined;
   const fades = useMemo(() => crossfades(project.music), [project.music]);
@@ -1827,6 +2086,14 @@ export function VideoEditorWidget() {
       missing: () => store.missing(Object.keys(project.media)),
       getProject: () => project,
       getPlayhead: () => playhead,
+      getDone: () => done,
+      getFiles: () => files,
+      getEvents: () => events,
+      getPreflight: () => checks,
+      setExportView: (v: "setup" | "files") => setExportView(v),
+      openSection: (id: string) => setOpenSections((o) => ({ ...o, [id]: true })),
+      checkFile,
+      loadFiles,
       setProject: (fn: (p: Project) => Project) => setProject(fn),
       traceFrames: (fn: ((timelineT: number) => void) | null) => {
         frameTrace = fn;
@@ -1852,6 +2119,7 @@ export function VideoEditorWidget() {
   // Pause gate for the export: the engine awaits this between frames while paused.
   const pauseRef = useRef<{ paused: boolean; waiters: (() => void)[] }>({ paused: false, waiters: [] });
   const setExportPaused = (paused: boolean) => {
+    if (pauseRef.current.paused !== paused) logEvent(paused ? "pause" : "resume", paused ? "Paused" : "Resumed");
     pauseRef.current.paused = paused;
     if (!paused) {
       lowSpaceRef.current = false;
@@ -1867,6 +2135,7 @@ export function VideoEditorWidget() {
     lowSpaceRef.current = true;
     pauseRef.current.paused = true;
     setJob((j) => (j ? { ...j, paused: true, lowSpace: true, freeBytes: free } : j));
+    logEvent("space", `Paused: the disk is almost full — ${why}`);
     alertUser("Disk almost full — export paused", `${why} Free some space and it continues on its own.`);
   };
   /**
@@ -1915,7 +2184,7 @@ export function VideoEditorWidget() {
   const runExport = async (resume: { manifest: ExportManifest; folder: string } | null = null) => {
     if (!store.hasFolder) return setError("Pick a project folder first — the export is written there.");
     if (notify && "Notification" in window && Notification.permission === "default") void Notification.requestPermission().then((perm) => setNotifyPermission(perm));
-    const name = resume ? resume.manifest.name : `${project.name.replace(/[^\w-]+/g, "-")}-${project.export.resolution === "source" ? "8K" : project.export.resolution + "p"}${range ? `-${Math.round(range.from)}s-${Math.round(range.to)}s` : ""}.mp4`;
+    const name = resume ? resume.manifest.name : fileName;
     const partsFolder = resume ? resume.folder : `${name.replace(/\.mp4$/, "")}.parts`;
     const exportSeconds = range ? range.to - range.from : duration;
     const manifest: ExportManifest = resume ? resume.manifest : { version: 1, fingerprint, name, total: exportSeconds, parts: [], skipped: [], updatedAt: 0 };
@@ -1930,10 +2199,8 @@ export function VideoEditorWidget() {
     lowSpaceRef.current = false;
     autoSkipRef.current = false;
     const stopWatch = watchSpace();
-    const outH = project.export.resolution === "source" ? (first?.height ?? 4320) : project.export.resolution;
-    const outW = first?.width && first.height ? Math.round((first.width * (outH / first.height)) / 2) * 2 : Math.round((outH * 16) / 9);
     const output = { name, codec: project.export.codec.toUpperCase(), width: outW, height: outH, bitrateMbps: project.export.bitrateMbps, preset: project.export.preset, estimatedBytes: estimate.bytes };
-    const profile = `${first?.height ?? 0}>${outH}:${project.export.codec}:${project.export.preset}`;
+    const profile = speedProfile;
     const partStore: PartStore = {
       createWritable: async (file) => (await store.createWritable(file, partsFolder)).writable as unknown as WritableStream<import("mediabunny").StreamTargetChunk>,
       file: (file) => store.fileIn(file, partsFolder),
@@ -1941,6 +2208,11 @@ export function VideoEditorWidget() {
       save: (m) => store.writeText("resume.json", JSON.stringify(m), partsFolder),
     };
     setJob({ kind: "export", label: resumedFrom ? `Resuming from ${fmtTime(resumedFrom)}` : "Exporting", fraction: 0, abort, output, paused: false, partsMode: true, resumedFrom });
+    setPlaying(false);
+    setDone(null);
+    setLiveAt(null);
+    setSkipped(manifest.skipped.map((k) => ({ from: k.from, to: k.to })));
+    setEvents([{ at: Date.now(), kind: "start", text: resumedFrom ? `Resuming ${name} from ${fmtTime(resumedFrom)} — ${live.length} finished part${live.length === 1 ? "" : "s"} kept` : `Started ${name} — ${output.codec} ${outW}×${outH} at ${output.bitrateMbps} Mbps, about ${fmtBytes(estimate.bytes)}` }]);
     setError(null);
     setResumable(null);
     try {
@@ -1955,6 +2227,8 @@ export function VideoEditorWidget() {
         whilePaused: () => (pauseRef.current.paused ? new Promise<void>((r) => pauseRef.current.waiters.push(r)) : undefined),
         onWriteBlocked,
         onFrame: (t) => frameTrace?.(t),
+        onPreview: drawLive,
+        onEvent: (ev) => setEvents((l) => [...l, ev]),
         parts: testExportOptions.noParts
           ? undefined
           : {
@@ -1980,6 +2254,9 @@ export function VideoEditorWidget() {
       notifyDone("Export finished", `${name} — ${fmtBytes(result.bytesWritten)} in ${fmtDuration(result.activeMs)}`, lastProgress.current ?? undefined);
       stopWatch();
       savePriors(profile, result.measured);
+      setDone({ kind: "done", at: Date.now(), name, folder, seconds: result.seconds, bytes: result.bytesWritten, activeMs: result.activeMs, pausedMs: result.pausedMs, estimatedMs: estimate.wallSeconds * 1000, codec: output.codec, width: outW, height: outH, bitrateMbps: output.bitrateMbps, audioKbps: project.export.audioBitrateKbps, parts: result.parts, resumedFrom: result.resumedFrom, joinMode: result.join?.mode, skipped: result.skipped, checking: true });
+      void checkWritten(name);
+      setFilesVersion((v) => v + 1);
       const stepMs = (kind: StepProgress["kind"]) => result.steps.filter((s) => s.kind === kind).reduce((a, s) => a + s.elapsedMs, 0);
       const skippedNote = result.skipped.length
         ? ` · ${result.skipped.length} stretch${result.skipped.length === 1 ? "" : "es"} skipped (${result.skipped.reduce((a, k) => a + (k.to - k.from), 0).toFixed(2)} s in all, at ${result.skipped.map((k) => fmtTime(k.from)).join(", ")})`
@@ -1996,7 +2273,12 @@ export function VideoEditorWidget() {
       const kept = keptParts.length ? Math.max(...keptParts.map((p) => p.end)) : 0;
       const consumed = manifest.parts.length - keptParts.length;
       const parts = `${keptParts.length} part${keptParts.length === 1 ? "" : "s"}${consumed ? `; ${consumed} already joined into the unfinished file will be exported again` : ""}`;
-      if ((e as DOMException).name === "AbortError") {
+      const aborted = (e as DOMException).name === "AbortError";
+      if (!aborted || kept > 0) {
+        const p = lastProgress.current;
+        setDone({ kind: aborted ? "stopped" : "failed", at: Date.now(), name, folder, seconds: exportSeconds, bytes: p?.bytesWritten ?? 0, activeMs: p?.elapsedMs ?? 0, pausedMs: p?.pausedMs ?? 0, estimatedMs: estimate.wallSeconds * 1000, codec: output.codec, width: outW, height: outH, bitrateMbps: output.bitrateMbps, audioKbps: project.export.audioBitrateKbps, parts: keptParts.length, resumedFrom, skipped: manifest.skipped, message: aborted ? "Stopped on request." : message, keptAt: kept, keptParts: keptParts.length });
+      }
+      if (aborted) {
         setStatus(kept > 0 ? `Export stopped at ${fmtTime(kept)} of ${fmtTime(exportSeconds)} — ${parts} kept. Resume continues from there; Discard removes them.` : "Export cancelled.");
       } else {
         setError(kept > 0 ? `Export stopped at ${fmtTime(kept)} of ${fmtTime(exportSeconds)}: ${message} Everything finished so far is kept (${parts}); press Resume to carry on from there.` : `Export failed: ${message}`);
@@ -2014,6 +2296,7 @@ export function VideoEditorWidget() {
   const askAboutFault = (fault: ExportFault): Promise<"skip" | "stop"> => {
     if (autoSkipRef.current) return Promise.resolve("skip");
     alertUser("A frame failed — the export is waiting", `${fault.clipName} at ${fmtTime(fault.timelineT)}: ${fault.message}`);
+    logEvent("fault", `A frame failed at ${fmtTime(fault.timelineT)} — ${fault.clipName}: ${fault.message}`);
     return new Promise((resolve) => {
       setJob((j) =>
         j
@@ -2023,6 +2306,10 @@ export function VideoEditorWidget() {
                 fault,
                 resolve: (answer, all) => {
                   if (all) autoSkipRef.current = true;
+                  if (answer === "skip") {
+                    const from = fault.timelineT - (rangeRef.current?.from ?? 0);
+                    setSkipped((list) => [...list, { from, to: from + fault.stretch }]);
+                  }
                   setJob((k) => (k ? { ...k, fault: undefined } : k));
                   resolve(answer);
                 },
@@ -2051,8 +2338,8 @@ export function VideoEditorWidget() {
     if (scope && scope.to - scope.from < 0.1) return setError("Nothing to render in that stretch.");
     const abort = new AbortController();
     pauseRef.current = { paused: false, waiters: [] };
-    const outH = Math.min(opts.height, first?.height ?? opts.height);
-    const outW = first?.width && first.height ? Math.round((first.width * (outH / first.height)) / 2) * 2 : Math.round((outH * 16) / 9);
+    const outH = Math.min(opts.height, firstMedia?.height ?? opts.height);
+    const outW = firstMedia?.width && firstMedia.height ? Math.round((firstMedia.width * (outH / firstMedia.height)) / 2) * 2 : Math.round((outH * 16) / 9);
     const bitrateMbps = Math.max(1, Math.round(outH / 90));
     const seconds = scope ? scope.to - scope.from : duration;
     if (!(await spaceWarning((bitrateMbps * 1e6 * seconds) / 8))) return;
@@ -2060,7 +2347,11 @@ export function VideoEditorWidget() {
     const stopWatch = watchSpace();
     const preview: Project = { ...project, export: { ...project.export, resolution: outH, codec: "avc", bitrateMbps, preset: "fast", smartCopy: false, range: scope } };
     const name = `preview-${outH}p.mp4`;
-    setJob({ kind: "export", label: "Rendering preview", fraction: 0, abort, output: { name, codec: "AVC", width: outW, height: outH, bitrateMbps, preset: "fast", estimatedBytes: (bitrateMbps * 1e6 * seconds) / 8 }, paused: false });
+    setJob({ kind: "export", label: "Test render", fraction: 0, abort, output: { name, codec: "AVC", width: outW, height: outH, bitrateMbps, preset: "fast", estimatedBytes: (bitrateMbps * 1e6 * seconds) / 8 }, paused: false });
+    setPlaying(false);
+    setLiveAt(null);
+    setSkipped([]);
+    setEvents([{ at: Date.now(), kind: "start", text: `Test render of ${scope ? `${fmtTime(scope.from)} → ${fmtTime(scope.to)}` : "the whole timeline"} at ${outH}p` }]);
     try {
       const root = await navigator.storage.getDirectory();
       const dir = await root.getDirectoryHandle("bench-preview-renders", { create: true });
@@ -2075,9 +2366,10 @@ export function VideoEditorWidget() {
         whilePaused: () => (pauseRef.current.paused ? new Promise<void>((r) => pauseRef.current.waiters.push(r)) : undefined),
         onWriteBlocked,
         onFrame: (t) => frameTrace?.(t),
+        onPreview: drawLive,
         onProgress: (progress) => {
           setJob((j) => (j ? { ...j, fraction: progress.fraction, progress } : j));
-          if (!lowSpaceRef.current) document.title = `${(progress.fraction * 100).toFixed(1)}% · Rendering preview · Bench`;
+          if (!lowSpaceRef.current) document.title = `${(progress.fraction * 100).toFixed(1)}% · Test render · Bench`;
           lastProgress.current = progress;
           maybeNotify("Rendering preview", progress);
         },
@@ -2313,8 +2605,31 @@ export function VideoEditorWidget() {
           </button>
         </p>
       )}
-      {job?.kind === "export" && (
-        <ExportPanel job={job} onPause={() => setExportPaused(true)} onResume={() => setExportPaused(false)} onCancel={() => job.abort.abort()} />
+      {job?.kind === "export" && <ExportRun job={job} events={events} skipped={skipped} liveRef={liveRef} liveAt={liveAt} onPause={() => setExportPaused(true)} onResume={() => setExportPaused(false)} onStop={() => job.abort.abort()} />}
+      {done && job?.kind !== "export" && (
+        <ExportDone
+          done={done}
+          busy={!!job}
+          onDismiss={() => setDone(null)}
+          onAgain={() => {
+            setDone(null);
+            setTab("export");
+            setExportView("setup");
+          }}
+          onFiles={() => {
+            setTab("export");
+            setExportView("files");
+          }}
+          onRepair={() => void repairWritten(done.name)}
+          onRecheck={() => void checkWritten(done.name)}
+          onResume={() => void runExport(resumable)}
+          onDiscard={() => void discardParts()}
+          onFix={() => {
+            setTab("export");
+            setExportView("files");
+            void fixByName(done.name);
+          }}
+        />
       )}
       {job && job.kind !== "export" && (
         <div className="panel flex items-center gap-3 p-2 text-[13px]">
@@ -2331,8 +2646,8 @@ export function VideoEditorWidget() {
         </div>
       )}
 
-      {/* preview + inspector */}
-      <div className="grid gap-3 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
+      {/* preview + inspector — hidden while an export runs: the run view takes their place */}
+      <div className={cn("grid gap-3 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]", job?.kind === "export" && "hidden")}>
         <div className="panel p-2">
           <div
             ref={previewBoxRef}
@@ -3484,325 +3799,232 @@ export function VideoEditorWidget() {
             )}
             {tab === "export" && (
               <>
-                <div className="space-y-1.5 rounded-[var(--radius-sm)] border border-edge p-2 text-[12.5px]" data-export-range>
-                  <div className="flex items-center justify-between">
-                    <span className="font-medium text-ink">Range</span>
-                    <span className="font-mono text-[12px] text-faint tabular">{range ? `${fmtTime(range.from)} → ${fmtTime(range.to)} · ${fmtTime(range.to - range.from)}` : `whole timeline · ${fmtTime(duration)}`}</span>
-                  </div>
-                  <div className="flex flex-wrap items-center gap-1.5">
-                    <label className="flex items-center gap-1 text-muted">
-                      From
-                      <input type="number" step={0.1} min={0} max={duration} value={project.export.range?.from ?? 0} onChange={(e) => setRange({ from: Number(e.target.value), to: project.export.range?.to ?? duration })} className={cn(INPUT, "w-24 font-mono")} aria-label="Export from (seconds)" />
-                    </label>
-                    <button type="button" onClick={() => setRange({ from: playhead, to: project.export.range?.to ?? duration })} className={GHOST} title="Start the export at the playhead">
-                      ⇤ playhead
+                <div className="flex items-center gap-1 rounded-[var(--radius-sm)] border border-edge p-0.5 text-[12.5px]" role="tablist" aria-label="Export views">
+                  {(["setup", "files"] as const).map((v) => (
+                    <button key={v} type="button" role="tab" aria-selected={exportView === v} onClick={() => setExportView(v)} className={cn("h-7 flex-1 rounded-[var(--radius-sm)] px-2 transition-colors", exportView === v ? "bg-raised font-medium text-ink" : "text-muted hover:text-ink")} data-export-view={v}>
+                      {v === "setup" ? "Export" : `Files${files.length ? ` · ${files.length}` : ""}`}
                     </button>
-                    <label className="flex items-center gap-1 text-muted">
-                      To
-                      <input type="number" step={0.1} min={0} max={duration} value={project.export.range?.to ?? duration} onChange={(e) => setRange({ from: project.export.range?.from ?? 0, to: Number(e.target.value) })} className={cn(INPUT, "w-24 font-mono")} aria-label="Export to (seconds)" />
-                    </label>
-                    <button type="button" onClick={() => setRange({ from: project.export.range?.from ?? 0, to: playhead })} className={GHOST} title="End the export at the playhead">
-                      playhead ⇥
-                    </button>
-                    {project.export.range && (
-                      <button type="button" onClick={() => setRange(null)} className={GHOST}>
-                        Whole timeline
-                      </button>
-                    )}
-                  </div>
-                  {project.export.range && !range && <p className="text-[12px] text-danger">From must come before To (inside the timeline), or the whole timeline is exported.</p>}
-                  <p className="text-[12px] text-faint">Export just a part of the timeline — to check a grade quickly, or to cut one section for a short.</p>
+                  ))}
                 </div>
-                <div className="grid grid-cols-2 gap-2">
-                  <label className="text-[12.5px] text-muted">
-                    Codec
-                    <select value={project.export.codec} onChange={(e) => setProject((p) => ({ ...p, export: { ...p.export, codec: e.target.value as "hevc" | "avc" } }))} className={cn(SEL, "mt-1 w-full")}>
-                      <option value="hevc">HEVC / H.265 (recommended for 8K)</option>
-                      <option value="avc">H.264 (compatibility)</option>
-                    </select>
-                  </label>
-                  <label className="text-[12.5px] text-muted">
-                    Resolution
-                    <select value={String(project.export.resolution)} onChange={(e) => setProject((p) => ({ ...p, export: { ...p.export, resolution: e.target.value === "source" ? "source" : Number(e.target.value) } }))} className={cn(SEL, "mt-1 w-full")}>
-                      <option value="source">Source ({first?.width ?? "—"} × {first?.height ?? "—"})</option>
-                      <option value="2160">4K (2160p)</option>
-                      <option value="1440">1440p</option>
-                      <option value="1080">1080p</option>
-                    </select>
-                  </label>
-                  <label className="text-[12.5px] text-muted">
-                    Encoder preset
-                    <select value={project.export.preset} onChange={(e) => setProject((p) => ({ ...p, export: { ...p.export, preset: e.target.value as "quality" | "balanced" | "fast" } }))} className={cn(SEL, "mt-1 w-full")}>
-                      <option value="quality">Quality</option>
-                      <option value="balanced">Balanced</option>
-                      <option value="fast">Fast</option>
-                    </select>
-                  </label>
-                  <label className="text-[12.5px] text-muted">
-                    Audio bitrate
-                    <select value={project.export.audioBitrateKbps} onChange={(e) => setProject((p) => ({ ...p, export: { ...p.export, audioBitrateKbps: Number(e.target.value) } }))} className={cn(SEL, "mt-1 w-full")}>
-                      {[128, 192, 256, 320].map((b) => (
-                        <option key={b} value={b}>
-                          {b} kbps AAC
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                </div>
-                <div className="space-y-1.5 rounded-[var(--radius-sm)] border border-edge p-2 text-[12.5px]" data-export-sound>
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <span className="font-medium text-ink">Sound</span>
-                    <select value={project.sound ?? "footage"} onChange={(e) => setProject((p) => ({ ...p, sound: e.target.value as SoundMode }))} className={SEL} aria-label="Sound mode" data-sound-mode>
-                      {SOUND_MODES.map((m) => (
-                        <option key={m} value={m}>
-                          {SOUND_LABELS[m]}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  <p className="font-mono text-[12.5px] text-ink" data-sound-levels>
-                    Camera sound {fmtDb(levels.camera)} · Music {fmtDb(levels.music)}
-                  </p>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="text-muted" data-sound-state>
-                      {describeSoundState(soundSt, levels)}
-                    </span>
-                    {soundSt.clipsOther + soundSt.musicOther > 0 && (
-                      <button type="button" onClick={() => setProject((p) => applySoundLevels(p))} className={cn(GHOST, "border-accent text-accent")} data-sound-apply>
-                        Set every clip and track to these levels
-                      </button>
-                    )}
-                  </div>
-                  <div className="flex flex-wrap items-center gap-2 border-t border-edge pt-1.5">
-                    <button type="button" onClick={() => void measureMix()} disabled={!placed.length || !!job} className={GHOST} data-measure-loudness>
-                      <Gauge size={13} /> Measure loudness
-                    </button>
-                    {loudness && (
-                      <span className={cn("font-mono text-[12.5px]", loudness.predicted || loudness.fingerprint === audioKey ? "text-ink" : "text-faint")} data-loudness-result>
-                        {loudness.predicted ? "about " : ""}
-                        {describeLoudness(loudness.result)}
-                        {loudness.predicted ? " after the change — measure again to confirm" : loudness.fingerprint !== audioKey ? " · measured before the last change" : ""}
-                      </span>
-                    )}
-                    {loudness && !loudness.predicted && loudness.result.integrated !== null && Math.abs(matchGain) >= 0.5 && (
-                      <button type="button" onClick={matchLevel} className={cn(GHOST, "border-accent text-accent")} data-match-level>
-                        Match YouTube level ({matchGain > 0 ? "+" : ""}
-                        {matchGain} dB)
-                      </button>
-                    )}
-                  </div>
-                  {loudness && !loudness.predicted && loudness.result.integrated !== null && (
-                    <p className={cn("text-[12px]", loudness.result.integrated < YOUTUBE_LUFS - 3 ? "text-warn" : "text-faint")} data-loudness-verdict>
-                      {loudness.result.integrated < YOUTUBE_LUFS - 1
-                        ? `This mix would play ${(YOUTUBE_LUFS - loudness.result.integrated).toFixed(1)} dB quieter than YouTube's level${matchGain < YOUTUBE_LUFS - loudness.result.integrated - 0.1 ? ` — its peaks allow raising it ${matchGain} dB` : ""}.`
-                        : loudness.result.integrated > YOUTUBE_LUFS + 1
-                          ? `YouTube would turn this mix down by ${(loudness.result.integrated - YOUTUBE_LUFS).toFixed(1)} dB.`
-                          : "At YouTube's level."}
-                    </p>
-                  )}
-                  <p className="text-[12px] text-faint">
-                    YouTube plays every video at {YOUTUBE_LUFS} LUFS: louder uploads are turned down, quieter ones stay quiet. Measuring runs the export&apos;s sound mix — camera sound, music, fades, crossfades and the limiter — over the {range ? "export range" : "whole timeline"} without writing anything; Match raises or lowers every clip and track together so the mix lands at {YOUTUBE_LUFS} LUFS, as far as the peaks allow.
-                  </p>
-                  <div className="space-y-1.5 border-t border-edge pt-1.5" data-fix-level>
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="font-medium text-ink">Fix the level of an exported file</span>
-                      <input
-                        ref={fixInput}
-                        type="file"
-                        accept="video/mp4,.mp4,.mov,.m4v"
-                        hidden
-                        onChange={(e) => {
-                          const f = e.target.files?.[0];
-                          e.target.value = "";
-                          if (f) void loadFixFile(f);
-                        }}
-                      />
-                      <button type="button" onClick={() => fixInput.current?.click()} disabled={!!job} className={GHOST} data-fix-pick>
-                        <Upload size={13} /> Open file
-                      </button>
-                      {fixFile && (
-                        <span className="font-mono text-[12px] text-ink" data-fix-measured>
-                          {fixFile.file.name} · {describeLoudness(fixFile.loudness)}
-                        </span>
-                      )}
-                    </div>
-                    {fixFile && fixFile.loudness.integrated !== null && (
-                      <div className="flex flex-wrap items-center gap-2">
+                {exportView === "files" ? (
+                  <ExportFiles files={files} loading={filesLoading} onRefresh={() => void loadFiles()} onCheck={(n) => void checkFile(n)} onRepair={(n) => void repairFile(n)} onFix={(n) => void fixByName(n)} onDelete={(n) => void deleteFile(n)} fix={fixView} busy={!!job} resumable={resumableView} onResume={() => void runExport(resumable)} onDiscard={() => void discardParts()} hasFolder={store.hasFolder} />
+                ) : (
+                  <>
+                    <ExportSummary name={exportName === null ? autoName : exportName} auto={exportName === null} onName={setExportName} folder={folder} onPickFolder={() => void chooseFolder()} lines={summaryLines} estimate={estimate} basis={estimateBasis} blockers={blockers} busy={!!job} hasClips={project.clips.length > 0} onExport={() => void runExport()} onTest={() => void renderPreview()} testLine={testLine} />
+                    <PresetsRow current={matchPreset(project.export)} onPick={(id) => setProject((p) => ({ ...p, export: applyPreset(p.export, id) }))} />
+                    <Preflight items={checks} onAction={onPreflightAction} />
+                    <Section id="range" title="Range" summary={range ? `${fmtTime(range.from)} → ${fmtTime(range.to)} · ${fmtTime(range.to - range.from)}` : `Whole timeline · ${fmtTime(duration)}`} open={!!openSections.range} onToggle={() => toggleSection("range")} hook="export-range">
+                      <div className="flex flex-wrap items-center gap-1.5">
                         <label className="flex items-center gap-1 text-muted">
-                          Target
-                          <select value={fixTarget} onChange={(e) => setFixTarget(Number(e.target.value))} className={SEL} aria-label="Target loudness" data-fix-target>
-                            {[-14, -16, -18, -23].map((t) => (
-                              <option key={t} value={t}>
-                                {t} LUFS{t === YOUTUBE_LUFS ? " (YouTube)" : t === -23 ? " (broadcast)" : ""}
+                          From
+                          <input type="number" step={0.1} min={0} max={duration} value={project.export.range?.from ?? 0} onChange={(e) => setRange({ from: Number(e.target.value), to: project.export.range?.to ?? duration })} className={cn(INPUT, "w-24 font-mono")} aria-label="Export from (seconds)" />
+                        </label>
+                        <button type="button" onClick={() => setRange({ from: playhead, to: project.export.range?.to ?? duration })} className={GHOST} title="Start the export at the playhead">
+                          ⇤ playhead
+                        </button>
+                        <label className="flex items-center gap-1 text-muted">
+                          To
+                          <input type="number" step={0.1} min={0} max={duration} value={project.export.range?.to ?? duration} onChange={(e) => setRange({ from: project.export.range?.from ?? 0, to: Number(e.target.value) })} className={cn(INPUT, "w-24 font-mono")} aria-label="Export to (seconds)" />
+                        </label>
+                        <button type="button" onClick={() => setRange({ from: project.export.range?.from ?? 0, to: playhead })} className={GHOST} title="End the export at the playhead">
+                          playhead ⇥
+                        </button>
+                        {project.export.range && (
+                          <button type="button" onClick={() => setRange(null)} className={GHOST}>
+                            Whole timeline
+                          </button>
+                        )}
+                      </div>
+                      <p className="text-[12px] text-faint">Export a part of the timeline to check a grade quickly or to cut one section for a short; the band on the timeline shows it.</p>
+                    </Section>
+                    <Section id="picture" title="Picture" summary={pictureLine} open={!!openSections.picture} onToggle={() => toggleSection("picture")} hook="export-picture">
+                      <div className="grid grid-cols-2 gap-2">
+                        <label className="text-[12.5px] text-muted">
+                          Codec
+                          <select value={project.export.codec} onChange={(e) => setProject((p) => ({ ...p, export: { ...p.export, codec: e.target.value as "hevc" | "avc" } }))} className={cn(SEL, "mt-1 w-full")} data-export-codec>
+                            <option value="hevc">HEVC / H.265 — for 8K and 4K</option>
+                            <option value="avc">H.264 — plays anywhere</option>
+                          </select>
+                        </label>
+                        <label className="text-[12.5px] text-muted">
+                          Resolution
+                          <select value={String(project.export.resolution)} onChange={(e) => setProject((p) => ({ ...p, export: { ...p.export, resolution: e.target.value === "source" ? "source" : Number(e.target.value) } }))} className={cn(SEL, "mt-1 w-full")} data-export-resolution>
+                            <option value="source">Source ({firstMedia?.width ?? "—"} × {firstMedia?.height ?? "—"})</option>
+                            <option value="2160">4K (2160p)</option>
+                            <option value="1440">1440p</option>
+                            <option value="1080">1080p</option>
+                          </select>
+                        </label>
+                        <label className="text-[12.5px] text-muted">
+                          Encoder
+                          <select value={project.export.preset} onChange={(e) => setProject((p) => ({ ...p, export: { ...p.export, preset: e.target.value as "quality" | "balanced" | "fast" } }))} className={cn(SEL, "mt-1 w-full")} data-export-preset>
+                            <option value="quality">Quality — slower, best picture</option>
+                            <option value="balanced">Balanced</option>
+                            <option value="fast">Fast — quicker, slightly softer</option>
+                          </select>
+                        </label>
+                        <label className="text-[12.5px] text-muted">
+                          LED flicker
+                          <select value={project.export.steadyLights ?? "off"} onChange={(e) => setProject((p) => ({ ...p, export: { ...p.export, steadyLights: e.target.value as SteadyLights } }))} className={cn(SEL, "mt-1 w-full")} aria-label="LED flicker" title="LED signs and lights pulse faster than the shutter and blink on camera; Steady lights holds each light at its brightest over the last two or three frames so it stays lit. Fast-moving lights at night can leave a short trail — prefer 2 frames then">
+                            <option value="off">Leave as recorded</option>
+                            <option value="light">Steady lights — hold over 2 frames</option>
+                            <option value="strong">Steady lights — hold over 3 frames</option>
+                          </select>
+                        </label>
+                      </div>
+                      <Slider label="Video bitrate" value={project.export.bitrateMbps} min={10} max={300} step={5} onChange={(v) => setProject((p) => ({ ...p, export: { ...p.export, bitrateMbps: v } }))} format={(v) => `${v} Mbps`} />
+                      <label className="flex items-center gap-1.5 text-muted" title="Stretches with no grade, crop, title or transition are copied from the recording as they are, at the recording's own quality, instead of being decoded and encoded again">
+                        <input type="checkbox" checked={project.export.smartCopy} onChange={(e) => setProject((p) => ({ ...p, export: { ...p.export, smartCopy: e.target.checked } }))} className="accent-[var(--accent)]" data-export-smart-copy />
+                        Smart copy — pass untouched footage through without re-encoding
+                      </label>
+                      <p className="text-[12px] text-faint" data-export-reencode>
+                        {fmtTime(estimate.encodeSeconds)} re-encoded{spans.some((sp) => sp.kind === "encode") ? ` (${[...new Set(spans.flatMap((sp) => sp.reasons))].join(", ") || "titles"})` : ""}
+                        {estimate.copySeconds > 0 ? ` · ${fmtTime(estimate.copySeconds)} copied` : ""}
+                      </p>
+                    </Section>
+                    <Section id="sound" title="Sound" summary={soundLine} open={!!openSections.sound} onToggle={() => toggleSection("sound")} hook="export-sound">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <label className="flex items-center gap-1.5 text-muted">
+                          Mix
+                          <select value={project.sound ?? "footage"} onChange={(e) => setProject((p) => ({ ...p, sound: e.target.value as SoundMode }))} className={SEL} aria-label="Sound mode" data-sound-mode>
+                            {SOUND_MODES.map((m) => (
+                              <option key={m} value={m}>
+                                {SOUND_LABELS[m]}
                               </option>
                             ))}
                           </select>
                         </label>
-                        <span className="font-mono text-[12.5px] text-ink" data-fix-gain>
-                          {fixGain > 0 ? "+" : ""}
-                          {fixGain} dB
+                        <label className="flex items-center gap-1.5 text-muted">
+                          AAC
+                          <select value={project.export.audioBitrateKbps} onChange={(e) => setProject((p) => ({ ...p, export: { ...p.export, audioBitrateKbps: Number(e.target.value) } }))} className={SEL} aria-label="Audio bitrate" data-export-audio-bitrate>
+                            {[128, 192, 256, 320].map((b) => (
+                              <option key={b} value={b}>
+                                {b} kbps
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <span className="font-mono text-[12.5px] text-ink" data-sound-levels>
+                          Camera sound {fmtDb(levels.camera)} · Music {fmtDb(levels.music)}
                         </span>
-                        <button type="button" onClick={() => void runFix()} disabled={!!job || Math.abs(fixGain) < 0.1} className={cn(PRIMARY, "h-8 px-3 text-[13px]")} data-fix-run>
-                          Write the fixed copy
-                        </button>
                       </div>
-                    )}
-                    {fixed && (
-                      <p className="text-[12px] text-positive" data-fix-done>
-                        Written {fixed.name} ({fmtBytes(fixed.bytes)}) to the project folder: the picture copied as it was, the sound {fixed.gainDb > 0 ? "raised" : "lowered"} by {Math.abs(fixed.gainDb)} dB and limited at −1 dBFS, the tags kept.
-                      </p>
-                    )}
-                    <p className="text-[12px] text-faint">For a file already exported, by this editor or anything else: the picture is copied packet by packet and only the sound is decoded, re-levelled and encoded again, so even a 100 GB 8K export takes minutes. The copy lands next to the original in the project folder.</p>
-                  </div>
-                </div>
-                <Slider label="Video bitrate" value={project.export.bitrateMbps} min={10} max={300} step={5} onChange={(v) => setProject((p) => ({ ...p, export: { ...p.export, bitrateMbps: v } }))} format={(v) => `${v} Mbps${v >= 80 && v <= 160 ? " · YouTube 8K range" : ""}`} />
-                <label className="flex items-center gap-1.5 text-muted">
-                  <input type="checkbox" checked={project.export.smartCopy} onChange={(e) => setProject((p) => ({ ...p, export: { ...p.export, smartCopy: e.target.checked } }))} className="accent-[var(--accent)]" />
-                  Smart copy — pass untouched footage through without re-encoding
-                </label>
-                <label className="flex flex-wrap items-center gap-1.5 text-muted">
-                  LED flicker
-                  <select value={project.export.steadyLights ?? "off"} onChange={(e) => setProject((p) => ({ ...p, export: { ...p.export, steadyLights: e.target.value as SteadyLights } }))} className={SEL} aria-label="LED flicker">
-                    <option value="off">Leave as recorded</option>
-                    <option value="light">Steady lights — hold each light over 2 frames</option>
-                    <option value="strong">Steady lights — hold each light over 3 frames</option>
-                  </select>
-                </label>
-                <label className="flex flex-wrap items-center gap-1.5 text-muted" data-notify-setting>
-                  <input type="checkbox" checked={notify} onChange={(e) => setNotifySetting(e.target.checked)} className="accent-[var(--accent)]" />
-                  Notify about progress while this tab is hidden, and when an export finishes
-                  {notifyPermission === "denied" && <span className="text-warn">— blocked in the browser; allow notifications for this site to get them</span>}
-                  {notifyPermission === "unsupported" && <span className="text-faint">— not available in this browser</span>}
-                </label>
-                <div className="space-y-1.5 rounded-[var(--radius-sm)] border border-edge p-2" data-preview-render>
-                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-                    <span className="font-medium text-ink">Rendered preview</span>
-                    <span className="text-[12px] text-faint">the export itself, small, played in the preview box</span>
-                  </div>
-                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-[12.5px] text-muted">
-                    <label className="flex items-center gap-1.5">
-                      Size
-                      <select value={previewOpts.height} onChange={(e) => setPreviewOpts((o) => ({ ...o, height: Number(e.target.value) }))} className={SEL} aria-label="Rendered preview size">
-                        {[180, 240, 360, 540, 720].map((h) => (
-                          <option key={h} value={h}>
-                            {h}p
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                    <label className="flex items-center gap-1.5">
-                      Stretch
-                      <select value={previewOpts.scope} onChange={(e) => setPreviewOpts((o) => ({ ...o, scope: e.target.value as typeof previewOpts.scope }))} className={SEL} aria-label="Rendered preview stretch">
-                        <option value="around">30 s around the playhead</option>
-                        <option value="intro" disabled={!introReg}>The intro</option>
-                        <option value="range" disabled={!range}>The export range</option>
-                        <option value="all">The whole timeline</option>
-                      </select>
-                    </label>
-                    <label className="flex items-center gap-1.5" title="Proxies decode many times faster; the originals show the true detail">
-                      <input type="checkbox" checked={previewOpts.proxies} onChange={(e) => setPreviewOpts((o) => ({ ...o, proxies: e.target.checked }))} className="accent-[var(--accent)]" /> from proxies when there are any
-                    </label>
-                  </div>
-                  <button type="button" onClick={() => void renderPreview()} disabled={!placed.length || !!job} className={GHOST} data-preview-render-button>
-                    <Clapperboard size={13} /> Render preview
-                  </button>
-                  <p className="text-[12px] text-faint">Runs the real export — the same spans, grades, transitions, intro effects, titles and steady lights — at {previewOpts.height}p into the browser&apos;s private storage, then plays it in the preview box so you can check cuts frame by frame before the full export. The live preview is close, but this is exact.</p>
-                </div>
-                <p className="text-[12px] text-faint">LED lights — signs, displays, traffic and vehicle lights — pulse faster than the shutter and blink on camera. Steady lights keeps every bright or strongly coloured light at its brightest over the last two or three frames, so a light that drops out for a frame or two stays lit; the preview shows it while playing. Fast-moving lights at night can leave a short trail — prefer the 2-frame setting if they do.</p>
-                <div className="rounded-[var(--radius-sm)] bg-base p-2 text-[12.5px]">
-                  <div className="flex flex-wrap gap-x-4 gap-y-1">
-                    <span>
-                      Copied <span className="font-mono text-ink">{fmtTime(estimate.copySeconds)}</span>
-                    </span>
-                    <span>
-                      Re-encoded <span className="font-mono text-ink">{fmtTime(estimate.encodeSeconds)}</span>
-                    </span>
-                    <span>
-                      About <span className="font-mono text-ink">{(estimate.bytes / 1e9).toFixed(1)} GB</span>
-                    </span>
-                    <span>
-                      Roughly <span className="font-mono text-ink">{fmtTime(estimate.wallSeconds)}</span> to export
-                    </span>
-                    <span title="Chrome reads the whole file back to check it before moving it into place, so closing a big export takes a while; the export panel learns the real speed from your first export">
-                      of which ≈ <span className="font-mono text-ink">{fmtTime(estimate.finishSeconds)}</span> closing the file
-                    </span>
-                  </div>
-                  {spans.some((s) => s.kind === "encode") && <p className="mt-1 text-faint">Re-encoding because: {[...new Set(spans.flatMap((s) => s.reasons))].join(", ") || "titles"}.</p>}
-                </div>
-                <div className="space-y-1.5 rounded-[var(--radius-sm)] border border-edge p-2 text-[12.5px]" data-export-tags>
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="font-medium text-ink">File tags</span>
-                    <select value={project.export.tags.kind} onChange={(e) => setTags({ kind: e.target.value as ExportTags["kind"] })} className={SEL} aria-label="Media kind">
-                      <option value="music-video">Music video</option>
-                      <option value="video">Plain video</option>
-                    </select>
-                  </div>
-                  <div className="grid grid-cols-2 gap-1.5">
-                    <label className="col-span-2 text-muted">
-                      Title
-                      <input value={project.export.tags.title} onChange={(e) => setTags({ title: e.target.value })} placeholder={project.name} className={cn(INPUT, "mt-0.5")} aria-label="Tag title" />
-                    </label>
-                    <label className="text-muted">
-                      Artist
-                      <input value={project.export.tags.artist} onChange={(e) => setTags({ artist: e.target.value })} className={cn(INPUT, "mt-0.5")} aria-label="Tag artist" />
-                    </label>
-                    <label className="text-muted">
-                      Album
-                      <input value={project.export.tags.album} onChange={(e) => setTags({ album: e.target.value })} className={cn(INPUT, "mt-0.5")} aria-label="Tag album" />
-                    </label>
-                    <label className="text-muted">
-                      Genre
-                      <input value={project.export.tags.genre} onChange={(e) => setTags({ genre: e.target.value })} className={cn(INPUT, "mt-0.5")} aria-label="Tag genre" />
-                    </label>
-                    <label className="text-muted">
-                      Year
-                      <input value={project.export.tags.year} onChange={(e) => setTags({ year: e.target.value })} placeholder={String(new Date().getFullYear())} inputMode="numeric" className={cn(INPUT, "mt-0.5 font-mono")} aria-label="Tag year" />
-                    </label>
-                    <label className="col-span-2 text-muted">
-                      Comment
-                      <input value={project.export.tags.comment} onChange={(e) => setTags({ comment: e.target.value })} className={cn(INPUT, "mt-0.5")} aria-label="Tag comment" />
-                    </label>
-                  </div>
-                  <p className="text-[12px] text-faint">
-                    Written into the MP4 as the iTunes-style atoms ffmpeg writes from <span className="font-mono">-metadata</span> — title, artist, album, genre, year, comment, encoder — and, for a music video, the media kind ffmpeg sets with <span className="font-mono">media_type=6</span>. YouTube takes the title from the file; the Music category and the song credits are set on the upload page, and that is what YouTube Music lists by. To tag a file you already have, use the{" "}
-                    <Link href="/media/mp4-tags" className="text-accent underline-offset-2 hover:underline">
-                      MP4 tag editor
-                    </Link>
-                    .
-                  </p>
-                </div>
-                {resumable && (
-                  <div className={cn("rounded-[var(--radius-sm)] border p-3 text-[13px]", resumable.manifest.fingerprint === fingerprint ? "border-accent/60 bg-accent-soft/50" : "border-warn/50 bg-warn/10")} data-resumable>
-                    <div className="flex flex-wrap items-center gap-2">
-                      <Play size={14} className="shrink-0 text-accent" />
-                      <span className="min-w-0 flex-1 text-muted">
-                        <span className="font-medium text-ink">
-                          An export of {resumable.manifest.name} stopped at {fmtTime(resumable.manifest.parts.filter((p) => !p.consumed).length ? Math.max(...resumable.manifest.parts.filter((p) => !p.consumed).map((p) => p.end)) : 0)} of {fmtTime(resumable.manifest.total)}
-                        </span>{" "}
-                        — {resumable.manifest.parts.filter((p) => !p.consumed).length} part{resumable.manifest.parts.filter((p) => !p.consumed).length === 1 ? "" : "s"} ({fmtBytes(resumable.bytes)}) kept in {resumable.folder}.
-                        {resumable.manifest.parts.some((p) => p.consumed)
-                          ? ` ${resumable.manifest.parts.filter((p) => p.consumed).length} part${resumable.manifest.parts.filter((p) => p.consumed).length === 1 ? " was" : "s were"} already joined into a file that did not finish; Resume exports ${fmtTime(resumable.manifest.parts.filter((p) => p.consumed).reduce((a, p) => a + (p.end - p.start), 0))} of them again.`
-                          : ""}
-                        {resumable.manifest.fingerprint === fingerprint
-                          ? " Resume carries on from there, then joins the parts into the file (a copy, no re-encoding)."
-                          : " The project has changed since, so these parts cannot be continued; discard them and export again."}
-                        {resumable.manifest.skipped.length ? ` ${resumable.manifest.skipped.length} stretch${resumable.manifest.skipped.length === 1 ? " was" : "es were"} skipped after frames failed.` : ""}
-                      </span>
-                      {resumable.manifest.fingerprint === fingerprint && (
-                        <button type="button" onClick={() => void runExport(resumable)} disabled={!!job} className={cn(PRIMARY, "h-8")} data-resume-export>
-                          <Play size={13} /> Resume export
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="text-muted" data-sound-state>
+                          {describeSoundState(soundSt, levels)}
+                        </span>
+                        {soundSt.clipsOther + soundSt.musicOther > 0 && (
+                          <button type="button" onClick={() => setProject((p) => applySoundLevels(p))} className={cn(GHOST, "border-accent text-accent")} data-sound-apply>
+                            Set every clip and track to these levels
+                          </button>
+                        )}
+                      </div>
+                      <div className="flex flex-wrap items-center gap-2 border-t border-edge pt-1.5">
+                        <button type="button" onClick={() => void measureMix()} disabled={!placed.length || !!job} className={GHOST} data-measure-loudness>
+                          <Gauge size={13} /> Measure loudness
                         </button>
+                        {loudness && (
+                          <span className={cn("font-mono text-[12.5px]", loudness.predicted || loudness.fingerprint === audioKey ? "text-ink" : "text-faint")} data-loudness-result>
+                            {loudness.predicted ? "about " : ""}
+                            {describeLoudness(loudness.result)}
+                            {loudness.predicted ? " after the change — measure again to confirm" : loudness.fingerprint !== audioKey ? " · measured before the last change" : ""}
+                          </span>
+                        )}
+                        {loudness && !loudness.predicted && loudness.result.integrated !== null && Math.abs(matchGain) >= 0.5 && (
+                          <button type="button" onClick={matchLevel} className={cn(GHOST, "border-accent text-accent")} data-match-level>
+                            Match YouTube level ({matchGain > 0 ? "+" : ""}
+                            {matchGain} dB)
+                          </button>
+                        )}
+                      </div>
+                      {loudness && !loudness.predicted && loudness.result.integrated !== null && (
+                        <p className={cn("text-[12px]", loudness.result.integrated < YOUTUBE_LUFS - 3 ? "text-warn" : "text-faint")} data-loudness-verdict>
+                          {loudness.result.integrated < YOUTUBE_LUFS - 1
+                            ? `This mix would play ${(YOUTUBE_LUFS - loudness.result.integrated).toFixed(1)} dB quieter than YouTube's level${matchGain < YOUTUBE_LUFS - loudness.result.integrated - 0.1 ? ` — its peaks allow raising it ${matchGain} dB` : ""}.`
+                            : loudness.result.integrated > YOUTUBE_LUFS + 1
+                              ? `YouTube would turn this mix down by ${(loudness.result.integrated - YOUTUBE_LUFS).toFixed(1)} dB.`
+                              : "At YouTube's level."}
+                        </p>
                       )}
-                      <button type="button" onClick={() => void discardParts()} disabled={!!job} className={cn(GHOST, "h-8 hover:border-danger hover:text-danger")} data-discard-parts>
-                        <Trash2 size={13} /> Discard parts
-                      </button>
-                    </div>
-                  </div>
+                      <p className="text-[12px] text-faint">A music video keeps the music at full level with the camera sound underneath; footage keeps its own sound in front. YouTube plays everything at {YOUTUBE_LUFS} LUFS and never turns a quiet video up; Measure runs the export&apos;s mix over the {range ? "export range" : "whole timeline"} without writing anything, and Match moves every clip and track together as far as the peaks allow.</p>
+                    </Section>
+                    <Section id="tags" title="File tags" summary={tagsLine} open={!!openSections.tags} onToggle={() => toggleSection("tags")} hook="export-tags">
+                      <div className="grid grid-cols-2 gap-1.5">
+                        <label className="col-span-2 text-muted">
+                          Title
+                          <input value={project.export.tags.title} onChange={(e) => setTags({ title: e.target.value })} placeholder={project.name} className={cn(INPUT, "mt-0.5")} aria-label="Tag title" data-tag-title />
+                        </label>
+                        <label className="text-muted">
+                          Artist
+                          <input value={project.export.tags.artist} onChange={(e) => setTags({ artist: e.target.value })} className={cn(INPUT, "mt-0.5")} aria-label="Tag artist" />
+                        </label>
+                        <label className="text-muted">
+                          Album
+                          <input value={project.export.tags.album} onChange={(e) => setTags({ album: e.target.value })} className={cn(INPUT, "mt-0.5")} aria-label="Tag album" />
+                        </label>
+                        <label className="text-muted">
+                          Genre
+                          <input value={project.export.tags.genre} onChange={(e) => setTags({ genre: e.target.value })} className={cn(INPUT, "mt-0.5")} aria-label="Tag genre" />
+                        </label>
+                        <label className="text-muted">
+                          Year
+                          <input value={project.export.tags.year} onChange={(e) => setTags({ year: e.target.value })} placeholder={String(new Date().getFullYear())} inputMode="numeric" className={cn(INPUT, "mt-0.5 font-mono")} aria-label="Tag year" />
+                        </label>
+                        <label className="text-muted">
+                          Kind
+                          <select value={project.export.tags.kind} onChange={(e) => setTags({ kind: e.target.value as ExportTags["kind"] })} className={cn(SEL, "mt-0.5 w-full")} aria-label="Media kind" data-tag-kind>
+                            <option value="music-video">Music video</option>
+                            <option value="video">Plain video</option>
+                          </select>
+                        </label>
+                        <label className="text-muted">
+                          Comment
+                          <input value={project.export.tags.comment} onChange={(e) => setTags({ comment: e.target.value })} className={cn(INPUT, "mt-0.5")} aria-label="Tag comment" />
+                        </label>
+                      </div>
+                      <p className="text-[12px] text-faint">
+                        Written into the MP4 as the iTunes-style atoms ffmpeg writes. YouTube takes the title from the file; the Music category and the song credits are set on the upload page. For a file you already have, use the{" "}
+                        <Link href="/media/mp4-tags" className="text-accent underline-offset-2 hover:underline">
+                          MP4 tag editor
+                        </Link>
+                        .
+                      </p>
+                    </Section>
+                    <Section id="options" title="Options" summary={optionsLine} open={!!openSections.options} onToggle={() => toggleSection("options")} hook="export-options">
+                      <label className="flex flex-wrap items-center gap-1.5 text-muted" data-notify-setting>
+                        <input type="checkbox" checked={notify} onChange={(e) => setNotifySetting(e.target.checked)} className="accent-[var(--accent)]" />
+                        Notify about progress while this tab is hidden, and when an export finishes
+                        {notifyPermission === "denied" && <span className="text-warn">— blocked in the browser; allow notifications for this site to get them</span>}
+                        {notifyPermission === "unsupported" && <span className="text-faint">— not available in this browser</span>}
+                      </label>
+                      <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-[12.5px] text-muted" data-preview-render>
+                        <span className="font-medium text-ink">Test render</span>
+                        <label className="flex items-center gap-1.5">
+                          Size
+                          <select value={previewOpts.height} onChange={(e) => setPreviewOpts((o) => ({ ...o, height: Number(e.target.value) }))} className={cn(SEL, "h-7 text-[12px]")} aria-label="Test render size">
+                            {[180, 240, 360, 540, 720].map((h) => (
+                              <option key={h} value={h}>
+                                {h}p
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <label className="flex items-center gap-1.5">
+                          Stretch
+                          <select value={previewOpts.scope} onChange={(e) => setPreviewOpts((o) => ({ ...o, scope: e.target.value as typeof previewOpts.scope }))} className={cn(SEL, "h-7 text-[12px]")} aria-label="Test render stretch">
+                            <option value="around">30 s around the playhead</option>
+                            <option value="intro" disabled={!introReg}>The intro</option>
+                            <option value="range" disabled={!range}>The export range</option>
+                            <option value="all">The whole timeline</option>
+                          </select>
+                        </label>
+                        <label className="flex items-center gap-1.5" title="Proxies decode many times faster; the originals show the true detail">
+                          <input type="checkbox" checked={previewOpts.proxies} onChange={(e) => setPreviewOpts((o) => ({ ...o, proxies: e.target.checked }))} className="accent-[var(--accent)]" /> from proxies when there are any
+                        </label>
+                      </div>
+                      <p className="text-[12px] text-faint">A test render runs the real export — the same spans, grades, transitions, intro effects, titles and steady lights — small and short, into the browser&apos;s private storage, and plays it in the preview box so cuts can be checked frame by frame. The export itself can run with the tab hidden or the window minimised: the page holds a lock so the browser does not freeze it, keeps the display awake while visible, and the tab title carries the progress.</p>
+                    </Section>
+                  </>
                 )}
-                <button type="button" onClick={() => void runExport()} disabled={!project.clips.length || !!job} className={PRIMARY}>
-                  <Download size={14} /> Export to project folder
-                </button>
-                <p className="text-[12px] text-faint">The file is ready for YouTube or anywhere else: HEVC in MP4 at 80–160 Mbps is what YouTube recommends for 8K. You can switch tabs or minimise the window while it runs: the page holds a lock so the browser does not freeze it, keeps the display awake while it is visible, and the tab title carries the progress.</p>
               </>
             )}
           </div>
@@ -3897,6 +4119,7 @@ export function VideoEditorWidget() {
                 );
               })}
               {range && <div className="pointer-events-none absolute top-0 h-full border-x-2 border-accent bg-accent/10" style={{ left: range.from * pxPerSec, width: (range.to - range.from) * pxPerSec }} title={`Export range ${fmtTime(range.from)} → ${fmtTime(range.to)}`} data-export-band />}
+              {job?.kind === "export" && job.progress && job.label !== "Test render" && <div className="pointer-events-none absolute top-0 h-full bg-accent/25" style={{ left: (range?.from ?? 0) * pxPerSec, width: Math.max(0, job.progress.timelineT) * pxPerSec }} title={`Rendered up to ${fmtTime((range?.from ?? 0) + job.progress.timelineT)}`} data-export-progress-band />}
               {windows.map((w) => (
                 <button
                   key={w.incoming.id}
@@ -4104,197 +4327,3 @@ function RangeCut({ duration, onCut }: { duration: number; onCut: (a: number, b:
 }
 
 export { DEFAULT_EXPORT };
-
-function Stat({ label, value, mono = true, title }: { label: string; value: React.ReactNode; mono?: boolean; title?: string }) {
-  return (
-    <div className="min-w-0" title={title}>
-      <div className="text-[11px] uppercase tracking-wide text-faint">{label}</div>
-      <div className={cn("truncate text-[13.5px] text-ink", mono && "font-mono tabular")}>{value}</div>
-    </div>
-  );
-}
-
-const PHASE_LABEL: Record<ExportProgress["phase"], string> = { prepare: "Preparing", video: "Rendering video", audio: "Mixing audio", finalize: "Finishing the file", done: "Done" };
-const SOURCE_LABEL: Record<EstimateSource, string> = { default: "default guess", learned: "from your last export", measured: "measured", actual: "actual" };
-
-/** The export in full: what is being written, where it is, how fast, how long is left, and every step with its estimate. */
-function ExportPanel({ job, onPause, onResume, onCancel }: { job: Job; onPause: () => void; onResume: () => void; onCancel: () => void }) {
-  const [showSteps, setShowSteps] = useState(true);
-  const p = job.progress;
-  const out = job.output;
-  const pct = ((p?.fraction ?? 0) * 100).toFixed(3);
-  const running = p?.steps.find((s) => s.status === "running");
-  const phaseLabel = !p ? "Starting…" : p.phase === "video" && p.span?.kind === "copy" ? "Copying video" : PHASE_LABEL[p.phase] + (running?.stage ? ` — ${running.stage}` : "");
-  // Start + worked + paused + remaining, all from the snapshot: no clock reads while rendering.
-  const finishAt = p ? new Date(p.startedAt + p.elapsedMs + p.pausedMs + p.etaMs).toLocaleTimeString() : "—";
-  const steps = p?.steps ?? [];
-  const doneSteps = steps.filter((s) => s.status === "done").length;
-  const unfinished = steps.filter((s) => s.status !== "done");
-  const bySource = (src: EstimateSource) => unfinished.filter((s) => s.source === src).length;
-  const basisSummary = !p ? "starting…" : unfinished.length ? [bySource("measured") ? `${bySource("measured")} measured` : "", bySource("learned") ? `${bySource("learned")} from your last export` : "", bySource("default") ? `${bySource("default")} default guess${bySource("default") === 1 ? "" : "es"}` : ""].filter(Boolean).join(", ") : "all done";
-  // Tick marks where each step is expected to hand over to the next, by estimated time.
-  const ticks: { at: number; title: string }[] = [];
-  if (p && p.totalEstimateMs > 0) {
-    let acc = 0;
-    for (const s of steps.slice(0, -1)) {
-      acc += s.estimateMs;
-      ticks.push({ at: acc / p.totalEstimateMs, title: `${s.title} → next` });
-    }
-  }
-  return (
-    <div className={cn("panel space-y-3 border-2 p-4", job.lowSpace ? "border-danger" : job.paused ? "border-warn" : "border-accent")} data-export-panel aria-live="polite">
-      {job.lowSpace && (
-        <div className="flex flex-wrap items-center gap-2 rounded-[var(--radius-sm)] border border-danger/50 bg-danger/10 px-3 py-2 text-[13px]" role="alert" data-low-space>
-          <AlertTriangle size={15} className="shrink-0 text-danger" />
-          <span>
-            <span className="font-medium text-ink">Paused: the disk is almost full</span>
-            {job.freeBytes != null ? ` — ${fmtBytes(job.freeBytes)} free as the browser reports it.` : "."} Free at least {fmtBytes(ENOUGH_SPACE)} and it continues on its own, or press Resume to try now. Nothing written so far is lost.
-          </span>
-        </div>
-      )}
-      {job.fault && (
-        <div className="flex flex-wrap items-center gap-2 rounded-[var(--radius-sm)] border border-warn/50 bg-warn/10 px-3 py-2 text-[13px]" role="alertdialog" aria-live="assertive" data-export-fault>
-          <AlertTriangle size={15} className="shrink-0 text-warn" />
-          <span className="min-w-0 flex-1">
-            <span className="font-medium text-ink">A frame failed at {fmtTime(job.fault.fault.timelineT)}</span> — {job.fault.fault.clipName} at {fmtTime(job.fault.fault.sourceT)} in the footage: {job.fault.fault.message}{" "}
-            <span className="text-muted">
-              Skip leaves out {job.fault.fault.stretch < 0.1 ? "that frame" : `${job.fault.fault.stretch.toFixed(2)} s, up to the footage's next keyframe`} (the frame before stays on screen that long) and carries on; Stop keeps the finished parts to resume from.
-            </span>
-          </span>
-          <div className="flex flex-wrap gap-1.5">
-            <button type="button" onClick={() => job.fault!.resolve("skip")} className={cn(PRIMARY, "h-8")} data-fault-skip>
-              Skip and continue
-            </button>
-            <button type="button" onClick={() => job.fault!.resolve("skip", true)} className={cn(GHOST, "h-8")} title="Skip this one and any other frame that fails, without asking again" data-fault-skip-all>
-              Skip any that fail
-            </button>
-            <button type="button" onClick={() => job.fault!.resolve("stop")} className={cn(GHOST, "h-8 hover:border-danger hover:text-danger")} data-fault-stop>
-              Stop, keep what is done
-            </button>
-          </div>
-        </div>
-      )}
-      <div className="flex flex-wrap items-center gap-3">
-        {job.paused ? <Pause size={18} className="text-warn" /> : <Loader size={18} className="animate-spin text-accent" />}
-        <div className="min-w-0 flex-1">
-          <div className="text-[15px] font-semibold text-ink">
-            {job.paused ? `${job.label} — paused` : job.label} · {out?.name}
-          </div>
-          <div className="text-[12.5px] text-muted">
-            {phaseLabel}
-            {p?.span && p.phase === "video" ? ` · span ${p.spanIndex} of ${p.spanCount}${p.span.reasons.length ? ` (${p.span.reasons.join(", ")})` : ""} · ${fmtMs(p.span.start)} → ${fmtMs(p.span.end)}` : ""}
-            {p ? ` · step ${Math.min(steps.length, doneSteps + 1)} of ${steps.length}` : ""}
-            {job.paused ? " · resume to continue — keep this tab open, the file stays open while paused" : ""}
-            {job.resumedFrom ? ` · resumed from ${fmtTime(job.resumedFrom)}` : ""}
-            {job.partsMode && !job.join ? " · written in parts: a stop or a failure keeps what is finished" : ""}
-            {job.join ? ` · joining ${job.join.parts} parts (${fmtBytes(job.join.bytes)}) into the file${job.join.mode === "remove" ? `, each removed as it goes in — the disk has ${job.join.free != null ? fmtBytes(job.join.free) : "little"} free, so the file takes no extra room beyond one part` : ", the parts kept until the file is closed"}` : ""}
-          </div>
-        </div>
-        <span className="font-mono text-[26px] font-semibold tabular text-ink" data-export-pct>
-          {pct}%
-        </span>
-        {job.paused ? (
-          <button type="button" onClick={onResume} className={cn(PRIMARY, "h-9")}>
-            <Play size={13} /> Resume
-          </button>
-        ) : (
-          <button type="button" onClick={onPause} className={cn(GHOST, "h-9")} disabled={!p || p.phase === "prepare" || p.phase === "finalize" || p.phase === "done"}>
-            <Pause size={13} /> Pause
-          </button>
-        )}
-        <button type="button" onClick={onCancel} className={cn(GHOST, "h-9 hover:border-danger hover:text-danger")}>
-          Cancel
-        </button>
-      </div>
-      <div className="relative h-3 overflow-hidden rounded-full bg-raised" title="Overall progress, weighted by each step's estimated time — it can step back when an estimate is revised well upward; the marks are where one step is expected to hand over to the next">
-        <div className={cn("h-full transition-[width] duration-200", job.paused ? "bg-warn" : "bg-accent")} style={{ width: `${Math.min(100, (p?.fraction ?? 0) * 100)}%` }} />
-        {ticks.map((t) => (
-          <div key={t.title} className="absolute top-0 h-full w-px bg-ink/40" style={{ left: `${(t.at * 100).toFixed(2)}%` }} title={t.title} />
-        ))}
-      </div>
-      <div className="grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-3 lg:grid-cols-4 2xl:grid-cols-6">
-        <Stat label="Position" value={p ? `${fmtMs(p.phase === "audio" ? p.audioT : p.timelineT)} / ${fmtMs(p.total)}` : "—"} title="Timeline time covered so far, out of the export range" />
-        <Stat label="Frames" value={p ? `${p.frames.toLocaleString()} / ${p.framesTotal.toLocaleString()}` : "—"} />
-        <Stat label="Speed" value={p && p.fps > 0 ? `${p.fps.toFixed(1)} fps · ${p.realtime.toFixed(3)}× realtime` : "—"} title="Frames per second over the last few seconds; timeline seconds per wall second spent on video" />
-        <Stat label="Elapsed" value={p ? `${fmtDuration(p.elapsedMs)}${p.pausedMs > 500 ? ` (+${fmtDuration(p.pausedMs)} paused)` : ""}` : "0:00:00.0"} />
-        <Stat label="Remaining" value={p ? `≈ ${fmtDuration(p.etaMs)} · ${SOURCE_LABEL[p.etaSource]}` : "estimating…"} title="The unfinished steps' estimates added up, and what most of that rests on" />
-        <Stat label="Finish at" value={finishAt} title="Expected clock time when the file is closed" />
-        <Stat label="Written" value={p ? `${fmtBytes(p.bytesWritten)}${out ? ` of ~${fmtBytes(out.estimatedBytes)}` : ""}` : "0 kB"} title="Bytes that reached the file so far, against the estimate" />
-        {job.freeBytes != null && <Stat label="Free on disk" value={fmtBytes(job.freeBytes)} title="As the browser reports it; it keeps a reserve, so the real figure can be a little higher" />}
-        <Stat label="Output" value={out ? `${out.codec} ${out.width}×${out.height}` : "—"} />
-        <Stat label="Bitrate · preset" value={out ? `${out.bitrateMbps} Mbps · ${out.preset}` : "—"} />
-        <Stat label="Started" value={p ? new Date(p.startedAt).toLocaleTimeString() : "—"} />
-        <Stat label="Total expected" value={p ? `≈ ${fmtDuration(p.totalEstimateMs)} working` : "—"} title="Elapsed plus remaining, pauses excluded" />
-        <Stat label="Progress" value={p ? `video ${Math.min(100, (p.timelineT / Math.max(1e-6, p.total)) * 100).toFixed(3)}% · audio ${Math.min(100, (p.audioT / Math.max(1e-6, p.total)) * 100).toFixed(3)}%` : "—"} title="Each phase on its own, to three decimals" />
-      </div>
-      <div className="rounded-[var(--radius-sm)] border border-line" data-export-steps>
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2 text-[12px] text-muted">
-          <span className="font-medium text-ink">Steps</span>
-          <span>
-            {doneSteps} of {steps.length || "—"} done
-          </span>
-          <span title="Each unfinished step's estimate is a default guess until there is something to measure; a speed learned from your last export at these settings stands in between">estimates: {basisSummary}</span>
-          <button type="button" onClick={() => setShowSteps((v) => !v)} aria-expanded={showSteps} className="ml-auto text-accent hover:underline">
-            {showSteps ? "Hide steps" : "Show steps"}
-          </button>
-        </div>
-        {showSteps && steps.length > 0 && (
-          <ol className="divide-y divide-line border-t border-line">
-            {steps.map((s, i) => (
-              <StepRow key={s.id} step={s} index={i} paused={!!job.paused} />
-            ))}
-          </ol>
-        )}
-      </div>
-    </div>
-  );
-}
-
-/** One export step: what it does, how far it is, what it was expected to take and what it actually took. */
-function StepRow({ step: s, index, paused }: { step: StepProgress; index: number; paused: boolean }) {
-  const running = s.status === "running", done = s.status === "done";
-  const timed = s.kind === "video" || s.kind === "audio";
-  const timing = done
-    ? `took ${fmtDuration(s.elapsedMs)}${s.promisedMs != null && s.promisedMs > 0 ? ` · expected ${fmtDuration(s.promisedMs)} (${fmtDelta(s.elapsedMs, s.promisedMs)})` : ""}`
-    : running
-      ? `${fmtDuration(s.elapsedMs)} of ≈ ${fmtDuration(s.estimateMs)} · ≈ ${fmtDuration(s.remainingMs)} left · ${s.basis}`
-      : `≈ ${fmtDuration(s.estimateMs)} · ${s.basis}`;
-  const when = s.startedAt != null ? `${new Date(s.startedAt).toLocaleTimeString()}${s.endedAt != null ? ` → ${new Date(s.endedAt).toLocaleTimeString()}` : " → …"}` : "";
-  return (
-    <li className={cn("grid grid-cols-[20px_1fr] gap-x-2 px-3 py-2", running && "bg-accent-soft/40")} data-step={s.id} data-status={s.status}>
-      <div className="pt-0.5">
-        {done ? <Check size={15} className="text-accent" aria-label="done" /> : running ? paused ? <Pause size={15} className="text-warn" aria-label="paused" /> : <Loader size={15} className="animate-spin text-accent" aria-label="running" /> : <Circle size={13} className="mt-0.5 text-faint" aria-label="pending" />}
-      </div>
-      <div className="min-w-0">
-        <div className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 text-[13px]">
-          <span className={cn("font-medium", done || running ? "text-ink" : "text-muted")}>
-            {index + 1}. {s.title}
-          </span>
-          {timed && (running || done) && (
-            <span className="font-mono tabular text-ink" data-step-inner>
-              {((s.fraction ?? 0) * 100).toFixed(3)}%
-            </span>
-          )}
-          {timed && <span className="font-mono tabular text-muted">{running || done ? `${fmtMs(s.done)} / ${fmtMs(s.units)}` : `${fmtMs(s.units)} of timeline`}</span>}
-          <span className="ml-auto font-mono text-[12px] tabular text-muted" data-step-timing>
-            {timing}
-          </span>
-        </div>
-        <div className="text-[12px] text-faint">
-          {s.detail}
-          {when ? ` · ${when}` : ""}
-        </div>
-        {running && s.stage && (
-          <div className="mt-0.5 text-[12px] text-ink" data-step-stage>
-            now: {s.stage}
-          </div>
-        )}
-        {running && (
-          <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-raised">
-            {s.fraction != null ? <div className={cn("h-full transition-[width] duration-200", paused ? "bg-warn" : "bg-accent")} style={{ width: `${Math.min(100, s.fraction * 100)}%` }} /> : <div className={cn("h-full w-1/3 animate-pulse", paused ? "bg-warn" : "bg-accent")} />}
-          </div>
-        )}
-      </div>
-    </li>
-  );
-}

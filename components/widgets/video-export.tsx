@@ -1,0 +1,788 @@
+"use client";
+
+/**
+ * The Video Editor's export views: the summary and pre-flight before an export, the run view while it works, the
+ * result card when it is done, and the Files list of what the project folder holds. State lives in the editor; these
+ * components render it and hand actions back.
+ */
+
+import { useState, type ReactNode, type RefObject } from "react";
+import Link from "next/link";
+import { AlertTriangle, Check, ChevronDown, ChevronRight, Circle, Download, FlaskConical, FolderOpen, Gauge, Info, Loader, Pause, Play, RotateCcw, Square, Trash2, Wrench, X, XCircle } from "lucide-react";
+import { cn } from "@/lib/utils";
+import { GHOST, PRIMARY, SEL } from "./video-styles";
+import { fmtBytes, fmtDelta, fmtDuration, fmtMs, type EstimateSource, type ExportProgress, type StepProgress } from "@/lib/tools/video/progress";
+import { fmtTime, type ExportEstimate } from "@/lib/tools/video/project";
+import { EXPORT_PRESETS } from "@/lib/tools/video/export-presets";
+import type { PreflightItem, PreflightState } from "@/lib/tools/video/preflight";
+import { describeCheck, type Mp4Check } from "@/lib/tools/video/check";
+import type { ExportEvent, ExportFault, JoinInfo } from "@/lib/tools/video/engine";
+import type { Loudness } from "@/lib/tools/video/loudness";
+import { YOUTUBE_LUFS } from "@/lib/tools/video/loudness";
+
+/* ------------------------------------------------------------------ shared types */
+
+/** What the run view needs to know about the export job. The editor's job type carries these fields. */
+export interface ExportJobView {
+  label: string;
+  progress?: ExportProgress;
+  output?: { name: string; codec: string; width: number; height: number; bitrateMbps: number; preset: string; estimatedBytes: number };
+  paused?: boolean;
+  lowSpace?: boolean;
+  freeBytes?: number | null;
+  fault?: { fault: ExportFault; resolve: (answer: "skip" | "stop", all?: boolean) => void };
+  partsMode?: boolean;
+  resumedFrom?: number;
+  join?: JoinInfo;
+}
+
+/** A line in the run's log: the engine's events plus the editor's own (started, paused, resumed, waiting). */
+export interface RunEvent {
+  at: number;
+  kind: ExportEvent["kind"] | "start" | "pause" | "resume" | "space" | "fault";
+  text: string;
+}
+
+export interface Skip {
+  from: number;
+  to: number;
+}
+
+/** How an export ended, for the result card. */
+export interface DoneResult {
+  kind: "done" | "stopped" | "failed";
+  at: number;
+  name: string;
+  folder: string | null;
+  /** Length of the export (timeline seconds) and what was written. */
+  seconds: number;
+  bytes: number;
+  activeMs: number;
+  pausedMs: number;
+  /** What the plan promised, to compare with activeMs. */
+  estimatedMs: number;
+  codec: string;
+  width: number;
+  height: number;
+  bitrateMbps: number;
+  audioKbps: number;
+  parts: number;
+  resumedFrom: number;
+  joinMode?: JoinInfo["mode"];
+  skipped: { from: number; to: number; message: string }[];
+  /** Stopped or failed: why, and what is kept. */
+  message?: string;
+  keptAt?: number;
+  keptParts?: number;
+  /** The written file's index check (done exports only). */
+  check?: Mp4Check | null;
+  checking?: boolean;
+  checkError?: string;
+  repaired?: string[];
+}
+
+export interface FileEntry {
+  name: string;
+  size: number;
+  lastModified: number;
+  kind: "export" | "preview" | "fixed" | "other";
+  check?: Mp4Check | null;
+  checking?: boolean;
+  error?: string;
+  repaired?: string[];
+}
+
+export interface FixState {
+  name: string;
+  loudness: Loudness;
+  target: number;
+  gain: number;
+  setTarget: (t: number) => void;
+  run: () => void;
+  done: { name: string; bytes: number; gainDb: number } | null;
+}
+
+export interface ResumableView {
+  name: string;
+  parts: number;
+  bytes: number;
+  endAt: number;
+  total: number;
+  matches: boolean;
+  folder: string;
+  /** Parts already joined into a file that did not finish, and the seconds they covered (exported again on resume). */
+  consumedParts: number;
+  consumedSeconds: number;
+  skipped: number;
+}
+
+const describeLoud = (r: Loudness) => (r.integrated === null ? "silent" : `${r.integrated.toFixed(1)} LUFS · peaks ${r.peakDb.toFixed(1)} dBFS`);
+const clock = (ms: number) => new Date(ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+
+/* ------------------------------------------------------------------ set-up */
+
+export function ExportSummary({ name, auto, onName, folder, onPickFolder, lines, estimate, basis, blockers, busy, hasClips, onExport, onTest, testLine }: { name: string; auto: boolean; onName: (n: string | null) => void; folder: string | null; onPickFolder: () => void; lines: string[]; estimate: ExportEstimate; basis: string; blockers: string[]; busy: boolean; hasClips: boolean; onExport: () => void; onTest: () => void; testLine: string }) {
+  return (
+    <div className="panel space-y-2 p-3" data-export-summary>
+      <div className="flex min-w-0 items-center gap-2">
+        <Download size={15} className="shrink-0 text-accent" />
+        <input
+          value={name}
+          onChange={(e) => onName(e.target.value)}
+          onBlur={(e) => {
+            if (!e.target.value.trim()) onName(null);
+          }}
+          className="min-w-0 flex-1 border-b border-transparent bg-transparent font-mono text-[14px] font-medium text-ink outline-none focus:border-accent"
+          aria-label="File name"
+          title="The file's name; click to change it (.mp4 is added)"
+          data-export-name
+        />
+        {!auto && (
+          <button type="button" onClick={() => onName(null)} className="shrink-0 text-[11.5px] text-faint hover:text-ink" title="Back to the name made from the project and the resolution" data-export-name-reset>
+            reset
+          </button>
+        )}
+      </div>
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[12.5px] text-muted">
+        <span className="inline-flex items-center gap-1">
+          <FolderOpen size={12} />
+          {folder ? (
+            <>
+              into <span className="text-ink">{folder}</span>
+            </>
+          ) : (
+            <button type="button" onClick={onPickFolder} className="text-accent hover:underline" data-export-pick-folder>
+              pick a project folder
+            </button>
+          )}
+        </span>
+        {lines.map((l) => (
+          <span key={l}>{l}</span>
+        ))}
+      </div>
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[12.5px] text-muted" data-export-estimate>
+        <span>
+          About <span className="font-mono text-ink">{fmtBytes(estimate.bytes)}</span>
+        </span>
+        <span>
+          roughly <span className="font-mono text-ink">{fmtDuration(estimate.wallSeconds * 1000)}</span>
+        </span>
+        <span className="text-faint">{basis}</span>
+        {estimate.copySeconds > 0 && <span className="text-faint">{fmtTime(estimate.copySeconds)} passes through without re-encoding</span>}
+      </div>
+      <div className="flex flex-wrap items-center gap-1.5">
+        <button type="button" onClick={onExport} disabled={busy || !hasClips || blockers.length > 0} className={cn(PRIMARY, "h-10 flex-1 justify-center px-5")} title={blockers[0] ?? "Write the file into the project folder"} data-export-run>
+          <Download size={15} /> Export
+        </button>
+        <button type="button" onClick={onTest} disabled={busy || !hasClips} className={cn(GHOST, "h-10 text-[12.5px]")} title={`Run the real export, small and short — ${testLine} — and play it in the preview`} data-export-test>
+          <FlaskConical size={13} /> Test render
+        </button>
+      </div>
+      {blockers.length > 0 && (
+        <p className="text-[12px] text-danger" data-export-blocked>
+          Not yet: {blockers.join(" · ")}
+        </p>
+      )}
+    </div>
+  );
+}
+
+export function PresetsRow({ current, onPick }: { current: string | null; onPick: (id: string) => void }) {
+  const chosen = EXPORT_PRESETS.find((p) => p.id === current);
+  return (
+    <div className="space-y-1" data-presets>
+      <div className="flex flex-wrap items-center gap-1.5">
+        {EXPORT_PRESETS.map((p) => (
+          <button key={p.id} type="button" onClick={() => onPick(p.id)} aria-pressed={current === p.id} title={p.blurb} className={cn(GHOST, "h-7 px-2.5 text-[12px]", current === p.id && "border-accent bg-accent-soft text-ink")} data-preset={p.id}>
+            {p.name}
+          </button>
+        ))}
+        <span className={cn("inline-flex h-7 items-center rounded-[var(--radius-sm)] px-2 text-[12px]", current ? "text-faint" : "border border-dashed border-edge text-ink")} data-preset-custom={current ? "false" : "true"}>
+          {current ? "" : "Custom"}
+        </span>
+      </div>
+      <p className="text-[12px] text-faint">{chosen ? chosen.blurb : "Your own combination of codec, size, bitrate and sound — pick a preset to go back to a known-good one."}</p>
+    </div>
+  );
+}
+
+const STATE_ICON: Record<PreflightState, typeof Check> = { ok: Check, warn: AlertTriangle, block: XCircle, info: Info };
+const STATE_COLOR: Record<PreflightState, string> = { ok: "text-positive", warn: "text-warn", block: "text-danger", info: "text-faint" };
+
+export function Preflight({ items, onAction }: { items: PreflightItem[]; onAction: (id: string) => void }) {
+  const blocks = items.filter((i) => i.state === "block").length;
+  const warns = items.filter((i) => i.state === "warn").length;
+  const summary = blocks ? `${blocks} thing${blocks === 1 ? "" : "s"} to fix first` : warns ? `${warns} worth a look` : "all clear";
+  return (
+    <div className="rounded-[var(--radius-sm)] border border-edge" data-preflight data-blocks={blocks} data-warns={warns}>
+      <div className="flex items-center gap-2 border-b border-edge px-2.5 py-1.5 text-[12px] text-muted">
+        <span className="font-medium text-ink">Before you export</span>
+        <span data-preflight-summary>{summary}</span>
+      </div>
+      <ul className="divide-y divide-line">
+        {items.map((i) => {
+          const Icon = STATE_ICON[i.state];
+          return (
+            <li key={i.id} className="flex flex-wrap items-start gap-2 px-2.5 py-1.5 text-[12.5px]" data-preflight-item={i.id} data-state={i.state} {...(i.id === "parts" ? { "data-resumable": "" } : {})}>
+              <Icon size={14} className={cn("mt-0.5 shrink-0", STATE_COLOR[i.state])} aria-label={i.state} />
+              <div className="min-w-0 flex-1">
+                <div className={cn(i.state === "ok" ? "text-muted" : "text-ink", i.state === "block" && "font-medium")}>{i.title}</div>
+                {i.detail && <div className="text-[12px] text-faint">{i.detail}</div>}
+              </div>
+              {i.actions?.map((a) => (
+                <button key={a.id} type="button" onClick={() => onAction(a.id)} className={cn(GHOST, "h-7 px-2 text-[12px]", i.state === "block" && "border-accent text-accent")} data-preflight-action={a.id} {...(a.hook ? { [`data-${a.hook}`]: "" } : {})}>
+                  {a.label}
+                </button>
+              ))}
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
+
+export function Section({ id, title, summary, open, onToggle, children, right, hook }: { id: string; title: string; summary: string; open: boolean; onToggle: () => void; children: ReactNode; right?: ReactNode; hook?: string }) {
+  return (
+    <section className="rounded-[var(--radius-sm)] border border-edge" data-section={id} data-open={open ? "true" : "false"} {...(hook ? { [`data-${hook}`]: "" } : {})}>
+      <div className="flex items-center gap-2 px-2.5 py-1.5">
+        <button type="button" onClick={onToggle} aria-expanded={open} className="flex min-w-0 flex-1 items-center gap-2 text-left text-[13px]" data-section-toggle>
+          {open ? <ChevronDown size={14} className="shrink-0 text-faint" /> : <ChevronRight size={14} className="shrink-0 text-faint" />}
+          <span className="shrink-0 font-medium text-ink">{title}</span>
+          {!open && (
+            <span className="min-w-0 flex-1 truncate text-[12px] text-muted" data-section-summary>
+              {summary}
+            </span>
+          )}
+        </button>
+        {right}
+      </div>
+      {open && <div className="space-y-2 border-t border-edge p-2.5 text-[12.5px]">{children}</div>}
+    </section>
+  );
+}
+
+/* ------------------------------------------------------------------ run view */
+
+export const PHASE_LABEL: Record<ExportProgress["phase"], string> = { prepare: "Preparing", video: "Rendering video", audio: "Mixing the sound", finalize: "Finishing the file", done: "Done" };
+const SOURCE_LABEL: Record<EstimateSource, string> = { default: "a default guess", learned: "your last export", measured: "measured now", actual: "actual" };
+const GROUP_LABEL: Record<StepProgress["kind"], string> = { prepare: "Prepare", video: "Video", audio: "Sound", finalize: "Finish" };
+
+function Stat({ label, value, title, hook }: { label: string; value: ReactNode; title?: string; hook?: string }) {
+  return (
+    <div className="min-w-0" title={title} {...(hook ? { [`data-${hook}`]: "" } : {})}>
+      <div className="text-[11px] uppercase tracking-wide text-faint">{label}</div>
+      <div className="truncate font-mono text-[13.5px] tabular text-ink">{value}</div>
+    </div>
+  );
+}
+
+export function ExportRun({ job, events, skipped, liveRef, liveAt, onPause, onResume, onStop }: { job: ExportJobView; events: RunEvent[]; skipped: Skip[]; liveRef: RefObject<HTMLCanvasElement | null>; liveAt: number | null; onPause: () => void; onResume: () => void; onStop: () => void }) {
+  const [details, setDetails] = useState(false);
+  const [allEvents, setAllEvents] = useState(false);
+  const p = job.progress;
+  const out = job.output;
+  const steps = p?.steps ?? [];
+  const running = steps.find((s) => s.status === "running");
+  const state: "running" | "paused" | "space" | "fault" = job.fault ? "fault" : job.lowSpace ? "space" : job.paused ? "paused" : "running";
+  const stateLabel = { running: "Running", paused: "Paused", space: "Waiting for disk space", fault: "A frame failed — waiting for you" }[state];
+  const pct = Math.min(100, (p?.fraction ?? 0) * 100);
+  const finishAt = p && p.etaMs > 0 ? clock(p.startedAt + p.elapsedMs + p.pausedMs + p.etaMs) : null;
+  const phaseLine = !p ? "Starting…" : p.phase === "video" && p.span?.kind === "copy" ? "Copying video" : PHASE_LABEL[p.phase] + (running?.stage ? ` — ${running.stage}` : "");
+  // Phase groups along the bar, sized by their estimated time; the fill is the tracker's weighted fraction on the same axis.
+  const totalMs = steps.reduce((a, s) => a + s.estimateMs, 0);
+  const groups = (["prepare", "video", "audio", "finalize"] as StepProgress["kind"][]).map((kind) => ({ kind, ms: steps.filter((s) => s.kind === kind).reduce((a, s) => a + s.estimateMs, 0) })).filter((g) => g.ms > 0);
+  const total = p?.total ?? 0;
+  return (
+    <div className={cn("panel space-y-3 border-2 p-4", state === "space" ? "border-danger" : state === "fault" ? "border-warn" : state === "paused" ? "border-warn" : "border-accent")} data-export-panel data-run-state={state} aria-live="polite">
+      {job.lowSpace && (
+        <div className="flex flex-wrap items-center gap-2 rounded-[var(--radius-sm)] border border-danger/50 bg-danger/10 px-3 py-2 text-[13px]" role="alert" data-low-space>
+          <AlertTriangle size={15} className="shrink-0 text-danger" />
+          <span>
+            <span className="font-medium text-ink">Paused: the disk is almost full</span>
+            {job.freeBytes != null ? ` — ${fmtBytes(job.freeBytes)} free as the browser reports it.` : "."} Free some space and it continues on its own, or press Resume to try now. Nothing written so far is lost.
+          </span>
+        </div>
+      )}
+      {job.fault && (
+        <div className="flex flex-wrap items-center gap-2 rounded-[var(--radius-sm)] border border-warn/50 bg-warn/10 px-3 py-2 text-[13px]" role="alertdialog" aria-live="assertive" data-export-fault>
+          <AlertTriangle size={15} className="shrink-0 text-warn" />
+          <span className="min-w-0 flex-1">
+            <span className="font-medium text-ink">A frame failed at {fmtTime(job.fault.fault.timelineT)}</span> — {job.fault.fault.clipName} at {fmtTime(job.fault.fault.sourceT)} in the footage: {job.fault.fault.message}{" "}
+            <span className="text-muted">Skip leaves out {job.fault.fault.stretch < 0.1 ? "that frame" : `${job.fault.fault.stretch.toFixed(2)} s, up to the footage's next keyframe`} and carries on; Stop keeps the finished parts to resume from.</span>
+          </span>
+          <div className="flex flex-wrap gap-1.5">
+            <button type="button" onClick={() => job.fault!.resolve("skip")} className={cn(PRIMARY, "h-8")} data-fault-skip>
+              Skip and continue
+            </button>
+            <button type="button" onClick={() => job.fault!.resolve("skip", true)} className={cn(GHOST, "h-8")} title="Skip this one and any other frame that fails, without asking again" data-fault-skip-all>
+              Skip any that fail
+            </button>
+            <button type="button" onClick={() => job.fault!.resolve("stop")} className={cn(GHOST, "h-8 hover:border-danger hover:text-danger")} data-fault-stop>
+              Stop, keep what is done
+            </button>
+          </div>
+        </div>
+      )}
+
+      <div className="flex flex-wrap items-center gap-3">
+        {state === "running" ? <Loader size={18} className="animate-spin text-accent" /> : <Pause size={18} className={state === "space" ? "text-danger" : "text-warn"} />}
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2 text-[15px] font-semibold text-ink">
+            <span>
+              {job.label} · {out?.name}
+            </span>
+            <span className={cn("rounded-full border px-2 py-0.5 text-[11px] font-medium", state === "running" ? "border-accent/40 text-accent" : state === "space" ? "border-danger/50 text-danger" : "border-warn/50 text-warn")} data-run-chip>
+              {stateLabel}
+            </span>
+          </div>
+          <div className="text-[12.5px] text-muted" data-run-phase>
+            {phaseLine}
+            {p?.span && p.phase === "video" ? ` · span ${p.spanIndex} of ${p.spanCount} · ${fmtMs(p.span.start)} → ${fmtMs(p.span.end)}` : ""}
+            {job.resumedFrom ? ` · resumed from ${fmtTime(job.resumedFrom)}` : ""}
+            {job.join ? ` · joining ${job.join.parts} parts (${fmtBytes(job.join.bytes)})${job.join.mode === "remove" ? ", each removed as it goes in" : ""}` : ""}
+          </div>
+        </div>
+        {job.paused ? (
+          <button type="button" onClick={onResume} className={cn(PRIMARY, "h-9")} data-export-resume>
+            <Play size={13} /> Resume
+          </button>
+        ) : (
+          <button type="button" onClick={onPause} className={cn(GHOST, "h-9")} disabled={!p || p.phase === "prepare" || p.phase === "finalize" || p.phase === "done"} data-export-pause>
+            <Pause size={13} /> Pause
+          </button>
+        )}
+        <button type="button" onClick={onStop} className={cn(GHOST, "h-9 hover:border-danger hover:text-danger")} title={job.partsMode ? "Stop now; the finished parts are kept and the export can be resumed" : "Stop and discard"} data-export-stop>
+          <Square size={12} /> Stop
+        </button>
+      </div>
+
+      <div className="grid gap-4 md:grid-cols-[minmax(200px,280px)_1fr]">
+        <div className="space-y-1" data-export-live>
+          <div className="relative aspect-video overflow-hidden rounded-[var(--radius-sm)] bg-black">
+            <canvas ref={liveRef} className="h-full w-full object-contain" aria-label="The frame being encoded" />
+            {liveAt === null && <div className="absolute inset-0 flex items-center justify-center text-[12px] text-faint">{p?.phase === "video" ? "first frame…" : phaseLine}</div>}
+          </div>
+          <div className="flex items-center justify-between text-[11.5px] text-faint">
+            <span>the frame being encoded</span>
+            <span className="font-mono tabular text-muted" data-live-time>
+              {liveAt !== null ? fmtMs(liveAt) : "—"}
+            </span>
+          </div>
+        </div>
+        <div className="min-w-0 space-y-3">
+          <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1">
+            <span className="font-mono text-[34px] font-semibold leading-none tabular text-ink" data-export-pct>
+              {pct.toFixed(1)}%
+            </span>
+            <span className="text-[14px] text-ink" data-run-eta>
+              {p && p.etaMs > 0 ? `about ${fmtDuration(p.etaMs)} left` : "estimating…"}
+              {finishAt ? <span className="text-muted"> · finishes around {finishAt}</span> : null}
+            </span>
+            <span className="text-[12.5px] text-muted" data-run-speed>
+              {p && p.fps > 0 ? `${p.realtime.toFixed(2)}× realtime · ${p.fps.toFixed(1)} fps` : ""}
+            </span>
+          </div>
+          <div className="space-y-1">
+            <div className="relative h-3 overflow-hidden rounded-full bg-raised" title="Overall progress, weighted by each phase's estimated time; the marks are where one phase hands over to the next">
+              <div className={cn("h-full transition-[width] duration-200", state === "running" ? "bg-accent" : "bg-warn")} style={{ width: `${pct}%` }} />
+              {totalMs > 0 &&
+                groups.slice(0, -1).map((g, i) => {
+                  const at = groups.slice(0, i + 1).reduce((a, x) => a + x.ms, 0) / totalMs;
+                  return <div key={g.kind} className="absolute top-0 h-full w-px bg-ink/40" style={{ left: `${(at * 100).toFixed(2)}%` }} />;
+                })}
+            </div>
+            {totalMs > 0 && (
+              <div className="flex text-[10.5px] uppercase tracking-wide text-faint" data-run-phases>
+                {groups.map((g) => (
+                  <span key={g.kind} className="truncate" style={{ width: `${((g.ms / totalMs) * 100).toFixed(2)}%` }}>
+                    {g.ms / totalMs > 0.07 ? GROUP_LABEL[g.kind] : ""}
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+          {p && total > 0 && (
+            <div className="space-y-1" title="The export's own time: the video rendered so far, the sound mixed so far, and any stretch skipped">
+              <div className="relative h-1.5 overflow-hidden rounded-full bg-raised" data-run-range>
+                <div className="absolute inset-y-0 left-0 bg-accent/80" style={{ width: `${Math.min(100, (p.timelineT / total) * 100)}%` }} />
+                <div className="absolute inset-y-0 left-0 bg-accent/35" style={{ width: `${Math.min(100, (p.audioT / total) * 100)}%` }} />
+                {skipped.map((k) => (
+                  <div key={k.from} className="absolute inset-y-0 bg-danger" style={{ left: `${((k.from / total) * 100).toFixed(2)}%`, width: `${Math.max(0.2, ((k.to - k.from) / total) * 100).toFixed(2)}%` }} title={`skipped ${fmtMs(k.from)} → ${fmtMs(k.to)}`} />
+                ))}
+              </div>
+              <div className="flex justify-between text-[11px] text-faint">
+                <span>video {fmtMs(p.timelineT)}</span>
+                <span>sound {fmtMs(p.audioT)}</span>
+                <span>{fmtMs(total)}</span>
+              </div>
+            </div>
+          )}
+          <div className="grid grid-cols-2 gap-x-4 gap-y-2 sm:grid-cols-3 xl:grid-cols-6">
+            <Stat label="Written" value={p ? `${fmtBytes(p.bytesWritten)}${out ? ` of ~${fmtBytes(out.estimatedBytes)}` : ""}` : "0 kB"} />
+            <Stat label="Frames" value={p ? `${p.frames.toLocaleString()} / ${p.framesTotal.toLocaleString()}` : "—"} />
+            <Stat label="Elapsed" value={p ? `${fmtDuration(p.elapsedMs)}${p.pausedMs > 500 ? ` +${fmtDuration(p.pausedMs)} paused` : ""}` : "0:00:00"} />
+            <Stat label="Started" value={p ? clock(p.startedAt) : "—"} />
+            <Stat label="Output" value={out ? `${out.codec} ${out.height}p · ${out.bitrateMbps} Mbps` : "—"} />
+            {job.freeBytes != null ? <Stat label="Free on disk" value={fmtBytes(job.freeBytes)} title="As the browser reports it; it keeps a reserve" /> : <Stat label="Estimate rests on" value={p ? SOURCE_LABEL[p.etaSource] : "—"} />}
+          </div>
+        </div>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] text-muted">
+        <button type="button" onClick={() => setDetails((v) => !v)} aria-expanded={details} className="text-accent hover:underline" data-export-details>
+          {details ? "Hide details" : "Details"}
+        </button>
+        <span>
+          {steps.filter((s) => s.status === "done").length} of {steps.length || "—"} steps done
+        </span>
+        {p && <span>estimates rest on {SOURCE_LABEL[p.etaSource]}</span>}
+        {job.partsMode && !job.join && <span>written in parts: a stop keeps what is finished</span>}
+        <span className="ml-auto">keep this tab open; the title shows the progress</span>
+      </div>
+      {details && p && (
+        <div className="space-y-3" data-export-detail-panel>
+          <div className="grid grid-cols-2 gap-x-4 gap-y-2 sm:grid-cols-3 xl:grid-cols-6">
+            <Stat label="Position" value={`${fmtMs(p.phase === "audio" ? p.audioT : p.timelineT)} / ${fmtMs(p.total)}`} />
+            <Stat label="Remaining" value={`≈ ${fmtDuration(p.etaMs)}`} />
+            <Stat label="Total expected" value={`≈ ${fmtDuration(p.totalEstimateMs)}`} title="Elapsed plus remaining, pauses excluded" />
+            <Stat label="Finish at" value={finishAt ?? "—"} />
+            <Stat label="Preset" value={out ? `${out.preset} · ${out.width}×${out.height}` : "—"} />
+            <Stat label="Video · sound" value={`${Math.min(100, (p.timelineT / Math.max(1e-6, p.total)) * 100).toFixed(2)}% · ${Math.min(100, (p.audioT / Math.max(1e-6, p.total)) * 100).toFixed(2)}%`} />
+          </div>
+          <ol className="divide-y divide-line rounded-[var(--radius-sm)] border border-line" data-export-steps>
+            {steps.map((s, i) => (
+              <StepRow key={s.id} step={s} index={i} paused={!!job.paused} />
+            ))}
+          </ol>
+        </div>
+      )}
+      {events.length > 0 && (
+        <ol className="space-y-0.5 text-[12px]" data-export-events>
+          {(allEvents ? [...events].reverse() : [...events].reverse().slice(0, 4)).map((e, i) => (
+            <li key={`${e.at}-${i}`} className="flex gap-2">
+              <span className="shrink-0 font-mono tabular text-faint">{clock(e.at)}</span>
+              <span className={cn(e.kind === "skip" || e.kind === "space" || e.kind === "fault" ? "text-warn" : "text-muted")}>{e.text}</span>
+            </li>
+          ))}
+          {events.length > 4 && (
+            <li>
+              <button type="button" onClick={() => setAllEvents((v) => !v)} className="text-accent hover:underline">
+                {allEvents ? "Fewer" : `All ${events.length} events`}
+              </button>
+            </li>
+          )}
+        </ol>
+      )}
+    </div>
+  );
+}
+
+/** One export step: what it does, how far it is, what it was expected to take and what it actually took. */
+function StepRow({ step: s, index, paused }: { step: StepProgress; index: number; paused: boolean }) {
+  const running = s.status === "running", done = s.status === "done";
+  const timed = s.kind === "video" || s.kind === "audio";
+  const timing = done
+    ? `took ${fmtDuration(s.elapsedMs)}${s.promisedMs != null && s.promisedMs > 0 ? ` · expected ${fmtDuration(s.promisedMs)} (${fmtDelta(s.elapsedMs, s.promisedMs)})` : ""}`
+    : running
+      ? `${fmtDuration(s.elapsedMs)} of ≈ ${fmtDuration(s.estimateMs)} · ${s.basis}`
+      : `≈ ${fmtDuration(s.estimateMs)} · ${s.basis}`;
+  return (
+    <li className={cn("grid grid-cols-[20px_1fr] gap-x-2 px-3 py-1.5", running && "bg-accent-soft/40")} data-step={s.id} data-status={s.status}>
+      <div className="pt-0.5">{done ? <Check size={15} className="text-accent" aria-label="done" /> : running ? paused ? <Pause size={15} className="text-warn" aria-label="paused" /> : <Loader size={15} className="animate-spin text-accent" aria-label="running" /> : <Circle size={13} className="mt-0.5 text-faint" aria-label="pending" />}</div>
+      <div className="min-w-0">
+        <div className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 text-[13px]">
+          <span className={cn("font-medium", done || running ? "text-ink" : "text-muted")}>
+            {index + 1}. {s.title}
+          </span>
+          {timed && (running || done) && (
+            <span className="font-mono tabular text-ink" data-step-inner>
+              {((s.fraction ?? 0) * 100).toFixed(1)}%
+            </span>
+          )}
+          {timed && <span className="font-mono tabular text-muted">{running || done ? `${fmtMs(s.done)} / ${fmtMs(s.units)}` : `${fmtMs(s.units)} of timeline`}</span>}
+          <span className="ml-auto font-mono text-[12px] tabular text-muted" data-step-timing>
+            {timing}
+          </span>
+        </div>
+        <div className="text-[12px] text-faint">{s.detail}</div>
+        {running && s.stage && (
+          <div className="mt-0.5 text-[12px] text-ink" data-step-stage>
+            now: {s.stage}
+          </div>
+        )}
+        {running && <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-raised">{s.fraction != null ? <div className={cn("h-full transition-[width] duration-200", paused ? "bg-warn" : "bg-accent")} style={{ width: `${Math.min(100, s.fraction * 100)}%` }} /> : <div className={cn("h-full w-1/3 animate-pulse", paused ? "bg-warn" : "bg-accent")} />}</div>}
+      </div>
+    </li>
+  );
+}
+
+/* ------------------------------------------------------------------ result card */
+
+export function CheckVerdict({ check, checking, error, repaired, onRepair, onRecheck, busy, hook }: { check?: Mp4Check | null; checking?: boolean; error?: string; repaired?: string[]; onRepair?: () => void; onRecheck?: () => void; busy: boolean; hook: string }) {
+  if (checking)
+    return (
+      <div className="flex items-center gap-2 text-[12.5px] text-muted" {...{ [`data-${hook}`]: "checking" }}>
+        <Loader size={13} className="animate-spin text-accent" /> Checking the file&apos;s index…
+      </div>
+    );
+  if (error)
+    return (
+      <div className="flex items-center gap-2 text-[12.5px] text-warn" {...{ [`data-${hook}`]: "error" }}>
+        <AlertTriangle size={13} /> The file could not be checked: {error}
+      </div>
+    );
+  if (!check) return null;
+  const repairable = !check.ok && check.layout === "moov-last" && !check.tracks.some((t) => t.kind === "video" && t.hasCtts);
+  return (
+    <div className="space-y-1" {...{ [`data-${hook}`]: check.ok ? "ok" : "problems" }}>
+      <div className={cn("flex flex-wrap items-center gap-2 text-[13px]", check.ok ? "text-positive" : "text-warn")}>
+        {check.ok ? <Check size={14} /> : <AlertTriangle size={14} />}
+        <span className="font-medium">{check.ok ? "Checked: the index is clean, ready to upload" : describeCheck(check)}</span>
+        {!check.ok && repairable && onRepair && (
+          <button type="button" onClick={onRepair} disabled={busy} className={cn(GHOST, "h-7 border-accent px-2 text-[12px] text-accent")} title="Rewrite only the index at the end of the file — the picture and sound stay as they are; the old index is kept as a backup" {...{ [`data-${hook}-repair`]: "" }}>
+            <Wrench size={12} /> Repair index
+          </button>
+        )}
+        {onRecheck && (
+          <button type="button" onClick={onRecheck} disabled={busy} className="text-[12px] text-faint hover:text-ink" {...{ [`data-${hook}-again`]: "" }}>
+            check again
+          </button>
+        )}
+      </div>
+      {!check.ok && (
+        <ul className="list-disc space-y-0.5 pl-6 text-[12px] text-ink">
+          {check.problems.map((pr) => (
+            <li key={pr}>{pr}</li>
+          ))}
+        </ul>
+      )}
+      {repaired && repaired.length > 0 && (
+        <p className="text-[12px] text-positive" {...{ [`data-${hook}-repaired`]: "" }}>
+          Repaired: {repaired.join("; ")}.
+        </p>
+      )}
+      {check.notes.length > 0 && <p className="text-[12px] text-faint">{check.notes.join(" · ")}</p>}
+    </div>
+  );
+}
+
+export function ExportDone({ done, busy, onDismiss, onAgain, onFiles, onRepair, onRecheck, onResume, onDiscard, onFix }: { done: DoneResult; busy: boolean; onDismiss: () => void; onAgain: () => void; onFiles: () => void; onRepair: () => void; onRecheck: () => void; onResume: () => void; onDiscard: () => void; onFix: () => void }) {
+  const ok = done.kind === "done";
+  const ratio = done.estimatedMs > 0 ? done.activeMs / done.estimatedMs : 1;
+  const pace = done.estimatedMs <= 0 ? "" : Math.abs(ratio - 1) < 0.05 ? "as estimated" : ratio > 1.5 ? `${ratio.toFixed(1)}× the estimate` : ratio < 0.67 ? `${(1 / ratio).toFixed(1)}× faster than estimated` : ratio > 1 ? `${Math.round((ratio - 1) * 100)}% slower than estimated` : `${Math.round((1 - ratio) * 100)}% faster than estimated`;
+  const realtime = done.activeMs > 0 ? done.seconds / (done.activeMs / 1000) : 0;
+  return (
+    <div className={cn("panel space-y-2.5 border-2 p-4", ok ? (done.check && !done.check.ok ? "border-warn" : "border-positive/60") : "border-warn")} data-export-done={done.kind} aria-live="polite">
+      <div className="flex flex-wrap items-start gap-3">
+        {ok ? <Check size={20} className="mt-0.5 shrink-0 text-positive" /> : <AlertTriangle size={20} className="mt-0.5 shrink-0 text-warn" />}
+        <div className="min-w-0 flex-1">
+          <div className="text-[15px] font-semibold text-ink" data-done-title>
+            {ok ? `Exported ${done.name}` : done.kind === "stopped" ? `Export stopped${done.keptAt ? ` at ${fmtTime(done.keptAt)} of ${fmtTime(done.seconds)}` : ""}` : `Export failed${done.keptAt ? ` at ${fmtTime(done.keptAt)} of ${fmtTime(done.seconds)}` : ""}`}
+          </div>
+          <div className="text-[12.5px] text-muted" data-done-facts>
+            {ok ? (
+              <>
+                {fmtBytes(done.bytes)} · {fmtTime(done.seconds)} · {done.codec} {done.height}p at {done.bitrateMbps} Mbps · AAC {done.audioKbps} kbps · took {fmtDuration(done.activeMs)}
+                {done.pausedMs > 500 ? ` (+${fmtDuration(done.pausedMs)} paused)` : ""}
+                {realtime > 0 ? ` at ${realtime.toFixed(2)}× realtime` : ""}
+                {pace ? `, ${pace}` : ""}
+                {done.folder ? ` · in ${done.folder}` : ""}
+                {done.parts > 1 ? ` · ${done.parts} parts joined${done.joinMode === "remove" ? ", each removed as it went in" : ""}` : ""}
+                {done.resumedFrom ? ` · resumed from ${fmtTime(done.resumedFrom)}` : ""}
+              </>
+            ) : (
+              <>
+                {done.message}
+                {done.keptParts ? ` ${done.keptParts} part${done.keptParts === 1 ? "" : "s"} kept in the folder — Resume carries on from there, Discard removes them.` : ""}
+              </>
+            )}
+          </div>
+          {done.skipped.length > 0 && (
+            <div className="text-[12px] text-warn" data-done-skipped>
+              {done.skipped.length} stretch{done.skipped.length === 1 ? "" : "es"} skipped after frames failed ({done.skipped.reduce((a, k) => a + (k.to - k.from), 0).toFixed(2)} s in all, at {done.skipped.map((k) => fmtTime(k.from)).join(", ")}).
+            </div>
+          )}
+        </div>
+        <button type="button" onClick={onDismiss} className="shrink-0 rounded p-1 text-faint hover:text-ink" aria-label="Dismiss" data-done-dismiss>
+          <X size={15} />
+        </button>
+      </div>
+      {ok && <CheckVerdict check={done.check} checking={done.checking} error={done.checkError} repaired={done.repaired} onRepair={onRepair} onRecheck={onRecheck} busy={busy} hook="done-check" />}
+      <div className="flex flex-wrap items-center gap-1.5 text-[12.5px]">
+        {!ok && done.keptParts ? (
+          <>
+            <button type="button" onClick={onResume} disabled={busy} className={cn(PRIMARY, "h-8")} data-done-resume>
+              <Play size={13} /> Resume
+            </button>
+            <button type="button" onClick={onDiscard} disabled={busy} className={cn(GHOST, "hover:border-danger hover:text-danger")} data-done-discard>
+              <Trash2 size={13} /> Discard parts
+            </button>
+          </>
+        ) : (
+          <button type="button" onClick={onAgain} disabled={busy} className={GHOST} data-done-again>
+            <RotateCcw size={13} /> Export again
+          </button>
+        )}
+        {ok && (
+          <button type="button" onClick={onFix} disabled={busy} className={GHOST} title="Measure the file's loudness and write a copy at YouTube's level without touching the picture" data-done-fix>
+            <Gauge size={13} /> Check or fix the level
+          </button>
+        )}
+        <button type="button" onClick={onFiles} className={GHOST} data-done-files>
+          <FolderOpen size={13} /> Files in the folder
+        </button>
+        {ok && (
+          <Link href="/media/mp4-tags" className={cn(GHOST, "no-underline")}>
+            Tag editor
+          </Link>
+        )}
+        {ok && <span className="text-[12px] text-faint">On YouTube, set the category to Music and add the song credits on the upload page; that is what YouTube Music lists by.</span>}
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ files */
+
+const KIND_LABEL: Record<FileEntry["kind"], string> = { export: "export", preview: "test render", fixed: "re-levelled copy", other: "video" };
+
+export function ExportFiles({ files, loading, onRefresh, onCheck, onRepair, onFix, onDelete, fix, busy, resumable, onResume, onDiscard, hasFolder }: { files: FileEntry[]; loading: boolean; onRefresh: () => void; onCheck: (name: string) => void; onRepair: (name: string) => void; onFix: (name: string) => void; onDelete: (name: string) => void; fix: FixState | null; busy: boolean; resumable: ResumableView | null; onResume: () => void; onDiscard: () => void; hasFolder: boolean }) {
+  return (
+    <div className="space-y-2" data-export-files>
+      <div className="flex flex-wrap items-center gap-2 text-[12.5px] text-muted">
+        <span className="font-medium text-ink">Files in the project folder</span>
+        <span>{hasFolder ? `${files.length} video${files.length === 1 ? "" : "s"} besides the recordings` : "pick a project folder first"}</span>
+        <button type="button" onClick={onRefresh} disabled={loading || !hasFolder} className={cn(GHOST, "ml-auto h-7 px-2 text-[12px]")} data-files-refresh>
+          {loading ? <Loader size={12} className="animate-spin" /> : <RotateCcw size={12} />} Refresh
+        </button>
+      </div>
+      {resumable && (
+        <div className={cn("flex flex-wrap items-center gap-2 rounded-[var(--radius-sm)] border p-2.5 text-[12.5px]", resumable.matches ? "border-accent/60 bg-accent-soft/40" : "border-warn/50 bg-warn/10")} data-files-resumable>
+          <Play size={14} className="shrink-0 text-accent" />
+          <span className="min-w-0 flex-1 text-muted">
+            <span className="font-medium text-ink">
+              Parts of an export of {resumable.name}: {fmtTime(resumable.endAt)} of {fmtTime(resumable.total)} done
+            </span>{" "}
+            — {resumable.parts} part{resumable.parts === 1 ? "" : "s"}, {fmtBytes(resumable.bytes)}, in {resumable.folder}.{resumable.consumedParts ? ` ${resumable.consumedParts} already joined into a file that did not finish; Resume exports ${fmtTime(resumable.consumedSeconds)} of them again.` : ""} {resumable.matches ? "Resume carries on from there and joins them without re-encoding." : "The project has changed since, so they cannot be continued."}
+          </span>
+          {resumable.matches && (
+            <button type="button" onClick={onResume} disabled={busy} className={cn(PRIMARY, "h-8")} data-files-resume>
+              <Play size={13} /> Resume
+            </button>
+          )}
+          <button type="button" onClick={onDiscard} disabled={busy} className={cn(GHOST, "h-8 hover:border-danger hover:text-danger")} data-files-discard>
+            <Trash2 size={13} /> Discard parts
+          </button>
+        </div>
+      )}
+      {hasFolder && !loading && files.length === 0 && <p className="text-[12.5px] text-faint">Nothing exported yet. Exports, test renders and re-levelled copies land here, next to your recordings.</p>}
+      <ul className="divide-y divide-line rounded-[var(--radius-sm)] border border-edge" data-files-list>
+        {files.map((f) => {
+          const check = f.check;
+          const repairable = check && !check.ok && check.layout === "moov-last" && !check.tracks.some((t) => t.kind === "video" && t.hasCtts);
+          const video = check?.tracks.find((t) => t.kind === "video");
+          return (
+            <li key={f.name} className="space-y-1.5 p-2.5 text-[12.5px]" data-file={f.name} data-file-kind={f.kind} data-file-state={f.checking ? "checking" : check ? (check.ok ? "ok" : "problems") : f.error ? "error" : "unchecked"}>
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="min-w-0 flex-1 truncate font-mono text-[13px] text-ink" title={f.name}>
+                  {f.name}
+                </span>
+                <span className="text-[12px] text-faint">{KIND_LABEL[f.kind]}</span>
+                <span className="font-mono text-[12px] tabular text-muted">{fmtBytes(f.size)}</span>
+                <span className="text-[12px] text-faint">{new Date(f.lastModified).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })}</span>
+              </div>
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] text-muted">
+                {f.checking ? (
+                  <span className="inline-flex items-center gap-1">
+                    <Loader size={12} className="animate-spin text-accent" /> checking…
+                  </span>
+                ) : check ? (
+                  <>
+                    <span className={cn("inline-flex items-center gap-1 font-medium", check.ok ? "text-positive" : "text-warn")} data-file-verdict>
+                      {check.ok ? <Check size={12} /> : <AlertTriangle size={12} />}
+                      {check.ok ? "index clean" : describeCheck(check)}
+                    </span>
+                    <span>{fmtTime(check.durationS)}</span>
+                    {video && <span>{video.codec}</span>}
+                    {check.tags.title && <span className="truncate">“{check.tags.title}”</span>}
+                    {check.tags.kind && <span>{check.tags.kind}</span>}
+                  </>
+                ) : f.error ? (
+                  <span className="text-warn">{f.error}</span>
+                ) : (
+                  <span className="text-faint">not checked</span>
+                )}
+                <span className="ml-auto flex flex-wrap gap-1.5">
+                  {repairable && (
+                    <button type="button" onClick={() => onRepair(f.name)} disabled={busy} className={cn(GHOST, "h-7 border-accent px-2 text-[12px] text-accent")} data-file-repair>
+                      <Wrench size={12} /> Repair index
+                    </button>
+                  )}
+                  <button type="button" onClick={() => onCheck(f.name)} disabled={busy || !!f.checking} className={cn(GHOST, "h-7 px-2 text-[12px]")} data-file-check>
+                    {check ? "Check again" : "Check"}
+                  </button>
+                  <button type="button" onClick={() => onFix(f.name)} disabled={busy} className={cn(GHOST, "h-7 px-2 text-[12px]")} title="Measure the loudness and, if it is off, write a copy at the right level — the picture copied as it is" data-file-fix>
+                    <Gauge size={12} /> Level
+                  </button>
+                  <button type="button" onClick={() => onDelete(f.name)} disabled={busy} className={cn(GHOST, "h-7 px-2 text-[12px] hover:border-danger hover:text-danger")} data-file-delete>
+                    <Trash2 size={12} />
+                  </button>
+                </span>
+              </div>
+              {check && !check.ok && (
+                <ul className="list-disc pl-5 text-[12px] text-ink" data-file-problems>
+                  {check.problems.map((pr) => (
+                    <li key={pr}>{pr}</li>
+                  ))}
+                </ul>
+              )}
+              {f.repaired && f.repaired.length > 0 && (
+                <p className="text-[12px] text-positive" data-file-repaired>
+                  Repaired: {f.repaired.join("; ")}.
+                </p>
+              )}
+              {fix && fix.name === f.name && (
+                <div className="flex flex-wrap items-center gap-2 rounded-[var(--radius-sm)] bg-base p-2" data-fix-level>
+                  <span className="font-mono text-[12px] text-ink" data-fix-measured>
+                    {describeLoud(fix.loudness)}
+                  </span>
+                  {fix.loudness.integrated !== null && (
+                    <>
+                      <label className="flex items-center gap-1 text-muted">
+                        Target
+                        <select value={fix.target} onChange={(e) => fix.setTarget(Number(e.target.value))} className={cn(SEL, "h-7 text-[12px]")} aria-label="Target loudness" data-fix-target>
+                          {[-14, -16, -18, -23].map((t) => (
+                            <option key={t} value={t}>
+                              {t} LUFS{t === YOUTUBE_LUFS ? " (YouTube)" : t === -23 ? " (broadcast)" : ""}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <span className="font-mono text-[12.5px] text-ink" data-fix-gain>
+                        {fix.gain > 0 ? "+" : ""}
+                        {fix.gain} dB
+                      </span>
+                      {Math.abs(fix.gain) < 0.1 ? (
+                        <span className="text-[12px] text-positive">already at the target</span>
+                      ) : (
+                        <button type="button" onClick={fix.run} disabled={busy} className={cn(PRIMARY, "h-7 px-2.5 text-[12px]")} data-fix-run>
+                          Write a copy at {fix.target} LUFS
+                        </button>
+                      )}
+                    </>
+                  )}
+                  {fix.done && (
+                    <span className="basis-full text-[12px] text-positive" data-fix-done>
+                      Written {fix.done.name} ({fmtBytes(fix.done.bytes)}): the picture copied as it was, the sound {fix.done.gainDb > 0 ? "raised" : "lowered"} by {Math.abs(fix.done.gainDb)} dB and limited at −1 dBFS, the tags kept.
+                    </span>
+                  )}
+                </div>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}

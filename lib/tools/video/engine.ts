@@ -73,6 +73,8 @@ import {
 import {
   ProgressTracker,
   defaultSpeeds,
+  fmtBytes,
+  fmtMs,
   planSteps,
   type ExportProgress,
   type SpeedPriors,
@@ -889,6 +891,12 @@ export async function mixAudio(
 
 /* ------------------------------------------------------------------ export */
 
+/** Something worth a line in the export's log: a part written, a stretch skipped, the join starting. */
+export interface ExportEvent {
+  at: number;
+  kind: "part" | "skip" | "join";
+  text: string;
+}
 export interface ExportOptions {
   project: Project;
   getFile: (mediaId: string) => Promise<File | null>;
@@ -904,6 +912,10 @@ export interface ExportOptions {
   signal?: AbortSignal;
   /** Called with every video frame's timeline time as it is handed to the encoder (tests check they only go forward). */
   onFrame?: (timelineT: number) => void;
+  /** The frame just composed, a few times a second at most, for a live view: the engine's own canvas and the frame's timeline time. */
+  onPreview?: (frame: OffscreenCanvas, timelineT: number) => void;
+  /** Lines for a log of what happened along the way. */
+  onEvent?: (event: ExportEvent) => void;
   /**
    * Resumable export: finished stretches of video go to numbered part files (one every `seconds` of timeline,
    * 180 by default, and whatever was done when the export stops) and into the manifest; the file is joined from
@@ -1386,6 +1398,7 @@ async function exportWithPulse(
     manifest!.updatedAt = Date.now();
     runCursor = Math.max(runCursor, seg.end);
     await saveManifest();
+    opts.onEvent?.({ at: Date.now(), kind: "part", text: `Part ${manifest!.parts.length} written — ${fmtMs(seg.start)} → ${fmtMs(seg.end)}, ${seg.frames.toLocaleString()} frames, safe if the export stops` });
     return true;
   };
   /** Finishes the open part now (used when the export stops or ends). */
@@ -1435,6 +1448,7 @@ async function exportWithPulse(
   // sample that YouTube's processing never gets past. Frames are gated on their grid tick, not their time in seconds:
   // strictly one per tick, the first at 0 (so no edit list), and no sub-frame slivers at the cuts.
   let lastTick = -1;
+  let previewAt = 0;
   const tickOf = (timelineT: number) => Math.round((timelineT - offset) * fps);
   const gridTime = (tick: number) => offset + tick / fps;
   const addFrame = async (tick: number) => {
@@ -1460,6 +1474,10 @@ async function exportWithPulse(
     tracker.frame(progressAt(t));
     emit();
     opts.onFrame?.(lastFrameT);
+    if (opts.onPreview && performance.now() - previewAt > 400) {
+      previewAt = performance.now();
+      opts.onPreview(canvas, lastFrameT);
+    }
   };
 
   // Stretches left out after a frame failed and the user chose to go on (export time).
@@ -1695,6 +1713,7 @@ async function exportWithPulse(
         emit(true);
         if (answer !== "skip") throw e;
         skips.push({ from: fault.timelineT - offset, to: fault.timelineT - offset + fault.stretch, message: fault.message });
+        opts.onEvent?.({ at: Date.now(), kind: "skip", text: `Skipped ${fault.stretch < 0.1 ? "one frame" : `${fault.stretch.toFixed(2)} s`} at ${fmtMs(fault.timelineT - offset)} — ${fault.message}` });
         if (manifest) {
           manifest.skipped = skips;
           manifest.updatedAt = Date.now();
@@ -1774,6 +1793,7 @@ async function exportWithPulse(
       const mode: JoinInfo["mode"] = parts.testJoinMode ?? (free !== null && free < partBytes + audioBytes + 1e9 ? "remove" : "keep");
       joinInfo = { mode, bytes: partBytes, free, parts: ordered.length };
       parts.onJoin?.(joinInfo);
+      opts.onEvent?.({ at: Date.now(), kind: "join", text: `Joining ${ordered.length} parts (${fmtBytes(partBytes)}) into the file${mode === "remove" ? ", removing each as it goes in to spare the disk" : ""}` });
       let first = true;
       for (const [index, part] of ordered.entries()) {
         const inp = new Input({ source: new BlobSource(files[index]), formats: ALL_FORMATS });
