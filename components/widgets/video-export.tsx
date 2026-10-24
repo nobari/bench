@@ -8,14 +8,15 @@
 
 import { useState, type ReactNode, type RefObject } from "react";
 import Link from "next/link";
-import { AlertTriangle, Check, ChevronDown, ChevronRight, Circle, Download, FlaskConical, FolderOpen, Gauge, Info, Loader, Pause, Play, RotateCcw, Square, Trash2, Wrench, X, XCircle } from "lucide-react";
+import { AlertTriangle, Check, ChevronDown, ChevronRight, Circle, Download, FlaskConical, FolderOpen, Gauge, Info, Loader, Pause, Play, RotateCcw, Square, Trash2, X, XCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { GHOST, PRIMARY, SEL } from "./video-styles";
 import { fmtBytes, fmtDelta, fmtDuration, fmtMs, type EstimateSource, type ExportProgress, type StepProgress } from "@/lib/tools/video/progress";
 import { fmtTime, type ExportEstimate } from "@/lib/tools/video/project";
 import { EXPORT_PRESETS } from "@/lib/tools/video/export-presets";
 import type { PreflightItem, PreflightState } from "@/lib/tools/video/preflight";
-import { describeCheck, type Mp4Check } from "@/lib/tools/video/check";
+import { DoctorReportView } from "./video-doctor-report";
+import type { DoctorDepth, DoctorProgress, DoctorReport, Finding, FixKind } from "@/lib/tools/video/doctor";
 import type { ExportEvent, ExportFault, JoinInfo } from "@/lib/tools/video/engine";
 import type { Loudness } from "@/lib/tools/video/loudness";
 import { YOUTUBE_LUFS } from "@/lib/tools/video/loudness";
@@ -74,9 +75,10 @@ export interface DoneResult {
   message?: string;
   keptAt?: number;
   keptParts?: number;
-  /** The written file's index check (done exports only). */
-  check?: Mp4Check | null;
-  checking?: boolean;
+  /** The doctor's report on the written file (done exports only); null when the check is off. */
+  report?: DoctorReport | null;
+  /** While the doctor runs: its stage and fraction. */
+  checking?: DoctorProgress | null;
   checkError?: string;
   repaired?: string[];
 }
@@ -86,8 +88,8 @@ export interface FileEntry {
   size: number;
   lastModified: number;
   kind: "export" | "preview" | "fixed" | "other";
-  check?: Mp4Check | null;
-  checking?: boolean;
+  report?: DoctorReport | null;
+  checking?: DoctorProgress | null;
   error?: string;
   repaired?: string[];
 }
@@ -519,61 +521,54 @@ function StepRow({ step: s, index, paused }: { step: StepProgress; index: number
 
 /* ------------------------------------------------------------------ result card */
 
-export function CheckVerdict({ check, checking, error, repaired, onRepair, onRecheck, busy, hook }: { check?: Mp4Check | null; checking?: boolean; error?: string; repaired?: string[]; onRepair?: () => void; onRecheck?: () => void; busy: boolean; hook: string }) {
-  if (checking)
+/** The doctor's verdict on a file, with a line of what a repair did and a way to run it again. */
+export function FileVerdict({ report, checking, error, repaired, onCancel, onAgain, canFix, onFix, busy, hook, noFacts }: { report?: DoctorReport | null; checking?: DoctorProgress | null; error?: string; repaired?: string[]; onCancel?: () => void; onAgain?: (depth: DoctorDepth) => void; canFix: (kind: FixKind) => boolean; onFix: (finding: Finding) => void; busy: boolean; hook: string; noFacts?: boolean }) {
+  if (!checking && !error && report === null)
     return (
-      <div className="flex items-center gap-2 text-[12.5px] text-muted" {...{ [`data-${hook}`]: "checking" }}>
-        <Loader size={13} className="animate-spin text-accent" /> Checking the file&apos;s index…
-      </div>
+      <p className="text-[12px] text-faint" {...{ [`data-${hook}`]: "off" }}>
+        The file was not checked (the doctor is off in Options).
+        {onAgain && (
+          <button type="button" onClick={() => onAgain("full")} disabled={busy} className="ml-2 text-accent hover:underline" {...{ [`data-${hook}-again`]: "" }}>
+            check it now
+          </button>
+        )}
+      </p>
     );
-  if (error)
-    return (
-      <div className="flex items-center gap-2 text-[12.5px] text-warn" {...{ [`data-${hook}`]: "error" }}>
-        <AlertTriangle size={13} /> The file could not be checked: {error}
-      </div>
-    );
-  if (!check) return null;
-  const repairable = !check.ok && check.layout === "moov-last" && !check.tracks.some((t) => t.kind === "video" && t.hasCtts);
+  if (!checking && !error && !report) return null;
   return (
-    <div className="space-y-1" {...{ [`data-${hook}`]: check.ok ? "ok" : "problems" }}>
-      <div className={cn("flex flex-wrap items-center gap-2 text-[13px]", check.ok ? "text-positive" : "text-warn")}>
-        {check.ok ? <Check size={14} /> : <AlertTriangle size={14} />}
-        <span className="font-medium">{check.ok ? "Checked: the index is clean, ready to upload" : describeCheck(check)}</span>
-        {!check.ok && repairable && onRepair && (
-          <button type="button" onClick={onRepair} disabled={busy} className={cn(GHOST, "h-7 border-accent px-2 text-[12px] text-accent")} title="Rewrite only the index at the end of the file — the picture and sound stay as they are; the old index is kept as a backup" {...{ [`data-${hook}-repair`]: "" }}>
-            <Wrench size={12} /> Repair index
-          </button>
-        )}
-        {onRecheck && (
-          <button type="button" onClick={onRecheck} disabled={busy} className="text-[12px] text-faint hover:text-ink" {...{ [`data-${hook}-again`]: "" }}>
-            check again
-          </button>
-        )}
-      </div>
-      {!check.ok && (
-        <ul className="list-disc space-y-0.5 pl-6 text-[12px] text-ink">
-          {check.problems.map((pr) => (
-            <li key={pr}>{pr}</li>
-          ))}
-        </ul>
-      )}
+    <div className="space-y-1">
+      <DoctorReportView report={report} running={checking} error={error} onCancel={onCancel} canFix={canFix} onFix={onFix} busy={busy} hook={hook} noFacts={noFacts} />
       {repaired && repaired.length > 0 && (
         <p className="text-[12px] text-positive" {...{ [`data-${hook}-repaired`]: "" }}>
           Repaired: {repaired.join("; ")}.
         </p>
       )}
-      {check.notes.length > 0 && <p className="text-[12px] text-faint">{check.notes.join(" · ")}</p>}
+      {report && !checking && onAgain && (
+        <p className="text-[12px] text-faint">
+          <button type="button" onClick={() => onAgain(report.depth === "full" ? "full" : "quick")} disabled={busy} className="hover:text-ink" {...{ [`data-${hook}-again`]: "" }}>
+            check again
+          </button>
+          {report.depth !== "full" && (
+            <>
+              {" · "}
+              <button type="button" onClick={() => onAgain("full")} disabled={busy} className="hover:text-ink" {...{ [`data-${hook}-full`]: "" }}>
+                full scan
+              </button>
+            </>
+          )}
+        </p>
+      )}
     </div>
   );
 }
 
-export function ExportDone({ done, busy, onDismiss, onAgain, onFiles, onRepair, onRecheck, onResume, onDiscard, onFix }: { done: DoneResult; busy: boolean; onDismiss: () => void; onAgain: () => void; onFiles: () => void; onRepair: () => void; onRecheck: () => void; onResume: () => void; onDiscard: () => void; onFix: () => void }) {
+export function ExportDone({ done, busy, onDismiss, onAgain, onFiles, onRecheck, onCancelCheck, canFix, onFixFinding, onResume, onDiscard, onFix }: { done: DoneResult; busy: boolean; onDismiss: () => void; onAgain: () => void; onFiles: () => void; onRecheck: (depth: DoctorDepth) => void; onCancelCheck: () => void; canFix: (kind: FixKind) => boolean; onFixFinding: (finding: Finding) => void; onResume: () => void; onDiscard: () => void; onFix: () => void }) {
   const ok = done.kind === "done";
   const ratio = done.estimatedMs > 0 ? done.activeMs / done.estimatedMs : 1;
   const pace = done.estimatedMs <= 0 ? "" : Math.abs(ratio - 1) < 0.05 ? "as estimated" : ratio > 1.5 ? `${ratio.toFixed(1)}× the estimate` : ratio < 0.67 ? `${(1 / ratio).toFixed(1)}× faster than estimated` : ratio > 1 ? `${Math.round((ratio - 1) * 100)}% slower than estimated` : `${Math.round((1 - ratio) * 100)}% faster than estimated`;
   const realtime = done.activeMs > 0 ? done.seconds / (done.activeMs / 1000) : 0;
   return (
-    <div className={cn("panel space-y-2.5 border-2 p-4", ok ? (done.check && !done.check.ok ? "border-warn" : "border-positive/60") : "border-warn")} data-export-done={done.kind} aria-live="polite">
+    <div className={cn("panel space-y-2.5 border-2 p-4", ok ? (done.report && !done.report.ok ? "border-warn" : "border-positive/60") : "border-warn")} data-export-done={done.kind} aria-live="polite">
       <div className="flex flex-wrap items-start gap-3">
         {ok ? <Check size={20} className="mt-0.5 shrink-0 text-positive" /> : <AlertTriangle size={20} className="mt-0.5 shrink-0 text-warn" />}
         <div className="min-w-0 flex-1">
@@ -608,7 +603,7 @@ export function ExportDone({ done, busy, onDismiss, onAgain, onFiles, onRepair, 
           <X size={15} />
         </button>
       </div>
-      {ok && <CheckVerdict check={done.check} checking={done.checking} error={done.checkError} repaired={done.repaired} onRepair={onRepair} onRecheck={onRecheck} busy={busy} hook="done-check" />}
+      {ok && <FileVerdict report={done.report} checking={done.checking} error={done.checkError} repaired={done.repaired} onCancel={onCancelCheck} onAgain={onRecheck} canFix={canFix} onFix={onFixFinding} busy={busy} hook="done-check" />}
       <div className="flex flex-wrap items-center gap-1.5 text-[12.5px]">
         {!ok && done.keptParts ? (
           <>
@@ -647,7 +642,7 @@ export function ExportDone({ done, busy, onDismiss, onAgain, onFiles, onRepair, 
 
 const KIND_LABEL: Record<FileEntry["kind"], string> = { export: "export", preview: "test render", fixed: "re-levelled copy", other: "video" };
 
-export function ExportFiles({ files, loading, onRefresh, onCheck, onRepair, onFix, onDelete, fix, busy, resumable, onResume, onDiscard, hasFolder }: { files: FileEntry[]; loading: boolean; onRefresh: () => void; onCheck: (name: string) => void; onRepair: (name: string) => void; onFix: (name: string) => void; onDelete: (name: string) => void; fix: FixState | null; busy: boolean; resumable: ResumableView | null; onResume: () => void; onDiscard: () => void; hasFolder: boolean }) {
+export function ExportFiles({ files, loading, onRefresh, onCheck, onCancelCheck, canFix, onFixFinding, onFix, onDelete, fix, busy, resumable, onResume, onDiscard, hasFolder }: { files: FileEntry[]; loading: boolean; onRefresh: () => void; onCheck: (name: string, depth: DoctorDepth) => void; onCancelCheck: (name: string) => void; canFix: (kind: FixKind) => boolean; onFixFinding: (name: string, finding: Finding) => void; onFix: (name: string) => void; onDelete: (name: string) => void; fix: FixState | null; busy: boolean; resumable: ResumableView | null; onResume: () => void; onDiscard: () => void; hasFolder: boolean }) {
   return (
     <div className="space-y-2" data-export-files>
       <div className="flex flex-wrap items-center gap-2 text-[12.5px] text-muted">
@@ -679,11 +674,9 @@ export function ExportFiles({ files, loading, onRefresh, onCheck, onRepair, onFi
       {hasFolder && !loading && files.length === 0 && <p className="text-[12.5px] text-faint">Nothing exported yet. Exports, test renders and re-levelled copies land here, next to your recordings.</p>}
       <ul className="divide-y divide-line rounded-[var(--radius-sm)] border border-edge" data-files-list>
         {files.map((f) => {
-          const check = f.check;
-          const repairable = check && !check.ok && check.layout === "moov-last" && !check.tracks.some((t) => t.kind === "video" && t.hasCtts);
-          const video = check?.tracks.find((t) => t.kind === "video");
+          const report = f.report;
           return (
-            <li key={f.name} className="space-y-1.5 p-2.5 text-[12.5px]" data-file={f.name} data-file-kind={f.kind} data-file-state={f.checking ? "checking" : check ? (check.ok ? "ok" : "problems") : f.error ? "error" : "unchecked"}>
+            <li key={f.name} className="space-y-1.5 p-2.5 text-[12.5px]" data-file={f.name} data-file-kind={f.kind} data-file-state={f.checking ? "checking" : report ? (report.errors ? "problems" : report.warnings ? "warnings" : "ok") : f.error ? "error" : "unchecked"}>
               <div className="flex flex-wrap items-center gap-2">
                 <span className="min-w-0 flex-1 truncate font-mono text-[13px] text-ink" title={f.name}>
                   {f.name}
@@ -693,34 +686,20 @@ export function ExportFiles({ files, loading, onRefresh, onCheck, onRepair, onFi
                 <span className="text-[12px] text-faint">{new Date(f.lastModified).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })}</span>
               </div>
               <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] text-muted">
-                {f.checking ? (
-                  <span className="inline-flex items-center gap-1">
-                    <Loader size={12} className="animate-spin text-accent" /> checking…
+                {!f.checking && !report && (f.error ? <span className="text-warn">{f.error}</span> : <span className="text-faint">not checked</span>)}
+                {!f.checking && report && (
+                  <span className="inline-flex items-center gap-1 font-medium text-ink" data-file-verdict>
+                    {fmtTime(report.facts.durationS)}
+                    {report.facts.video ? ` · ${report.facts.video.width}×${report.facts.video.height} ${report.facts.video.label.split(",")[0]}` : ""}
+                    {report.index.tags.title ? ` · “${report.index.tags.title}”` : ""}
                   </span>
-                ) : check ? (
-                  <>
-                    <span className={cn("inline-flex items-center gap-1 font-medium", check.ok ? "text-positive" : "text-warn")} data-file-verdict>
-                      {check.ok ? <Check size={12} /> : <AlertTriangle size={12} />}
-                      {check.ok ? "index clean" : describeCheck(check)}
-                    </span>
-                    <span>{fmtTime(check.durationS)}</span>
-                    {video && <span>{video.codec}</span>}
-                    {check.tags.title && <span className="truncate">“{check.tags.title}”</span>}
-                    {check.tags.kind && <span>{check.tags.kind}</span>}
-                  </>
-                ) : f.error ? (
-                  <span className="text-warn">{f.error}</span>
-                ) : (
-                  <span className="text-faint">not checked</span>
                 )}
                 <span className="ml-auto flex flex-wrap gap-1.5">
-                  {repairable && (
-                    <button type="button" onClick={() => onRepair(f.name)} disabled={busy} className={cn(GHOST, "h-7 border-accent px-2 text-[12px] text-accent")} data-file-repair>
-                      <Wrench size={12} /> Repair index
-                    </button>
-                  )}
-                  <button type="button" onClick={() => onCheck(f.name)} disabled={busy || !!f.checking} className={cn(GHOST, "h-7 px-2 text-[12px]")} data-file-check>
-                    {check ? "Check again" : "Check"}
+                  <button type="button" onClick={() => onCheck(f.name, "quick")} disabled={busy || !!f.checking} className={cn(GHOST, "h-7 px-2 text-[12px]")} title="Read the index and judge the structure, codec parameters and YouTube's rules — seconds" data-file-check>
+                    {report ? "Check again" : "Check"}
+                  </button>
+                  <button type="button" onClick={() => onCheck(f.name, "full")} disabled={busy || !!f.checking} className={cn(GHOST, "h-7 px-2 text-[12px]")} title="Also read every packet, decode the whole soundtrack and the picture at every cut" data-file-check-full>
+                    Full scan
                   </button>
                   <button type="button" onClick={() => onFix(f.name)} disabled={busy} className={cn(GHOST, "h-7 px-2 text-[12px]")} title="Measure the loudness and, if it is off, write a copy at the right level — the picture copied as it is" data-file-fix>
                     <Gauge size={12} /> Level
@@ -730,18 +709,7 @@ export function ExportFiles({ files, loading, onRefresh, onCheck, onRepair, onFi
                   </button>
                 </span>
               </div>
-              {check && !check.ok && (
-                <ul className="list-disc pl-5 text-[12px] text-ink" data-file-problems>
-                  {check.problems.map((pr) => (
-                    <li key={pr}>{pr}</li>
-                  ))}
-                </ul>
-              )}
-              {f.repaired && f.repaired.length > 0 && (
-                <p className="text-[12px] text-positive" data-file-repaired>
-                  Repaired: {f.repaired.join("; ")}.
-                </p>
-              )}
+              <FileVerdict report={report} checking={f.checking} error={f.checking || report ? undefined : f.error} repaired={f.repaired} onCancel={() => onCancelCheck(f.name)} canFix={canFix} onFix={(x) => onFixFinding(f.name, x)} busy={busy} hook="file-report" />
               {fix && fix.name === f.name && (
                 <div className="flex flex-wrap items-center gap-2 rounded-[var(--radius-sm)] bg-base p-2" data-fix-level>
                   <span className="font-mono text-[12px] text-ink" data-fix-measured>

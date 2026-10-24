@@ -17,6 +17,23 @@ export interface EditEntry {
   mediaTime: number;
 }
 
+/** What the sample description says about the codec, for the doctor's rules. Fields only when the entry carries them. */
+export interface SampleEntryInfo {
+  /** Picture size as the sample entry declares it. */
+  width?: number;
+  height?: number;
+  /** HEVC: general profile idc (1 Main, 2 Main 10), tier, level idc (×30: 153 = 5.1, 180 = 6.0), chroma format (1 = 4:2:0), luma bit depth. */
+  hevc?: { profile: number; tier: "main" | "high"; level: number; chroma: number; bitDepth: number };
+  /** H.264: profile idc (66 Baseline, 77 Main, 100 High) and level idc (×10: 51 = 5.1). */
+  avc?: { profile: number; level: number };
+  /** AAC from the esds: audio object type (2 = LC, 5 = HE, 29 = HE v2), the rate and channel configuration it declares. */
+  aac?: { objectType: number; sampleRate: number; channels: number };
+  /** Any audio entry: channels and rate from the sample entry itself. */
+  audio?: { channels: number; sampleRate: number };
+  /** The colr box (nclx): colour primaries, transfer characteristics, matrix (ITU-T H.273 codes) and the range flag. */
+  colr?: { primaries: number; transfer: number; matrix: number; fullRange: boolean };
+}
+
 export interface TrackCheck {
   kind: "video" | "audio" | "other";
   timescale: number;
@@ -40,10 +57,17 @@ export interface TrackCheck {
   /** Whether the track delays its start through an empty edit (mediaTime -1 first). */
   emptyEdit: boolean;
   hasCtts: boolean;
+  /** Video with a version-1 ctts carrying negative offsets: frames placed before their predecessors. */
+  negativeCtts: boolean;
   /** Sum of stsz, bytes. */
   bytes: number;
   /** The stsd entry's fourcc, e.g. "hvc1", "avc1", "mp4a". */
   codec: string;
+  entry: SampleEntryInfo;
+  /** Video only: timeline positions (seconds) of the irregular frames, up to 2,000 — where the cuts are. */
+  irregularAt: number[];
+  /** Video with an stss: the longest stretch between keyframes (or from the last one to the end), seconds; null without an stss. */
+  maxKeyGapS: number | null;
 }
 
 export interface Mp4Check {
@@ -89,6 +113,7 @@ const latin1 = (b: Uint8Array, from: number, to: number) => {
   return s;
 };
 const utf8 = new TextDecoder("utf-8");
+const u16 = (b: Uint8Array, p: number) => (b[p] << 8) | b[p + 1];
 const u32 = (b: Uint8Array, p: number) => ((b[p] << 24) >>> 0) + (b[p + 1] << 16) + (b[p + 2] << 8) + b[p + 3];
 const i32 = (b: Uint8Array, p: number) => u32(b, p) | 0;
 const u64 = (b: Uint8Array, p: number) => u32(b, p) * 0x1_0000_0000 + u32(b, p + 4);
@@ -277,6 +302,80 @@ interface TrackInfo {
   firstChunk: number;
 }
 
+const AAC_RATES = [96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050, 16000, 12000, 11025, 8000, 7350];
+/** The AudioSpecificConfig inside an esds: object type, rate and channels as the stream declares them. */
+function readAsc(b: Uint8Array, esds: Box): SampleEntryInfo["aac"] {
+  let p = esds.start + 4;
+  const end = esds.end;
+  const varint = () => {
+    let v = 0;
+    for (let i = 0; i < 4 && p < end; i++) {
+      const x = b[p++];
+      v = (v << 7) | (x & 0x7f);
+      if (!(x & 0x80)) break;
+    }
+    return v;
+  };
+  while (p < end) {
+    const tag = b[p++], size = varint(), body = p;
+    if (tag === 0x03) {
+      // ES descriptor: id, flags, optional dependsOn / URL / OCR fields, then its children.
+      p += 2;
+      const flags = b[p++];
+      if (flags & 0x80) p += 2;
+      if (flags & 0x40) p += b[p] + 1;
+      if (flags & 0x20) p += 2;
+      continue;
+    }
+    if (tag === 0x04) {
+      p += 13; // decoder config: object type, stream type, buffer size, max and average bitrate — then the specific info
+      continue;
+    }
+    if (tag === 0x05 && size >= 2) {
+      const a = b[p], c = b[p + 1];
+      return { objectType: a >> 3, sampleRate: AAC_RATES[((a & 7) << 1) | (c >> 7)] ?? 0, channels: (c >> 3) & 0xf };
+    }
+    p = body + size;
+  }
+  return undefined;
+}
+/** Codec parameters from the first sample description entry. */
+function readSampleEntry(b: Uint8Array, stsd: Box | undefined, kind: TrackCheck["kind"]): SampleEntryInfo {
+  const info: SampleEntryInfo = {};
+  if (!stsd || stsd.start + 16 > stsd.end) return info;
+  const at = stsd.start + 8, size = u32(b, at), end = Math.min(stsd.end, at + Math.max(8, size)), start = at + 8;
+  if (kind === "video" && start + 78 <= end) {
+    info.width = u16(b, start + 24);
+    info.height = u16(b, start + 26);
+    for (const box of parseBoxes(b, start + 78, end, "stsd")) {
+      const s = box.start, n = box.end - box.start;
+      if (box.type === "hvcC" && n >= 23) info.hevc = { profile: b[s + 1] & 0x1f, tier: b[s + 1] & 0x20 ? "high" : "main", level: b[s + 12], chroma: b[s + 16] & 3, bitDepth: (b[s + 17] & 7) + 8 };
+      else if (box.type === "avcC" && n >= 4) info.avc = { profile: b[s + 1], level: b[s + 3] };
+      else if (box.type === "colr" && n >= 11 && latin1(b, s, s + 4) === "nclx") info.colr = { primaries: u16(b, s + 4), transfer: u16(b, s + 6), matrix: u16(b, s + 8), fullRange: !!(b[s + 10] & 0x80) };
+    }
+  } else if (kind === "audio" && start + 28 <= end) {
+    const version = u16(b, start + 8);
+    info.audio = { channels: u16(b, start + 16), sampleRate: u32(b, start + 24) >>> 16 };
+    const kidsAt = start + (version === 1 ? 44 : version === 2 ? 64 : 28);
+    if (kidsAt < end) for (const box of parseBoxes(b, kidsAt, end, "stsd")) if (box.type === "esds") info.aac = readAsc(b, box);
+  }
+  return info;
+}
+/** The longest stretch between keyframes, seconds: between consecutive stss entries and from the last one to the end. */
+function readKeyGap(b: Uint8Array, stss: Box, deltas: Uint32Array, timescale: number): number {
+  const n = u32(b, stss.start + 4);
+  let worst = 0, prevT = 0, cursor = 0, t = 0;
+  for (let i = 0; i < n; i++) {
+    const sample = u32(b, stss.start + 8 + i * 4) - 1;
+    while (cursor < sample && cursor < deltas.length) t += deltas[cursor++];
+    if (i > 0) worst = Math.max(worst, t - prevT);
+    prevT = t;
+  }
+  while (cursor < deltas.length) t += deltas[cursor++];
+  worst = Math.max(worst, t - prevT);
+  return timescale ? worst / timescale : 0;
+}
+
 function readTrack(b: Uint8Array, trak: Box): TrackInfo | null {
   const mdia = find(trak.kids, "mdia"), tkhd = find(trak.kids, "tkhd");
   const mdhd = find(mdia?.kids, "mdhd"), hdlr = find(mdia?.kids, "hdlr");
@@ -295,7 +394,7 @@ function readTrack(b: Uint8Array, trak: Box): TrackInfo | null {
   let nominalDelta = 0, best = -1;
   for (const [d, c] of counts) if (c > best || (c === best && d > nominalDelta)) { best = c; nominalDelta = d; }
   let zeroLength = 0, shortFrames = 0, irregular = 0, t = 0;
-  const zeroLengthAt: number[] = [];
+  const zeroLengthAt: number[] = [], irregularAt: number[] = [];
   for (const d of deltas) {
     if (d === 0) {
       zeroLength++;
@@ -303,6 +402,7 @@ function readTrack(b: Uint8Array, trak: Box): TrackInfo | null {
     } else if (kind === "video" && d !== nominalDelta) {
       irregular++;
       if (d * 5 < nominalDelta) shortFrames++;
+      if (irregularAt.length < 2000) irregularAt.push(t / timescale);
     }
     t += d;
   }
@@ -343,8 +443,12 @@ function readTrack(b: Uint8Array, trak: Box): TrackInfo | null {
       elst,
       emptyEdit: !!elst && elst.length > 0 && elst[0].mediaTime === -1,
       hasCtts: !!ctts,
+      negativeCtts,
       bytes,
       codec,
+      entry: readSampleEntry(b, stsd, kind),
+      irregularAt,
+      maxKeyGapS: kind === "video" && stss ? readKeyGap(b, stss, deltas, timescale) : null,
     },
   };
 }

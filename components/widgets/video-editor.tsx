@@ -22,7 +22,8 @@ import { GHOST, INPUT, PRIMARY, RANGE, SEL } from "./video-styles";
 import { ExportDone, ExportFiles, ExportRun, ExportSummary, PHASE_LABEL, Preflight, PresetsRow, Section, type DoneResult, type ExportJobView, type FileEntry, type FixState, type ResumableView, type RunEvent, type Skip } from "./video-export";
 import { applyPreset, matchPreset } from "@/lib/tools/video/export-presets";
 import { preflight, preflightBlocks } from "@/lib/tools/video/preflight";
-import { applyRepair, checkMp4, planRepair, type Mp4Check } from "@/lib/tools/video/check";
+import { applyRepair, planRepair } from "@/lib/tools/video/check";
+import { diagnose, type DoctorDepth, type DoctorProgress, type DoctorReport, type Finding, type FixKind } from "@/lib/tools/video/doctor";
 import { defaultSpeeds } from "@/lib/tools/video/progress";
 
 /** A key hint at the end of a button label. */
@@ -794,7 +795,8 @@ export function VideoEditorWidget() {
   const tagsLine = project.export.tags.title.trim() ? `${project.export.tags.kind === "music-video" ? "Music video" : "Video"} · “${project.export.tags.title}”${project.export.tags.artist ? ` · ${project.export.tags.artist}` : ""}${project.export.tags.album ? ` · ${project.export.tags.album}` : ""}` : `${project.export.tags.kind === "music-video" ? "Music video" : "Video"} · no title yet (the project name is used)`;
   const previewScopeLabel = { around: "30 s around the playhead", intro: "the intro", range: "the export range", all: "the whole timeline" }[previewOpts.scope];
   const testLine = `${Math.min(previewOpts.height, firstMedia?.height ?? previewOpts.height)}p · ${previewScopeLabel}`;
-  const optionsLine = `${notify ? "Notifications on" : "No notifications"} · test render ${testLine}`;
+  const checkLabel = { full: "Full scan after export", quick: "Quick check after export", off: "No check after export" }[project.export.check ?? "full"];
+  const optionsLine = `${checkLabel} · ${notify ? "notifications on" : "no notifications"} · test render ${testLine}`;
   const summaryLines = [range ? `${fmtTime(range.to - range.from)} of ${fmtTime(duration)}` : fmtTime(duration), `${outW}×${outH} ${codecLabel} ${project.export.bitrateMbps} Mbps`, `AAC ${project.export.audioBitrateKbps} kbps · ${SOUND_LABELS[project.sound ?? "footage"]}`];
   const onPreflightAction = (id: string) => {
     if (id === "pick-folder") void chooseFolder();
@@ -824,23 +826,50 @@ export function VideoEditorWidget() {
     setLiveAt(t);
   };
   const logEvent = (kind: RunEvent["kind"], text: string) => setEvents((l) => [...l, { at: Date.now(), kind, text }]);
-  /** Checks the index of a file just written (the result card) and keeps the verdict with it. */
-  const checkWritten = async (name: string) => {
-    setDone((d) => (d && d.name === name ? { ...d, checking: true, checkError: undefined } : d));
+  /** The doctor runs one file at a time; "skip the rest" aborts the full scan and the quick findings stand. */
+  const doctorAbort = useRef<Map<string, AbortController>>(new Map());
+  const runDoctor = async (name: string, file: File, depth: DoctorDepth, onProgress: (p: DoctorProgress) => void): Promise<DoctorReport> => {
+    doctorAbort.current.get(name)?.abort();
+    const abort = new AbortController();
+    doctorAbort.current.set(name, abort);
+    try {
+      return await diagnose(file, { target: "youtube", depth, signal: abort.signal, onProgress });
+    } finally {
+      if (doctorAbort.current.get(name) === abort) doctorAbort.current.delete(name);
+    }
+  };
+  const cancelDoctor = (name: string) => doctorAbort.current.get(name)?.abort();
+  /** Runs the doctor on a file just written (the result card) at the depth the project asks for, and keeps the report with it. */
+  const checkWritten = async (name: string, depth: DoctorDepth | "off" = project.export.check ?? "full") => {
+    if (depth === "off") return setDone((d) => (d && d.name === name ? { ...d, checking: null, report: null } : d));
+    setDone((d) => (d && d.name === name ? { ...d, checking: { stage: "Reading the index", fraction: 0 }, checkError: undefined } : d));
     try {
       const f = await store.fileIn(name);
       if (!f) throw new Error("it is not in the project folder any more");
-      const check = await checkMp4(f);
-      setDone((d) => (d && d.name === name ? { ...d, checking: false, check } : d));
+      const report = await runDoctor(name, f, depth, (p) => setDone((d) => (d && d.name === name ? { ...d, checking: p } : d)));
+      setDone((d) => (d && d.name === name ? { ...d, checking: null, report } : d));
     } catch (e) {
-      setDone((d) => (d && d.name === name ? { ...d, checking: false, checkError: e instanceof Error ? e.message : String(e) } : d));
+      setDone((d) => (d && d.name === name ? { ...d, checking: null, checkError: e instanceof Error ? e.message : String(e) } : d));
+    }
+  };
+  /** The fixes the editor can carry out itself; the others link to the tools that do them. */
+  const canFix = (kind: FixKind) => (kind === "repair-index" || kind === "fix-level") && store.hasFolder;
+  const fixFinding = async (name: string, finding: Finding, where: "done" | "files") => {
+    if (!finding.fix) return;
+    if (finding.fix.kind === "repair-index") {
+      if (where === "done") await repairWritten(name);
+      else await repairFile(name);
+    } else if (finding.fix.kind === "fix-level") {
+      setTab("export");
+      setExportView("files");
+      await fixByName(name);
     }
   };
   /**
    * Repairs a file's index in place: only the moov at the tail is rewritten, after the old one is saved beside the
    * file as a backup; the picture and sound are not read or written.
    */
-  const repairIndexOf = async (name: string): Promise<{ changes: string[]; check: Mp4Check } | null> => {
+  const repairIndexOf = async (name: string): Promise<{ changes: string[]; report: DoctorReport } | null> => {
     if (job) return null;
     const f = await store.fileIn(name);
     const h = await store.fileHandle(name);
@@ -860,10 +889,10 @@ export function VideoEditorWidget() {
       await backup.writable.close();
       await applyRepair(h, plan);
       const after = await store.fileIn(name);
-      const check = after ? await checkMp4(after) : null;
-      if (!check) throw new Error("the repaired file could not be read back");
+      if (!after) throw new Error("the repaired file could not be read back");
+      const report = await diagnose(after, { target: "youtube", depth: "quick" });
       setStatus(`Repaired the index of ${name} — ${plan.changes.join("; ")}`);
-      return { changes: plan.changes, check };
+      return { changes: plan.changes, report };
     } catch (e) {
       setError(`${name}: ${e instanceof Error ? e.message : String(e)}`);
       return null;
@@ -874,7 +903,7 @@ export function VideoEditorWidget() {
   };
   const repairWritten = async (name: string) => {
     const r = await repairIndexOf(name);
-    if (r) setDone((d) => (d && d.name === name ? { ...d, check: r.check, repaired: r.changes } : d));
+    if (r) setDone((d) => (d && d.name === name ? { ...d, report: r.report, repaired: r.changes } : d));
   };
   const isFixedCopy = (name: string) => /-(youtube-level|\d+lufs)\.mp4$/i.test(name);
   /** The videos in the project folder that are not recordings; checks run in the background for the ones not yet checked. */
@@ -892,25 +921,25 @@ export function VideoEditorWidget() {
         return { name: f.name, size: f.size, lastModified: f.lastModified, kind: f.name.startsWith("preview-") ? "preview" : isFixedCopy(f.name) ? "fixed" : "export", repaired: old?.repaired };
       });
       setFiles(next);
-      for (const f of next) if (!f.check && !f.error && !f.checking) await checkFile(f.name);
+      for (const f of next) if (!f.report && !f.error && !f.checking) await checkFile(f.name);
     } finally {
       setFilesLoading(false);
     }
   };
-  const checkFile = async (name: string) => {
-    setFiles((l) => l.map((f) => (f.name === name ? { ...f, checking: true, error: undefined } : f)));
+  const checkFile = async (name: string, depth: DoctorDepth = "quick") => {
+    setFiles((l) => l.map((f) => (f.name === name ? { ...f, checking: { stage: "Reading the index", fraction: 0 }, error: undefined } : f)));
     try {
       const f = await store.fileIn(name);
       if (!f) throw new Error("not in the folder any more");
-      const check = await checkMp4(f);
-      setFiles((l) => l.map((x) => (x.name === name ? { ...x, checking: false, check } : x)));
+      const report = await runDoctor(name, f, depth, (p) => setFiles((l) => l.map((x) => (x.name === name ? { ...x, checking: p } : x))));
+      setFiles((l) => l.map((x) => (x.name === name ? { ...x, checking: null, report } : x)));
     } catch (e) {
-      setFiles((l) => l.map((x) => (x.name === name ? { ...x, checking: false, error: e instanceof Error ? e.message : String(e) } : x)));
+      setFiles((l) => l.map((x) => (x.name === name ? { ...x, checking: null, error: e instanceof Error ? e.message : String(e) } : x)));
     }
   };
   const repairFile = async (name: string) => {
     const r = await repairIndexOf(name);
-    if (r) setFiles((l) => l.map((x) => (x.name === name ? { ...x, check: r.check, repaired: r.changes } : x)));
+    if (r) setFiles((l) => l.map((x) => (x.name === name ? { ...x, report: r.report, repaired: r.changes } : x)));
   };
   const fixByName = async (name: string) => {
     const f = await store.fileIn(name);
@@ -2254,7 +2283,7 @@ export function VideoEditorWidget() {
       notifyDone("Export finished", `${name} — ${fmtBytes(result.bytesWritten)} in ${fmtDuration(result.activeMs)}`, lastProgress.current ?? undefined);
       stopWatch();
       savePriors(profile, result.measured);
-      setDone({ kind: "done", at: Date.now(), name, folder, seconds: result.seconds, bytes: result.bytesWritten, activeMs: result.activeMs, pausedMs: result.pausedMs, estimatedMs: estimate.wallSeconds * 1000, codec: output.codec, width: outW, height: outH, bitrateMbps: output.bitrateMbps, audioKbps: project.export.audioBitrateKbps, parts: result.parts, resumedFrom: result.resumedFrom, joinMode: result.join?.mode, skipped: result.skipped, checking: true });
+      setDone({ kind: "done", at: Date.now(), name, folder, seconds: result.seconds, bytes: result.bytesWritten, activeMs: result.activeMs, pausedMs: result.pausedMs, estimatedMs: estimate.wallSeconds * 1000, codec: output.codec, width: outW, height: outH, bitrateMbps: output.bitrateMbps, audioKbps: project.export.audioBitrateKbps, parts: result.parts, resumedFrom: result.resumedFrom, joinMode: result.join?.mode, skipped: result.skipped, checking: (project.export.check ?? "full") === "off" ? null : { stage: "Reading the index", fraction: 0 } });
       void checkWritten(name);
       setFilesVersion((v) => v + 1);
       const stepMs = (kind: StepProgress["kind"]) => result.steps.filter((s) => s.kind === kind).reduce((a, s) => a + s.elapsedMs, 0);
@@ -2620,8 +2649,10 @@ export function VideoEditorWidget() {
             setTab("export");
             setExportView("files");
           }}
-          onRepair={() => void repairWritten(done.name)}
-          onRecheck={() => void checkWritten(done.name)}
+          onRecheck={(depth) => void checkWritten(done.name, depth)}
+          onCancelCheck={() => cancelDoctor(done.name)}
+          canFix={canFix}
+          onFixFinding={(f) => void fixFinding(done.name, f, "done")}
           onResume={() => void runExport(resumable)}
           onDiscard={() => void discardParts()}
           onFix={() => {
@@ -3807,7 +3838,7 @@ export function VideoEditorWidget() {
                   ))}
                 </div>
                 {exportView === "files" ? (
-                  <ExportFiles files={files} loading={filesLoading} onRefresh={() => void loadFiles()} onCheck={(n) => void checkFile(n)} onRepair={(n) => void repairFile(n)} onFix={(n) => void fixByName(n)} onDelete={(n) => void deleteFile(n)} fix={fixView} busy={!!job} resumable={resumableView} onResume={() => void runExport(resumable)} onDiscard={() => void discardParts()} hasFolder={store.hasFolder} />
+                  <ExportFiles files={files} loading={filesLoading} onRefresh={() => void loadFiles()} onCheck={(n, depth) => void checkFile(n, depth)} onCancelCheck={cancelDoctor} canFix={canFix} onFixFinding={(n, f) => void fixFinding(n, f, "files")} onFix={(n) => void fixByName(n)} onDelete={(n) => void deleteFile(n)} fix={fixView} busy={!!job} resumable={resumableView} onResume={() => void runExport(resumable)} onDiscard={() => void discardParts()} hasFolder={store.hasFolder} />
                 ) : (
                   <>
                     <ExportSummary name={exportName === null ? autoName : exportName} auto={exportName === null} onName={setExportName} folder={folder} onPickFolder={() => void chooseFolder()} lines={summaryLines} estimate={estimate} basis={estimateBasis} blockers={blockers} busy={!!job} hasClips={project.clips.length > 0} onExport={() => void runExport()} onTest={() => void renderPreview()} testLine={testLine} />
@@ -3990,6 +4021,14 @@ export function VideoEditorWidget() {
                       </p>
                     </Section>
                     <Section id="options" title="Options" summary={optionsLine} open={!!openSections.options} onToggle={() => toggleSection("options")} hook="export-options">
+                      <label className="flex flex-wrap items-center gap-1.5 text-muted" data-check-setting>
+                        After the export, the doctor
+                        <select value={project.export.check ?? "full"} onChange={(e) => setProject((p) => ({ ...p, export: { ...p.export, check: e.target.value as "full" | "quick" | "off" } }))} className={cn(SEL, "h-7 text-[12px]")} aria-label="Check the finished file" title="The finished file is checked for the defects that stall YouTube's processing: a full scan reads every packet, decodes the whole soundtrack and the picture at every cut (minutes on a big file); a quick check reads only the index (seconds)" data-export-check>
+                          <option value="full">scans the whole file — every packet, the sound, the picture at every cut</option>
+                          <option value="quick">checks the index only — seconds</option>
+                          <option value="off">does nothing</option>
+                        </select>
+                      </label>
                       <label className="flex flex-wrap items-center gap-1.5 text-muted" data-notify-setting>
                         <input type="checkbox" checked={notify} onChange={(e) => setNotifySetting(e.target.checked)} className="accent-[var(--accent)]" />
                         Notify about progress while this tab is hidden, and when an export finishes

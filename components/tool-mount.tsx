@@ -177,6 +177,7 @@ const WIDGETS: Record<WidgetKey, React.ComponentType<Record<string, unknown>>> =
   "bitcoin-wallet": dynamic(() => import("@/components/widgets/bitcoin-wallet").then((m) => m.BitcoinWalletWidget), { ssr: false, loading: Skeleton }),
   "track-changes": dynamic(() => import("@/components/widgets/track-changes").then((m) => m.TrackChangesWidget), { ssr: false, loading: Skeleton }),
   "video-converter": dynamic(() => import("@/components/widgets/video-converter").then((m) => m.VideoConverterWidget), { ssr: false, loading: Skeleton }),
+  "video-doctor": dynamic(() => import("@/components/widgets/video-doctor").then((m) => m.VideoDoctorWidget), { ssr: false, loading: Skeleton }),
 };
 
 export function ToolMount({
