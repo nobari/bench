@@ -19,11 +19,12 @@ import { useKeepAwake } from "@/lib/keep-awake";
 import { ENOUGH_SPACE, LOW_SPACE, estimateFree, overrideFreeSpace } from "@/lib/tools/video/space";
 import { PART_SECONDS } from "@/lib/tools/video/engine";
 import { GHOST, INPUT, PRIMARY, RANGE, SEL } from "./video-styles";
-import { ExportDone, ExportFiles, ExportRun, ExportSummary, PHASE_LABEL, Preflight, PresetsRow, Section, type DoneResult, type ExportJobView, type FileEntry, type FixState, type ResumableView, type RunEvent, type Skip } from "./video-export";
+import { ExportDone, ExportFiles, ExportRun, ExportSummary, PHASE_LABEL, Preflight, PresetsRow, Section, type DoneResult, type ExportJobView, type FileEntry, type FixState, type ResumableView, type RunEvent, type Skip, ExportReview } from "./video-export";
 import { applyPreset, matchPreset } from "@/lib/tools/video/export-presets";
 import { preflight, preflightBlocks } from "@/lib/tools/video/preflight";
 import { applyRepair, planRepair } from "@/lib/tools/video/check";
 import { diagnose, type DoctorDepth, type DoctorProgress, type DoctorReport, type Finding, type FixKind } from "@/lib/tools/video/doctor";
+import { allTicked, reviewProject } from "@/lib/tools/video/review";
 import { defaultSpeeds } from "@/lib/tools/video/progress";
 
 /** A key hint at the end of a button label. */
@@ -796,7 +797,7 @@ export function VideoEditorWidget() {
   const previewScopeLabel = { around: "30 s around the playhead", intro: "the intro", range: "the export range", all: "the whole timeline" }[previewOpts.scope];
   const testLine = `${Math.min(previewOpts.height, firstMedia?.height ?? previewOpts.height)}p · ${previewScopeLabel}`;
   const checkLabel = { full: "Full scan after export", quick: "Quick check after export", off: "No check after export" }[project.export.check ?? "full"];
-  const optionsLine = `${checkLabel} · ${notify ? "notifications on" : "no notifications"} · test render ${testLine}`;
+  const optionsLine = `${(project.export.review ?? "on") === "on" ? "Checklist before export" : "No checklist"} · ${checkLabel} · ${notify ? "notifications on" : "no notifications"} · test render ${testLine}`;
   const summaryLines = [range ? `${fmtTime(range.to - range.from)} of ${fmtTime(duration)}` : fmtTime(duration), `${outW}×${outH} ${codecLabel} ${project.export.bitrateMbps} Mbps`, `AAC ${project.export.audioBitrateKbps} kbps · ${SOUND_LABELS[project.sound ?? "footage"]}`];
   const onPreflightAction = (id: string) => {
     if (id === "pick-folder") void chooseFolder();
@@ -1057,6 +1058,11 @@ export function VideoEditorWidget() {
     setPlayhead(Math.max(0, Math.min(durationRef.current, t)));
     setSeekToken((x) => x + 1);
   }, []);
+  /** Move the playhead without touching playback: a trim while playing carries on from the new place. */
+  const seekTo = useCallback((t: number) => {
+    setPlayhead(Math.max(0, Math.min(durationRef.current, t)));
+    setSeekToken((x) => x + 1);
+  }, []);
   /**
    * Space, held: double the preview speed (whatever it is set to) until the key is released. Held while paused, the
    * preview plays at double speed for the hold and parks again. These live outside the key effect so a re-render
@@ -1200,8 +1206,9 @@ export function VideoEditorWidget() {
       // Less than a frame would remain: nothing to trim to.
       if (!under || clipLength({ ...under.clip, in: under.sourceTime }) < 1 / fpsRef.current - 1e-6) return false;
       setProject((p) => ({ ...p, clips: updateClip(p.clips, under.clip.id, { in: under.sourceTime }) }));
-      // The frame under the playhead is now the clip's first; clips sit end to end, so it moved to the clip's start. Park there.
-      stepTo(under.clip.start);
+      // The frame under the playhead is now the clip's first; clips sit end to end, so it moved to the clip's start. Go there,
+      // playing on if the preview was playing.
+      seekTo(under.clip.start);
       return true;
     },
     trimEndHere: () => {
@@ -2117,6 +2124,10 @@ export function VideoEditorWidget() {
       getPlayhead: () => playhead,
       getDone: () => done,
       getFiles: () => files,
+      isPlaying: () => playing,
+      getReview: () => ({ open: reviewOpen, ticked, items: review.items.map((i) => ({ id: i.id, state: i.state, title: i.title, key: i.key })) }),
+      timelineScroll: () => ({ left: timelineRef.current?.scrollLeft ?? 0, width: timelineRef.current?.clientWidth ?? 0, playheadPx: playheadRef.current * pxRef.current, following: followRef.current }),
+      setTimelineScroll: (left: number) => { if (timelineRef.current) timelineRef.current.scrollLeft = left; },
       getEvents: () => events,
       getPreflight: () => checks,
       setExportView: (v: "setup" | "files") => setExportView(v),
@@ -2210,6 +2221,77 @@ export function VideoEditorWidget() {
    * moment the export stops) that survive a failure or a cancel, then joined into the file; `resume` continues the
    * parts of an earlier stopped export of the same project.
    */
+  // The editor's checklist: the project summarised item by item, ticked before the file is written. Ticks are kept per
+  // project in this browser, keyed by each item's content, so a re-export after no change does not ask again.
+  const [reviewOpen, setReviewOpen] = useState(false);
+  const [ticked, setTicked] = useState<Record<string, string>>({});
+  const [framesSaved, setFramesSaved] = useState<boolean | null>(null);
+  const reviewKey = `bench:video:review:${project.id}`;
+  useEffect(() => {
+    let active = true;
+    queueMicrotask(() => {
+      if (!active) return;
+      try {
+        setTicked(JSON.parse(localStorage.getItem(reviewKey) ?? "{}") as Record<string, string>);
+      } catch {
+        setTicked({});
+      }
+    });
+    return () => {
+      active = false;
+    };
+  }, [reviewKey]);
+  const saveTicks = (next: Record<string, string>) => {
+    setTicked(next);
+    try {
+      localStorage.setItem(reviewKey, JSON.stringify(next));
+    } catch {
+      /* no storage */
+    }
+  };
+  const review = useMemo(
+    () => reviewProject(project, { loudness: loudness ? { integrated: loudness.result.integrated, peakDb: loudness.result.peakDb, stale: !loudness.predicted && loudness.fingerprint !== audioKey, predicted: !!loudness.predicted } : null, folderName: folder, fileName, framesSaved, doctorDepth: project.export.check ?? "full", outWidth: outW, outHeight: outH }),
+    [project, loudness, audioKey, folder, fileName, framesSaved, outW, outH],
+  );
+  const refreshFramesSaved = async () => {
+    if (!store.hasFolder) return setFramesSaved(null);
+    try {
+      const folders = await store.subFolders();
+      setFramesSaved(folders.includes(FRAMES_DIR));
+    } catch {
+      setFramesSaved(null);
+    }
+  };
+  /** Export, through the checklist unless it is off or already ticked for this state of the project. */
+  const startExport = () => {
+    if ((project.export.review ?? "on") === "off" || allTicked(review, ticked)) return void runExport();
+    void refreshFramesSaved();
+    setReviewOpen(true);
+  };
+  const onReviewAction = (id: string) => {
+    setReviewOpen(false);
+    if (id.startsWith("tab:")) setTab(id.slice(4) as Tab);
+    else if (id.startsWith("section:")) {
+      setTab("export");
+      setExportView("setup");
+      setOpenSections((o) => ({ ...o, [id.slice(8)]: true }));
+    } else if (id === "save-frame") void saveFrame("thumb").then(() => refreshFramesSaved());
+    else if (id === "measure") {
+      setTab("export");
+      setExportView("setup");
+      setOpenSections((o) => ({ ...o, sound: true }));
+      void measureMix();
+    } else if (id === "scan-stops") setTab("trim");
+  };
+  useEffect(() => {
+    if (!reviewOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setReviewOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [reviewOpen]);
+
   const runExport = async (resume: { manifest: ExportManifest; folder: string } | null = null) => {
     if (!store.hasFolder) return setError("Pick a project folder first — the export is written there.");
     if (notify && "Notification" in window && Notification.permission === "default") void Notification.requestPermission().then((perm) => setNotifyPermission(perm));
@@ -2468,7 +2550,7 @@ export function VideoEditorWidget() {
       hoverLineRef.current.style.left = `${t * pxPerSec}px`;
       hoverLineRef.current.style.display = clipDragRef.current?.moved ? "none" : "block";
     }
-    if (hoverLabelRef.current) hoverLabelRef.current.textContent = fmtTime(t, first?.fps);
+    if (hoverLabelRef.current) hoverLabelRef.current.textContent = fmtMs(t);
   };
   const onTimelinePointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
     if (!scrubRef.current) return;
@@ -2525,14 +2607,40 @@ export function VideoEditorWidget() {
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => el.removeEventListener("wheel", onWheel);
   }, [zoomTo]);
-  // While playing, the view follows the playhead: when it runs off the right edge the timeline scrolls on.
+  // While playing, the view follows the playhead: when it runs off the right edge the timeline scrolls on — unless the
+  // user scrolled the timeline by hand, which stops the following until play or pause brings the playhead back.
+  const followRef = useRef(true);
+  const ownScrollRef = useRef(0);
+  const scrollTimelineTo = useCallback((left: number) => {
+    const el = timelineRef.current;
+    if (!el) return;
+    const next = Math.max(0, left);
+    if (Math.abs(el.scrollLeft - next) < 1) return;
+    ownScrollRef.current++;
+    el.scrollLeft = next;
+  }, []);
+  const onTimelineScroll = () => {
+    if (ownScrollRef.current > 0) {
+      ownScrollRef.current--;
+      return;
+    }
+    if (playingRef.current) followRef.current = false;
+  };
   useEffect(() => {
-    if (!playing || scrubRef.current) return;
+    if (!playing || scrubRef.current || !followRef.current) return;
     const el = timelineRef.current;
     if (!el) return;
     const px = playhead * pxPerSec, view = el.clientWidth;
-    if (px < el.scrollLeft || px > el.scrollLeft + view - 24) el.scrollLeft = Math.max(0, px - view * 0.2);
-  }, [playhead, playing, pxPerSec]);
+    if (px < el.scrollLeft || px > el.scrollLeft + view - 24) scrollTimelineTo(px - view * 0.2);
+  }, [playhead, playing, pxPerSec, scrollTimelineTo]);
+  // Play or pause: follow again, and bring the playhead into view if it is off screen.
+  useEffect(() => {
+    followRef.current = true;
+    const el = timelineRef.current;
+    if (!el) return;
+    const px = playheadRef.current * pxRef.current, view = el.clientWidth;
+    if (px < el.scrollLeft + 8 || px > el.scrollLeft + view - 8) scrollTimelineTo(px - view * 0.3);
+  }, [playing, scrollTimelineTo]);
   const stepBack = useRepeat((shift) => stepTo(playheadRef.current - (shift ? 1 : 1 / fpsRef.current)));
   const stepForward = useRepeat((shift) => stepTo(playheadRef.current + (shift ? 1 : 1 / fpsRef.current)));
   /** Dragging a drive clip along the lane moves it before the clip the pointer is over (intro scenes stay put). */
@@ -3841,7 +3949,7 @@ export function VideoEditorWidget() {
                   <ExportFiles files={files} loading={filesLoading} onRefresh={() => void loadFiles()} onCheck={(n, depth) => void checkFile(n, depth)} onCancelCheck={cancelDoctor} canFix={canFix} onFixFinding={(n, f) => void fixFinding(n, f, "files")} onFix={(n) => void fixByName(n)} onDelete={(n) => void deleteFile(n)} fix={fixView} busy={!!job} resumable={resumableView} onResume={() => void runExport(resumable)} onDiscard={() => void discardParts()} hasFolder={store.hasFolder} />
                 ) : (
                   <>
-                    <ExportSummary name={exportName === null ? autoName : exportName} auto={exportName === null} onName={setExportName} folder={folder} onPickFolder={() => void chooseFolder()} lines={summaryLines} estimate={estimate} basis={estimateBasis} blockers={blockers} busy={!!job} hasClips={project.clips.length > 0} onExport={() => void runExport()} onTest={() => void renderPreview()} testLine={testLine} />
+                    <ExportSummary name={exportName === null ? autoName : exportName} auto={exportName === null} onName={setExportName} folder={folder} onPickFolder={() => void chooseFolder()} lines={summaryLines} estimate={estimate} basis={estimateBasis} blockers={blockers} busy={!!job} hasClips={project.clips.length > 0} onExport={startExport} onTest={() => void renderPreview()} testLine={testLine} />
                     <PresetsRow current={matchPreset(project.export)} onPick={(id) => setProject((p) => ({ ...p, export: applyPreset(p.export, id) }))} />
                     <Preflight items={checks} onAction={onPreflightAction} />
                     <Section id="range" title="Range" summary={range ? `${fmtTime(range.from)} → ${fmtTime(range.to)} · ${fmtTime(range.to - range.from)}` : `Whole timeline · ${fmtTime(duration)}`} open={!!openSections.range} onToggle={() => toggleSection("range")} hook="export-range">
@@ -4021,6 +4129,13 @@ export function VideoEditorWidget() {
                       </p>
                     </Section>
                     <Section id="options" title="Options" summary={optionsLine} open={!!openSections.options} onToggle={() => toggleSection("options")} hook="export-options">
+                      <label className="flex flex-wrap items-center gap-1.5 text-muted" data-review-setting>
+                        Before the export
+                        <select value={project.export.review ?? "on"} onChange={(e) => setProject((p) => ({ ...p, export: { ...p.export, review: e.target.value as "on" | "off" } }))} className={cn(SEL, "h-7 text-[12px]")} aria-label="Checklist before export" title="The editor's checklist: the cuts and transitions, the intro and every title, the camera sound and the music, the loudness, the tags, the chapters and the thumbnail — summarised from the project and ticked off before the file is written" data-export-review>
+                          <option value="on">show the editor&apos;s checklist, summarised from the project</option>
+                          <option value="off">export straight away</option>
+                        </select>
+                      </label>
                       <label className="flex flex-wrap items-center gap-1.5 text-muted" data-check-setting>
                         After the export, the doctor
                         <select value={project.export.check ?? "full"} onChange={(e) => setProject((p) => ({ ...p, export: { ...p.export, check: e.target.value as "full" | "quick" | "off" } }))} className={cn(SEL, "h-7 text-[12px]")} aria-label="Check the finished file" title="The finished file is checked for the defects that stall YouTube's processing: a full scan reads every packet, decodes the whole soundtrack and the picture at every cut (minutes on a big file); a quick check reads only the index (seconds)" data-export-check>
@@ -4096,7 +4211,7 @@ export function VideoEditorWidget() {
               <div key={lane} className="mt-1 flex h-7 items-center justify-end">Music {lane + 1}</div>
             ))}
           </div>
-        <div ref={timelineRef} className="relative min-w-0 flex-1 overflow-x-auto" onPointerDown={onTimelinePointerDown} onPointerMove={onTimelinePointerMove} onPointerUp={onTimelinePointerUp} onPointerCancel={onTimelinePointerUp} onPointerLeave={onTimelinePointerLeave} data-timeline-scroll>
+        <div ref={timelineRef} className="relative min-w-0 flex-1 overflow-x-auto" onScroll={onTimelineScroll} onPointerDown={onTimelinePointerDown} onPointerMove={onTimelinePointerMove} onPointerUp={onTimelinePointerUp} onPointerCancel={onTimelinePointerUp} onPointerLeave={onTimelinePointerLeave} data-timeline-scroll>
           <div className="relative" style={{ width: Math.max(100, Math.max(duration, musicFarEnd) * pxPerSec + 40), minHeight: 150 }}>
             {/* ruler */}
             <div className="h-5 cursor-ew-resize border-b border-edge text-[10px] text-faint" data-ruler title="Click or drag to scrub; snaps to cuts (hold ⌥ to scrub freely)">
@@ -4256,7 +4371,7 @@ export function VideoEditorWidget() {
             )}
             {/* hover time, drop target, playhead */}
             <div ref={hoverLineRef} className="pointer-events-none absolute top-0 bottom-0 z-10 w-px bg-ink/30" style={{ display: "none" }} data-hover-line>
-              <span ref={hoverLabelRef} className="absolute top-0 left-1 rounded-[3px] bg-black/75 px-1 font-mono text-[10px] leading-4 text-white tabular" />
+              <span ref={hoverLabelRef} data-hover-label className="absolute top-0 left-1 rounded-[3px] bg-black/75 px-1 font-mono text-[10px] leading-4 text-white tabular" />
             </div>
             <div ref={dropLineRef} className="pointer-events-none absolute top-5 z-10 h-14 w-0.5 bg-accent" style={{ display: "none" }} data-drop-line />
             <div className="pointer-events-none absolute bottom-0 top-0 w-px bg-[#e5484d]" style={{ left: playhead * pxPerSec }} />
@@ -4268,6 +4383,27 @@ export function VideoEditorWidget() {
           Click the ruler to seek · Space plays, hold it for double speed · hold Control to skim the cuts · Q, W and C trim and split at the playhead · <kbd className="rounded border border-edge px-1 font-mono">?</kbd> lists every shortcut.
         </p>
       </div>
+      {reviewOpen && (
+        <ExportReview
+          review={review}
+          ticked={ticked}
+          onTick={(id, key, on) => {
+            const next = { ...ticked };
+            if (on) next[id] = key;
+            else delete next[id];
+            saveTicks(next);
+          }}
+          onTickAll={(on) => saveTicks(on ? Object.fromEntries(review.items.map((i) => [i.id, i.key])) : {})}
+          onAction={onReviewAction}
+          onCancel={() => setReviewOpen(false)}
+          onExport={() => {
+            setReviewOpen(false);
+            void runExport();
+          }}
+          busy={!!job}
+          fileLine={`${fileName} · ${summaryLines.join(" · ")}`}
+        />
+      )}
       {shortcutsOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-labelledby="shortcuts-title" data-shortcuts-dialog>
           <div className="absolute inset-0 bg-scrim" onClick={() => setShortcutsOpen(false)} />

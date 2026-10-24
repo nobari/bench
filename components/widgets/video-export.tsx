@@ -8,7 +8,7 @@
 
 import { useState, type ReactNode, type RefObject } from "react";
 import Link from "next/link";
-import { AlertTriangle, Check, ChevronDown, ChevronRight, Circle, Download, FlaskConical, FolderOpen, Gauge, Info, Loader, Pause, Play, RotateCcw, Square, Trash2, X, XCircle } from "lucide-react";
+import { AlertTriangle, Check, ChevronDown, ChevronRight, Circle, Download, Eye, FlaskConical, FolderOpen, Gauge, Info, Loader, Pause, Play, RotateCcw, Square, Trash2, X, XCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { GHOST, PRIMARY, SEL } from "./video-styles";
 import { fmtBytes, fmtDelta, fmtDuration, fmtMs, type EstimateSource, type ExportProgress, type StepProgress } from "@/lib/tools/video/progress";
@@ -17,6 +17,7 @@ import { EXPORT_PRESETS } from "@/lib/tools/video/export-presets";
 import type { PreflightItem, PreflightState } from "@/lib/tools/video/preflight";
 import { DoctorReportView } from "./video-doctor-report";
 import type { DoctorDepth, DoctorProgress, DoctorReport, Finding, FixKind } from "@/lib/tools/video/doctor";
+import { allTicked, tickedCount, type Review, type ReviewState } from "@/lib/tools/video/review";
 import type { ExportEvent, ExportFault, JoinInfo } from "@/lib/tools/video/engine";
 import type { Loudness } from "@/lib/tools/video/loudness";
 import { YOUTUBE_LUFS } from "@/lib/tools/video/loudness";
@@ -751,6 +752,118 @@ export function ExportFiles({ files, loading, onRefresh, onCheck, onCancelCheck,
           );
         })}
       </ul>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ the editor's checklist */
+
+const REVIEW_ICON: Record<ReviewState, ReactNode> = { ok: <Check size={14} className="shrink-0 text-positive" aria-label="fine" />, look: <Eye size={14} className="shrink-0 text-warn" aria-label="look" />, info: <Info size={14} className="shrink-0 text-faint" aria-label="note" /> };
+
+/**
+ * The review sheet before an export: the project summarised item by item, each with a tick box, the action that
+ * takes you to the place to change it, and the chapters list for the description. Export enables when every item
+ * is ticked; ticks are the host's, keyed by item content.
+ */
+export function ExportReview({ review, ticked, onTick, onTickAll, onAction, onCancel, onExport, busy, fileLine }: { review: Review; ticked: Record<string, string>; onTick: (id: string, key: string, on: boolean) => void; onTickAll: (on: boolean) => void; onAction: (id: string) => void; onCancel: () => void; onExport: () => void; busy: boolean; fileLine: string }) {
+  const [copied, setCopied] = useState(false);
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const done = tickedCount(review, ticked), total = review.items.length, all = allTicked(review, ticked);
+  const look = review.items.filter((i) => i.state === "look").length;
+  const copyChapters = async () => {
+    try {
+      await navigator.clipboard.writeText(review.chapters.text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      /* clipboard refused */
+    }
+  };
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6" role="dialog" aria-modal="true" aria-labelledby="review-title" data-review-dialog>
+      <div className="absolute inset-0 bg-scrim" onClick={onCancel} />
+      <div className="panel relative flex max-h-full w-full max-w-3xl flex-col shadow-xl">
+        <div className="flex flex-wrap items-start gap-3 border-b border-edge p-4">
+          <div className="min-w-0 flex-1">
+            <h2 id="review-title" className="text-[15px] font-semibold text-ink">
+              Before you export — the editor&apos;s checklist
+            </h2>
+            <p className="text-[12.5px] text-muted">
+              {fileLine} · {look ? `${look} item${look === 1 ? "" : "s"} worth a look, ` : ""}
+              <span data-review-count>
+                {done} of {total} ticked
+              </span>
+            </p>
+          </div>
+          <button type="button" onClick={() => onTickAll(!all)} className={cn(GHOST, "h-8")} data-review-tick-all>
+            {all ? "Untick all" : "Tick all"}
+          </button>
+          <button type="button" onClick={onCancel} className="rounded p-1 text-faint hover:text-ink" aria-label="Close" data-review-cancel>
+            <X size={16} />
+          </button>
+        </div>
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-4">
+          {review.groups.map((g) => (
+            <section key={g.id} className="mb-4 last:mb-0" data-review-group={g.id}>
+              <h3 className="readout mb-1.5 text-faint">{g.title}</h3>
+              <ul className="divide-y divide-line rounded-[var(--radius-sm)] border border-edge">
+                {g.items.map((it) => {
+                  const on = ticked[it.id] === it.key;
+                  const many = (it.lines?.length ?? 0) > 5 && !expanded[it.id];
+                  const lines = many ? it.lines!.slice(0, 5) : it.lines;
+                  return (
+                    <li key={it.id} className={cn("flex gap-3 p-2.5 text-[12.5px]", on && "bg-base/60")} data-review-item={it.id} data-state={it.state} data-ticked={on ? "true" : "false"}>
+                      <label className="flex shrink-0 items-start pt-0.5">
+                        <input type="checkbox" checked={on} onChange={(e) => onTick(it.id, it.key, e.target.checked)} className="accent-[var(--accent)]" aria-label={`Reviewed: ${it.title}`} data-review-tick />
+                      </label>
+                      <div className="min-w-0 flex-1 space-y-0.5">
+                        <div className="flex flex-wrap items-center gap-2">
+                          {REVIEW_ICON[it.state]}
+                          <span className={cn("font-medium", on ? "text-muted line-through decoration-edge" : "text-ink")}>{it.title}</span>
+                          {it.action && (
+                            <button type="button" onClick={() => onAction(it.action!.id)} className={cn(GHOST, "ml-auto h-7 px-2 text-[12px]")} data-review-action={it.action.id}>
+                              {it.action.label}
+                            </button>
+                          )}
+                        </div>
+                        <p className="text-muted">{it.summary}</p>
+                        {lines && lines.length > 0 && (
+                          <div className={cn("rounded-[var(--radius-sm)] bg-base px-2 py-1.5 text-[12px] text-ink", it.id === "chapters" && "font-mono whitespace-pre-wrap")} data-review-lines>
+                            {lines.map((ln, i) => (
+                              <div key={i}>{ln}</div>
+                            ))}
+                            {many && (
+                              <button type="button" onClick={() => setExpanded((x) => ({ ...x, [it.id]: true }))} className="mt-1 text-accent hover:underline">
+                                show all {it.lines!.length}
+                              </button>
+                            )}
+                          </div>
+                        )}
+                        {it.id === "chapters" && review.chapters.lines.length > 0 && (
+                          <button type="button" onClick={() => void copyChapters()} className={cn(GHOST, "h-7 px-2 text-[12px]")} data-review-copy-chapters>
+                            {copied ? "Copied" : "Copy the chapters"}
+                          </button>
+                        )}
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+            </section>
+          ))}
+        </div>
+        <div className="flex flex-wrap items-center gap-2 border-t border-edge p-4">
+          <span className="text-[12.5px] text-muted">{all ? "Everything reviewed." : "Tick each item once you have looked at it; Export opens when all are ticked."}</span>
+          <span className="ml-auto flex gap-2">
+            <button type="button" onClick={onCancel} className={cn(GHOST, "h-9")}>
+              Back to editing
+            </button>
+            <button type="button" onClick={onExport} disabled={!all || busy} className={cn(PRIMARY, "h-9")} title={all ? "Write the file into the project folder" : "Tick every item first"} data-review-export>
+              <Download size={14} /> Export
+            </button>
+          </span>
+        </div>
+      </div>
     </div>
   );
 }

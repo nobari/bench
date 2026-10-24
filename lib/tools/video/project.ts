@@ -469,6 +469,8 @@ export interface ExportSettings {
   steadyLights: SteadyLights;
   /** What the doctor does to the finished file: a full scan (every packet, the sound, the picture at every cut), a quick index check, or nothing. */
   check: "full" | "quick" | "off";
+  /** The editor's checklist before an export: shown, or skipped. */
+  review: "on" | "off";
 }
 
 export type SteadyLights = "off" | "light" | "strong";
@@ -796,7 +798,7 @@ export function describeWhere(p: Project, m: MediaRef): string | null {
   return `${folder}/${m.where.path}`;
 }
 
-export const DEFAULT_EXPORT: ExportSettings = { codec: "hevc", bitrateMbps: 100, preset: "balanced", audioBitrateKbps: 256, resolution: "source", smartCopy: true, range: null, tags: { ...DEFAULT_TAGS }, steadyLights: "off", check: "full" };
+export const DEFAULT_EXPORT: ExportSettings = { codec: "hevc", bitrateMbps: 100, preset: "balanced", audioBitrateKbps: 256, resolution: "source", smartCopy: true, range: null, tags: { ...DEFAULT_TAGS }, steadyLights: "off", check: "full", review: "on" };
 
 /** The part of the timeline an export covers: the chosen range clamped to the timeline, or null for all of it (also when the range is empty or backwards). */
 export function exportRange(p: Project): { from: number; to: number } | null {
@@ -1182,9 +1184,9 @@ export function estimateExport(p: Project, spans: ExportSpan[], encodeFps = 30, 
 export function exportFingerprint(p: Project): string {
   const { updatedAt, ...rest } = p as Project & { updatedAt?: number };
   void updatedAt;
-  // The doctor setting does not shape the file, and projects saved before it existed must keep their fingerprints.
+  // The doctor and review settings do not shape the file, and projects saved before they existed keep their fingerprints.
   const text = JSON.stringify(rest, function (this: unknown, key: string, value: unknown) {
-    return key === "check" && this === rest.export ? undefined : value;
+    return (key === "check" || key === "review") && this === rest.export ? undefined : value;
   });
   let h = 0x811c9dc5;
   for (let i = 0; i < text.length; i++) {
