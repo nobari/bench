@@ -9,6 +9,9 @@ import {
 } from "react";
 import { useRouter } from "next/navigation";
 import { Command } from "cmdk";
+import { usePathname } from "next/navigation";
+import { Maximize2, Minimize2 } from "lucide-react";
+import { useFocusMode } from "@/lib/focus-mode";
 import { Lightbulb, Search } from "lucide-react";
 import { CATEGORIES, getCategory } from "@/lib/tools/categories";
 import { TOOLS, getCategoryTree } from "@/lib/tools/registry";
@@ -83,6 +86,9 @@ function ToolItem({ t, onSelect, showCategory }: { t: ToolDef; onSelect: () => v
 
 function CommandMenu({ open, setOpen }: { open: boolean; setOpen: (v: boolean) => void }) {
   const router = useRouter();
+  const pathname = usePathname();
+  const onTool = /^\/[a-z-]+\/[a-z0-9-]+$/.test(pathname ?? "") && !/^\/(about|suggest)/.test(pathname ?? "");
+  const { focus, toggle: toggleFocus } = useFocusMode(pathname ?? undefined);
   const [query, setQuery] = useState("");
   // A fresh search each time the palette opens; the state lives on while closed, so clear it then.
   const [wasOpen, setWasOpen] = useState(open);
@@ -128,6 +134,15 @@ function CommandMenu({ open, setOpen }: { open: boolean; setOpen: (v: boolean) =
         </div>
 
         <Command.List className="max-h-[56vh] overflow-y-auto overscroll-contain p-2">
+          {onTool && (!query.trim() || /focus|full|hide|zen/i.test(query)) && (
+            <Command.Group heading="This page" className="mb-1 [&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:py-1 [&_[cmdk-group-heading]]:text-[11px] [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-wide [&_[cmdk-group-heading]]:text-faint">
+              <Command.Item value="focus-mode" onSelect={() => { setOpen(false); toggleFocus(); }} className={ITEM} data-palette-focus>
+                {focus ? <Minimize2 size={14} className="text-muted" /> : <Maximize2 size={14} className="text-muted" />}
+                <span className="text-[13px] text-ink">{focus ? "Exit focus mode" : "Focus mode — hide everything but the tool"}</span>
+                <kbd className="ml-auto rounded border border-edge px-1 font-mono text-[11px] text-muted">F</kbd>
+              </Command.Item>
+            </Command.Group>
+          )}
           {results && results.length === 0 && (
             <div className="px-3 py-8 text-center text-[13px] text-muted">No tool matches that. Try another word, or suggest it below.</div>
           )}

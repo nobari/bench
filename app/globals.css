@@ -834,3 +834,19 @@ html[data-nav="hidden"] .tool-nav {
     transition-duration: 0.001ms !important;
   }
 }
+
+/* Focus mode (data-focus="on" on <html>, see lib/focus-mode.ts): the tool alone, the site's chrome hidden, the bar
+   with the way out floating over the top. */
+:root[data-focus="on"] [data-site-chrome] {
+  display: none !important;
+}
+:root[data-focus="on"] [data-focus-bar] {
+  display: flex;
+}
+:root[data-focus="on"] [data-tool-shell] {
+  padding: 8px;
+}
+:root[data-focus="on"] [data-tool-mount] {
+  margin-top: 0;
+  min-height: calc(100dvh - 16px);
+}

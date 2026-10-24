@@ -8,6 +8,7 @@ import { getCategoryTree, getRelatedTools } from "@/lib/tools/registry";
 import { ToolMount } from "@/components/tool-mount";
 import { ToolCard } from "@/components/tool-card";
 import { ShareButton } from "@/components/share-button";
+import { FocusBar, FocusToggle } from "@/components/focus-toggle";
 import {
   breadcrumbJsonLd,
   faqJsonLd,
@@ -28,6 +29,7 @@ export function ToolShell({ tool }: { tool: ToolDef }) {
   return (
     <div
       className="px-3 py-4 sm:px-4"
+      data-tool-shell
       data-cat={tool.category}
       style={{ "--cat": `var(${cat?.accentVar})` } as CSSProperties}
     >
@@ -53,7 +55,8 @@ export function ToolShell({ tool }: { tool: ToolDef }) {
       ) : null}
 
       {/* header: where you are, what this does, and the one primary action */}
-      <header className="flex flex-wrap items-start justify-between gap-x-6 gap-y-3">
+      <FocusBar title={tool.title} />
+      <header className="flex flex-wrap items-start justify-between gap-x-6 gap-y-3" data-site-chrome>
         <div className="min-w-0 flex-1">
           <nav
             aria-label="Breadcrumb"
@@ -98,20 +101,23 @@ export function ToolShell({ tool }: { tool: ToolDef }) {
             {tool.tagline}
           </p>
         </div>
-        <ShareButton className="w-full sm:w-auto" />
+        <div className="flex w-full gap-2 sm:w-auto">
+          <FocusToggle className="flex-1 justify-center sm:flex-none" />
+          <ShareButton className="flex-1 sm:flex-none" />
+        </div>
       </header>
 
-      <noscript>
+      <noscript data-site-chrome>
         <p className="mt-4 text-[14px] text-muted">
           Enable JavaScript to use this interactive tool. Its instructions,
           questions and related tools remain available below.
         </p>
       </noscript>
-      <div className="mt-5">
+      <div className="mt-5" data-tool-mount>
         <ToolMount widget={tool.widget} widgetProps={tool.widgetProps} />
       </div>
 
-      <div className="mt-12 grid grid-cols-[minmax(0,1fr)] gap-10 lg:grid-cols-[minmax(0,1fr)_300px]">
+      <div className="mt-12 grid grid-cols-[minmax(0,1fr)] gap-10 lg:grid-cols-[minmax(0,1fr)_300px]" data-site-chrome>
         <div className="min-w-0 space-y-10">
           {tool.howItWorks && (
             <section>

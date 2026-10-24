@@ -25,6 +25,8 @@ import { preflight, preflightBlocks } from "@/lib/tools/video/preflight";
 import { applyRepair, planRepair } from "@/lib/tools/video/check";
 import { diagnose, type DoctorDepth, type DoctorProgress, type DoctorReport, type Finding, type FixKind } from "@/lib/tools/video/doctor";
 import { allTicked, reviewProject } from "@/lib/tools/video/review";
+import { SplitPane } from "@/components/ui/split-pane";
+import { useFocusMode } from "@/lib/focus-mode";
 import { defaultSpeeds } from "@/lib/tools/video/progress";
 
 /** A key hint at the end of a button label. */
@@ -278,6 +280,8 @@ export function VideoEditorWidget() {
   const [job, setJob] = useState<Job | null>(null);
   // The export views: set-up or the Files list; the file name when the user typed one; which sections are open.
   const [exportView, setExportView] = useState<"setup" | "files">("setup");
+  // Focus mode (lib/focus-mode): only the preview, the tools and the timeline, filling the viewport.
+  const { focus } = useFocusMode();
   const [exportName, setExportName] = useState<string | null>(null);
   const [openSections, setOpenSections] = useState<Record<string, boolean>>({});
   /** How the last export ended, shown as a card until dismissed; the run's log; stretches skipped; the live frame. */
@@ -2686,11 +2690,11 @@ export function VideoEditorWidget() {
   const thumbSize = `${Math.round((previewAspect * thumbH) / 2) * 2}×${thumbH}`;
 
   return (
-    <div className="space-y-3">
+    <div className={cn("space-y-3", focus && "flex h-[calc(100dvh-16px)] flex-col gap-2 space-y-0")} data-video-editor data-focus-layout={focus ? "on" : "off"}>
       {/* project bar */}
       <input ref={templateJsonInput} type="file" accept=".json,application/json" hidden onChange={(e) => e.target.files?.[0] && void importTemplateJson(e.target.files[0])} data-template-input />
       <input ref={relinkInput} type="file" accept="video/*,audio/*,.mp4,.mov,.mp3,.m4a,.wav,.aac,.flac,.ogg" multiple hidden onChange={(e) => e.target.files?.length && void linkFiles(Array.from(e.target.files))} data-relink-input />
-      <div className="panel flex flex-wrap items-center gap-2 p-2">
+      <div className={cn("panel flex flex-wrap items-center gap-2 p-2", focus && "hidden")} data-project-bar>
         <button type="button" onClick={chooseFolder} className={cn(GHOST, "h-9")} disabled={!hasFileSystemAccess()}>
           <FolderOpen size={14} /> {folder ? folder : "Choose project folder"}
         </button>
@@ -2785,9 +2789,9 @@ export function VideoEditorWidget() {
         </div>
       )}
 
-      {/* preview + inspector — hidden while an export runs: the run view takes their place */}
-      <div className={cn("grid gap-3 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]", job?.kind === "export" && "hidden")}>
-        <div className="panel p-2">
+      {/* preview + inspector — a split pane (the tools fold away to leave the picture and the timeline), hidden while an export runs */}
+      <SplitPane id="video-editor-main" direction="horizontal" defaultRatio={0.6} minFirst={320} minSecond={300} collapsible="both" firstLabel="preview" secondLabel="tools" className={cn("gap-0", job?.kind === "export" && "hidden", focus && "min-h-0 flex-1")} first={<>
+        <div className={cn("panel p-2", focus && "flex h-full min-h-0 flex-col")}>
           <div
             ref={previewBoxRef}
             className={cn("group relative overflow-hidden rounded-[var(--radius-sm)] bg-black", dragOver && "ring-2 ring-accent")}
@@ -3066,8 +3070,9 @@ export function VideoEditorWidget() {
           </div>
         </div>
 
+        </>} second={<>
         {/* The inspector never grows past the preview: it scrolls inside, so the timeline stays within reach. */}
-        <div className="relative min-h-[360px]">
+        <div className={cn("relative min-h-[360px]", focus && "h-full min-h-0")}>
           <div className="panel flex min-w-0 flex-col max-lg:max-h-[60vh] lg:absolute lg:inset-0">
           <div role="tablist" aria-label="Inspector" className="flex shrink-0 overflow-x-auto border-b border-edge px-1 [scrollbar-width:none]">
             {TABS.map(([id, label, Icon]) => (
@@ -4184,10 +4189,10 @@ export function VideoEditorWidget() {
           </div>
           </div>
         </div>
-      </div>
+      </>} />
 
       {/* timeline */}
-      <div className="panel select-none p-2" data-timeline>
+      <div className={cn("panel select-none p-2", focus && "max-h-[45%] shrink-0 overflow-y-auto")} data-timeline>
         <div className="mb-1.5 flex flex-wrap items-center gap-x-3 gap-y-1">
           <span className="readout">Timeline</span>
           <span className="text-[11.5px] text-faint tabular">{placed.length ? `${placed.length} clip${placed.length === 1 ? "" : "s"} · ${fmtTime(duration)}` : "empty"}</span>
