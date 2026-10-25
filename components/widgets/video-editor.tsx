@@ -388,6 +388,29 @@ export function VideoEditorWidget() {
   const scratchRef = useRef<{ a: OffscreenCanvas; b: OffscreenCanvas; s: OffscreenCanvas; w: number; h: number } | null>(null);
   const pendingUrls = useRef<Set<string>>(new Set());
   const previewBoxRef = useRef<HTMLDivElement>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const stageRef = useRef<HTMLDivElement>(null);
+  const [stage, setStage] = useState<{ w: number; h: number } | null>(null);
+  useEffect(() => {
+    const el = stageRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver((entries) => {
+      const r = entries[0]?.contentRect;
+      if (r) setStage({ w: r.width, h: r.height });
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  // The editor fills the viewport below whatever sits above it (the site header and the page title); the row
+  // split and the timeline share that height.
+  useLayoutEffect(() => {
+    const el = rootRef.current;
+    if (!el) return;
+    const set = () => el.style.setProperty("--editor-top", `${Math.round(el.getBoundingClientRect().top + window.scrollY + 16)}px`);
+    set();
+    window.addEventListener("resize", set);
+    return () => window.removeEventListener("resize", set);
+  }, [focus]);
   const cubeInput = useRef<HTMLInputElement>(null);
   // DJI's own LUT file, fetched the first time a clip asks for it; both file-based conversions derive from it.
   const [fileLuts, setFileLuts] = useState<Partial<Record<FileLutKind, Lut3D>> | null>(null);
@@ -2614,20 +2637,25 @@ export function VideoEditorWidget() {
   // While playing, the view follows the playhead: when it runs off the right edge the timeline scrolls on — unless the
   // user scrolled the timeline by hand, which stops the following until play or pause brings the playhead back.
   const followRef = useRef(true);
-  const ownScrollRef = useRef(0);
+  // Where the editor itself last scrolled the lane to: a scroll event landing there is the editor's own, anything
+  // else is the user's hand (a counter would drift when the browser merges two of our scrolls into one event).
+  const ownTargetRef = useRef<number | null>(null);
   const scrollTimelineTo = useCallback((left: number) => {
     const el = timelineRef.current;
     if (!el) return;
-    const next = Math.max(0, left);
+    const next = Math.max(0, Math.min(left, el.scrollWidth - el.clientWidth));
     if (Math.abs(el.scrollLeft - next) < 1) return;
-    ownScrollRef.current++;
+    ownTargetRef.current = next;
     el.scrollLeft = next;
   }, []);
   const onTimelineScroll = () => {
-    if (ownScrollRef.current > 0) {
-      ownScrollRef.current--;
+    const el = timelineRef.current;
+    if (!el) return;
+    if (ownTargetRef.current !== null && Math.abs(el.scrollLeft - ownTargetRef.current) < 1.5) {
+      ownTargetRef.current = null;
       return;
     }
+    ownTargetRef.current = null;
     if (playingRef.current) followRef.current = false;
   };
   useEffect(() => {
@@ -2689,8 +2717,208 @@ export function VideoEditorWidget() {
   const thumbH = Math.min(THUMB_HEIGHT, first?.height ?? THUMB_HEIGHT);
   const thumbSize = `${Math.round((previewAspect * thumbH) / 2) * 2}×${thumbH}`;
 
+  // The timeline panel, rendered under the row or alone while an export runs.
+  const timelinePanel = (
+      <div className="panel h-full min-h-0 select-none overflow-y-auto p-2" data-timeline>
+        <div className="mb-1.5 flex flex-wrap items-center gap-x-3 gap-y-1">
+          <span className="readout">Timeline</span>
+          <span className="text-[11.5px] text-faint tabular">{placed.length ? `${placed.length} clip${placed.length === 1 ? "" : "s"} · ${fmtTime(duration)}` : "empty"}</span>
+          <label className="ml-auto flex items-center gap-1.5 text-[12px] text-muted">
+            Zoom
+            <input type="range" min={1} max={ZOOM_MAX} step={1} value={zoom} onChange={(e) => zoomTo(Number(e.target.value))} className={cn(RANGE, "w-28 max-sm:w-16")} aria-label="Timeline zoom" title="Zoom (⌘/Ctrl + wheel over the timeline zooms around the pointer)" />
+          </label>
+          <button type="button" onClick={() => zoomTo(1)} disabled={zoom === 1} className={cn(GHOST, "h-7 px-2 text-[12px]")} title="Fit the whole timeline in view">
+            Fit
+          </button>
+          <button type="button" onClick={() => setShortcutsOpen(true)} className={cn(GHOST, "h-7 px-2 text-[12px]")} title="Every keyboard shortcut (?)" aria-label="Keyboard shortcuts" data-shortcuts>
+            <Keyboard size={13} /> <span className="max-sm:hidden">Shortcuts</span>
+          </button>
+        </div>
+        <div className="flex">
+          <div className="w-14 shrink-0 pr-1.5 text-right text-[10.5px] leading-none text-faint select-none" aria-hidden>
+            <div className="h-5" />
+            <div className="mt-1 flex h-12 items-center justify-end">Video</div>
+            <div className="mt-1 flex items-center justify-end" style={{ height: Math.max(0, titleLaneOf.count * 22 - 2) }}>Titles</div>
+            {[0, 1, 2].map((lane) => (
+              <div key={lane} className="mt-1 flex h-7 items-center justify-end">Music {lane + 1}</div>
+            ))}
+          </div>
+        <div ref={timelineRef} className="relative min-w-0 flex-1 overflow-x-auto" onScroll={onTimelineScroll} onPointerDown={onTimelinePointerDown} onPointerMove={onTimelinePointerMove} onPointerUp={onTimelinePointerUp} onPointerCancel={onTimelinePointerUp} onPointerLeave={onTimelinePointerLeave} data-timeline-scroll>
+          <div className="relative" style={{ width: Math.max(100, Math.max(duration, musicFarEnd) * pxPerSec + 40), minHeight: 150 }}>
+            {/* ruler */}
+            <div className="h-5 cursor-ew-resize border-b border-edge text-[10px] text-faint" data-ruler title="Click or drag to scrub; snaps to cuts (hold ⌥ to scrub freely)">
+              {Array.from({ length: Math.ceil(duration / rulerStep(duration, zoom)) + 1 }, (_, i) => i * rulerStep(duration, zoom)).map((t) => (
+                <span key={t} className="absolute top-0" style={{ left: t * pxPerSec }}>
+                  {fmtTime(t)}
+                </span>
+              ))}
+            </div>
+            {/* video lane */}
+            <div className="relative mt-1 h-12">
+              {placed.map((c, i) => {
+                // Joined clips draw as one continuous bar: no edge or gap at the hidden cut, and only the first carries a label.
+                const { joinsNext, runCount, runEnd } = runInfo[i];
+                return (
+                  <button
+                    key={c.id}
+                    type="button"
+                    onPointerDown={(e) => {
+                      e.stopPropagation();
+                      beginClipDrag(e, c);
+                    }}
+                    onPointerMove={moveClipDrag}
+                    onPointerUp={endClipDrag}
+                    onPointerCancel={endClipDrag}
+                    onClick={() => {
+                      if (suppressClickRef.current) {
+                        suppressClickRef.current = false;
+                        return;
+                      }
+                      setSelected(c.id);
+                      setSelectedMusic(null);
+                      setSelectedTransition(null);
+                      setPlayhead(c.start);
+                      setSeekToken((t) => t + 1);
+                    }}
+                    className={cn("absolute top-0 h-full overflow-hidden border text-left text-[11.5px]", c.joinedToPrevious ? "rounded-l-none border-l-0 pl-0" : "rounded-l-[var(--radius-sm)] pl-2", joinsNext ? "rounded-r-none border-r-0 pr-0" : "rounded-r-[var(--radius-sm)] pr-2", selectedRun.has(c.id) ? "border-accent bg-accent-soft text-ink" : c.introRole && introReg && i <= introReg.scenes.length ? "border-[#d9a400]/60 bg-[#d9a400]/15 text-muted" : "border-edge bg-raised text-muted")}
+                    style={{ left: c.start * pxPerSec, width: Math.max(4, (c.end - c.start) * pxPerSec - (joinsNext ? 0 : 1)) }}
+                    title={`${c.introRole === "card" ? "Intro title card · " : c.introRole ? "Intro scene · " : ""}${project.media[c.media]?.name} ${fmtTime(c.in)}–${fmtTime(c.out)}${c.joinedToPrevious ? " · joined to the previous clip" : ""}${describeWhere(project, project.media[c.media]) ? ` · ${describeWhere(project, project.media[c.media])}` : ""}${c.introRole ? "" : " · drag to move it"}`}
+                    data-clip={c.id}
+                    data-joined={c.joinedToPrevious ? "true" : undefined}
+                    data-intro-clip={c.introRole}
+                  >
+                    {!c.joinedToPrevious && (
+                      <>
+                        <span className="block truncate font-medium">
+                          {c.introRole === "card" ? "Title card" : c.introRole ? `Intro ${introReg ? introReg.scenes.findIndex((s) => s.id === c.id) + 1 : ""}` : project.media[c.media]?.name}
+                          {runCount > 1 ? ` +${runCount - 1}` : ""}
+                        </span>
+                        <span className="block truncate text-faint">
+                          {clipSpeed(c) !== 1 ? `${clipSpeed(c)}× · ` : ""}
+                          {c.grade.lut !== "none" || c.grade.exposure || c.grade.saturation !== 1 ? "graded · " : ""}
+                          {c.transform.rotate || c.transform.straighten || c.transform.crop.w !== 1 || c.transform.crop.h !== 1 ? "cropped · " : ""}
+                          {runCount > 1 ? `${runCount} joined · ${fmtTime(runEnd - c.start)}` : fmtTime(c.end - c.start)}
+                        </span>
+                      </>
+                    )}
+                  </button>
+                );
+              })}
+              {range && <div className="pointer-events-none absolute top-0 h-full border-x-2 border-accent bg-accent/10" style={{ left: range.from * pxPerSec, width: (range.to - range.from) * pxPerSec }} title={`Export range ${fmtTime(range.from)} → ${fmtTime(range.to)}`} data-export-band />}
+              {job?.kind === "export" && job.progress && job.label !== "Test render" && <div className="pointer-events-none absolute top-0 h-full bg-accent/25" style={{ left: (range?.from ?? 0) * pxPerSec, width: Math.max(0, job.progress.timelineT) * pxPerSec }} title={`Rendered up to ${fmtTime((range?.from ?? 0) + job.progress.timelineT)}`} data-export-progress-band />}
+              {windows.map((w) => (
+                <button
+                  key={w.incoming.id}
+                  type="button"
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onClick={() => {
+                    setTab("trim");
+                    focusTransition(w.incoming.id);
+                  }}
+                  className={cn("absolute top-0 flex h-full items-center justify-center border-x border-ink/60 bg-white/50 text-[11px] text-ink hover:bg-white/70", selectedTransition === w.incoming.id && "bg-accent-soft ring-2 ring-accent")}
+                  style={{ left: w.start * pxPerSec, width: Math.max(8, (w.end - w.start) * pxPerSec) }}
+                  title={`${TRANSITIONS.find((t) => t.kind === w.kind)?.name} · ${(w.end - w.start).toFixed(2)} s${w.note ? ` — ${w.note}` : ""} — click to change or remove`}
+                  aria-label={`Transition at ${fmtTime(w.cut)}`}
+                  data-transition
+                >
+                  ⋈
+                </button>
+              ))}
+              {activeStops.map((st) => (
+                <button
+                  key={stopKey(st)}
+                  type="button"
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onClick={() => {
+                    setTab("trim");
+                    stepTo(st.stillFrom);
+                  }}
+                  className="absolute top-0 h-full border-x border-[#e5484d]/70 bg-[repeating-linear-gradient(135deg,rgba(229,72,77,0.35)_0_4px,transparent_4px_8px)] hover:bg-[#e5484d]/25"
+                  style={{ left: st.from * pxPerSec, width: Math.max(3, (st.to - st.from) * pxPerSec) }}
+                  title={`Stop: still for ${st.seconds.toFixed(1)} s — Cut out in Trim removes this part`}
+                  aria-label={`Stop at ${fmtTime(st.stillFrom)}`}
+                  data-stop-band
+                />
+              ))}
+            </div>
+            {/* title lanes: overlapping titles stack */}
+            <div className="relative mt-1" style={{ height: Math.max(0, titleLaneOf.count * 22 - 2) }}>
+              {!project.titles.length && project.clips.length > 0 && <div className="pointer-events-none absolute inset-0 rounded-[3px] border border-dashed border-edge px-2 text-[10.5px] leading-5 text-faint">Titles and lower thirds from the Titles tab land here</div>}
+              {project.titles.map((t) => (
+                <button
+                  key={t.id}
+                  type="button"
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onClick={() => {
+                    setTab("titles");
+                    focusTitle(t);
+                  }}
+                  className={cn("absolute h-5 truncate rounded-[3px] bg-[#e5484d]/70 px-1 text-left text-[10.5px] text-white", selectedTitle === t.id && "ring-2 ring-white/90")}
+                  style={{ left: t.start * pxPerSec, width: Math.max(4, t.duration * pxPerSec), top: (titleLaneOf.lanes[t.id] ?? 0) * 22 }}
+                  title={t.text}
+                >
+                  {t.text}
+                </button>
+              ))}
+            </div>
+            {/* music lanes */}
+            {[0, 1, 2].map((lane) => (
+              <div key={lane} className="relative mt-1 h-7">
+                {lane === 0 && !project.music.length && project.clips.length > 0 && <div className="pointer-events-none absolute inset-0 rounded-[3px] border border-dashed border-edge px-2 text-[10.5px] leading-7 text-faint">Drop music onto the preview, or add it from the Audio tab</div>}
+                {project.music.filter((m) => m.lane === lane).map((m) => (
+                  <Fragment key={m.id}>
+                  <button
+                    type="button"
+                    onPointerDown={(e) => e.stopPropagation()}
+                    onClick={() => {
+                      setSelectedMusic(m.id);
+                      setSelected(null);
+                      setTab("audio");
+                    }}
+                    className={cn("absolute top-0 h-full truncate rounded-[3px] border px-1.5 text-left text-[11px]", selectedMusic === m.id ? "border-ink" : "border-transparent", m.muted && "opacity-40")}
+                    style={{ left: m.start * pxPerSec, width: Math.max(4, (effectiveMusicEnd(m, duration) - m.start) * pxPerSec), backgroundColor: LANE_COLORS[lane] + "66" }}
+                    title={project.media[m.media]?.name}
+                  >
+                    {project.media[m.media]?.name} {m.gainDb <= -60 ? "(off)" : `${m.gainDb} dB`}
+                    {musicUnused(m, duration) > 0 && m.start < duration ? " · cut at the end" : ""}
+                  </button>
+                  {musicUnused(m, duration) > 0 && (
+                    <div
+                      className="pointer-events-none absolute top-0 h-full truncate rounded-r-[3px] border border-l-0 border-dashed border-edge bg-[repeating-linear-gradient(135deg,rgba(128,128,128,0.28)_0_4px,transparent_4px_8px)] px-1.5 text-[10.5px] leading-7 text-faint"
+                      style={{ left: Math.max(m.start, effectiveMusicEnd(m, duration)) * pxPerSec, width: Math.max(4, musicUnused(m, duration) * pxPerSec) }}
+                      title={`${fmtTime(musicUnused(m, duration))} of ${project.media[m.media]?.name} runs past the end of the video and is not used`}
+                      data-music-unused={m.id}
+                    >
+                      {m.start >= duration ? "not used — starts after the video ends" : `not used · ${fmtTime(musicUnused(m, duration))} past the end`}
+                    </div>
+                  )}
+                  </Fragment>
+                ))}
+              </div>
+            ))}
+            {musicFarEnd > duration + 0.01 && (
+              <div className="pointer-events-none absolute top-5 bottom-0 border-l border-dashed border-edge bg-ink/[0.04]" style={{ left: duration * pxPerSec, width: (musicFarEnd - duration) * pxPerSec + 40 }} data-beyond-video>
+                <span className="absolute top-0.5 left-1.5 whitespace-nowrap text-[10px] text-faint">end of video — nothing past here is used</span>
+              </div>
+            )}
+            {/* hover time, drop target, playhead */}
+            <div ref={hoverLineRef} className="pointer-events-none absolute top-0 bottom-0 z-10 w-px bg-ink/30" style={{ display: "none" }} data-hover-line>
+              <span ref={hoverLabelRef} data-hover-label className="absolute top-0 left-1 rounded-[3px] bg-black/75 px-1 font-mono text-[10px] leading-4 text-white tabular" />
+            </div>
+            <div ref={dropLineRef} className="pointer-events-none absolute top-5 z-10 h-14 w-0.5 bg-accent" style={{ display: "none" }} data-drop-line />
+            <div className="pointer-events-none absolute bottom-0 top-0 w-px bg-[#e5484d]" style={{ left: playhead * pxPerSec }} />
+            <div className="pointer-events-none absolute top-0 h-0 w-0 border-x-[5px] border-t-[6px] border-x-transparent border-t-[#e5484d]" style={{ left: playhead * pxPerSec - 5 }} data-playhead-handle />
+          </div>
+        </div>
+        </div>
+        <p className="mt-1.5 text-[11.5px] text-faint">
+          Click the ruler to seek · Space plays, hold it for double speed · hold Control to skim the cuts · Q, W and C trim and split at the playhead · <kbd className="rounded border border-edge px-1 font-mono">?</kbd> lists every shortcut.
+        </p>
+      </div>
+  );
+
   return (
-    <div className={cn("space-y-3", focus && "flex h-[calc(100dvh-16px)] flex-col gap-2 space-y-0")} data-video-editor data-focus-layout={focus ? "on" : "off"}>
+    <div ref={rootRef} className={cn("flex min-h-0 flex-col", focus ? "h-[calc(100dvh-16px)] gap-2" : "h-[calc(100dvh-var(--editor-top,240px))] gap-3")} data-video-editor data-focus-layout={focus ? "on" : "off"}>
       {/* project bar */}
       <input ref={templateJsonInput} type="file" accept=".json,application/json" hidden onChange={(e) => e.target.files?.[0] && void importTemplateJson(e.target.files[0])} data-template-input />
       <input ref={relinkInput} type="file" accept="video/*,audio/*,.mp4,.mov,.mp3,.m4a,.wav,.aac,.flac,.ogg" multiple hidden onChange={(e) => e.target.files?.length && void linkFiles(Array.from(e.target.files))} data-relink-input />
@@ -2790,12 +3018,17 @@ export function VideoEditorWidget() {
       )}
 
       {/* preview + inspector — a split pane (the tools fold away to leave the picture and the timeline), hidden while an export runs */}
-      <SplitPane id="video-editor-main" direction="horizontal" defaultRatio={0.6} minFirst={320} minSecond={300} collapsible="both" firstLabel="preview" secondLabel="tools" className={cn("gap-0", job?.kind === "export" && "hidden", focus && "min-h-0 flex-1")} first={<>
-        <div className={cn("panel p-2", focus && "flex h-full min-h-0 flex-col")}>
+      {/* preview + tools over the timeline: a vertical split, the row's height yours to drag; while an export runs the row is
+          kept mounted but out of sight (the run view stands in for it) and the timeline takes the room */}
+      <SplitPane id="video-editor-rows" direction="vertical" defaultRatio={0.64} minFirst={260} minSecond={150} collapsible="second" firstLabel="preview and tools" secondLabel="timeline" stackBelow="never" gap={12} className="min-h-0 flex-1" hidden={job?.kind === "export" ? "first" : null} first={
+      <SplitPane id="video-editor-main" direction="horizontal" defaultRatio={0.6} minFirst={320} minSecond={300} collapsible="both" firstLabel="preview" secondLabel="tools" className="h-full min-h-0 gap-0" first={<>
+        <div className="panel flex h-full min-h-0 flex-col p-2">
+          {/* The stage takes what the row leaves; the picture is the largest box of the video's shape that fits it. */}
+          <div ref={stageRef} className="flex min-h-0 flex-1 items-center justify-center" data-preview-stage>
           <div
             ref={previewBoxRef}
             className={cn("group relative overflow-hidden rounded-[var(--radius-sm)] bg-black", dragOver && "ring-2 ring-accent")}
-            style={{ aspectRatio: String(previewAspect) }}
+            style={stage && stage.h > 40 ? { width: Math.min(stage.w, stage.h * previewAspect), height: Math.min(stage.w, stage.h * previewAspect) / previewAspect } : { width: "100%", aspectRatio: String(previewAspect) }}
             onDoubleClick={toggleFullscreen}
             onDragOver={(e) => {
               e.preventDefault();
@@ -2932,6 +3165,7 @@ export function VideoEditorWidget() {
                 <span className="max-w-sm text-[12.5px] text-white/60">Up to 8K at the original frame rate. Consecutive recordings from one camera are joined in order. Choose a project folder first so proxies and autosaves have somewhere to live.</span>
               </div>
             )}
+          </div>
           </div>
           {/* Transport: one fixed row (two on phones) whose members never come and go, so the timeline below never moves; transient state is a badge on the preview. */}
           <div className="mt-2 flex items-center gap-2 max-sm:flex-wrap" data-transport>
@@ -3072,7 +3306,7 @@ export function VideoEditorWidget() {
 
         </>} second={<>
         {/* The inspector never grows past the preview: it scrolls inside, so the timeline stays within reach. */}
-        <div className={cn("relative min-h-[360px]", focus && "h-full min-h-0")}>
+        <div className="relative h-full min-h-0 max-lg:min-h-[360px]">
           <div className="panel flex min-w-0 flex-col max-lg:max-h-[60vh] lg:absolute lg:inset-0">
           <div role="tablist" aria-label="Inspector" className="flex shrink-0 overflow-x-auto border-b border-edge px-1 [scrollbar-width:none]">
             {TABS.map(([id, label, Icon]) => (
@@ -4190,204 +4424,7 @@ export function VideoEditorWidget() {
           </div>
         </div>
       </>} />
-
-      {/* timeline */}
-      <div className={cn("panel select-none p-2", focus && "max-h-[45%] shrink-0 overflow-y-auto")} data-timeline>
-        <div className="mb-1.5 flex flex-wrap items-center gap-x-3 gap-y-1">
-          <span className="readout">Timeline</span>
-          <span className="text-[11.5px] text-faint tabular">{placed.length ? `${placed.length} clip${placed.length === 1 ? "" : "s"} · ${fmtTime(duration)}` : "empty"}</span>
-          <label className="ml-auto flex items-center gap-1.5 text-[12px] text-muted">
-            Zoom
-            <input type="range" min={1} max={ZOOM_MAX} step={1} value={zoom} onChange={(e) => zoomTo(Number(e.target.value))} className={cn(RANGE, "w-28 max-sm:w-16")} aria-label="Timeline zoom" title="Zoom (⌘/Ctrl + wheel over the timeline zooms around the pointer)" />
-          </label>
-          <button type="button" onClick={() => zoomTo(1)} disabled={zoom === 1} className={cn(GHOST, "h-7 px-2 text-[12px]")} title="Fit the whole timeline in view">
-            Fit
-          </button>
-          <button type="button" onClick={() => setShortcutsOpen(true)} className={cn(GHOST, "h-7 px-2 text-[12px]")} title="Every keyboard shortcut (?)" aria-label="Keyboard shortcuts" data-shortcuts>
-            <Keyboard size={13} /> <span className="max-sm:hidden">Shortcuts</span>
-          </button>
-        </div>
-        <div className="flex">
-          <div className="w-14 shrink-0 pr-1.5 text-right text-[10.5px] leading-none text-faint select-none" aria-hidden>
-            <div className="h-5" />
-            <div className="mt-1 flex h-12 items-center justify-end">Video</div>
-            <div className="mt-1 flex items-center justify-end" style={{ height: Math.max(0, titleLaneOf.count * 22 - 2) }}>Titles</div>
-            {[0, 1, 2].map((lane) => (
-              <div key={lane} className="mt-1 flex h-7 items-center justify-end">Music {lane + 1}</div>
-            ))}
-          </div>
-        <div ref={timelineRef} className="relative min-w-0 flex-1 overflow-x-auto" onScroll={onTimelineScroll} onPointerDown={onTimelinePointerDown} onPointerMove={onTimelinePointerMove} onPointerUp={onTimelinePointerUp} onPointerCancel={onTimelinePointerUp} onPointerLeave={onTimelinePointerLeave} data-timeline-scroll>
-          <div className="relative" style={{ width: Math.max(100, Math.max(duration, musicFarEnd) * pxPerSec + 40), minHeight: 150 }}>
-            {/* ruler */}
-            <div className="h-5 cursor-ew-resize border-b border-edge text-[10px] text-faint" data-ruler title="Click or drag to scrub; snaps to cuts (hold ⌥ to scrub freely)">
-              {Array.from({ length: Math.ceil(duration / rulerStep(duration, zoom)) + 1 }, (_, i) => i * rulerStep(duration, zoom)).map((t) => (
-                <span key={t} className="absolute top-0" style={{ left: t * pxPerSec }}>
-                  {fmtTime(t)}
-                </span>
-              ))}
-            </div>
-            {/* video lane */}
-            <div className="relative mt-1 h-12">
-              {placed.map((c, i) => {
-                // Joined clips draw as one continuous bar: no edge or gap at the hidden cut, and only the first carries a label.
-                const { joinsNext, runCount, runEnd } = runInfo[i];
-                return (
-                  <button
-                    key={c.id}
-                    type="button"
-                    onPointerDown={(e) => {
-                      e.stopPropagation();
-                      beginClipDrag(e, c);
-                    }}
-                    onPointerMove={moveClipDrag}
-                    onPointerUp={endClipDrag}
-                    onPointerCancel={endClipDrag}
-                    onClick={() => {
-                      if (suppressClickRef.current) {
-                        suppressClickRef.current = false;
-                        return;
-                      }
-                      setSelected(c.id);
-                      setSelectedMusic(null);
-                      setSelectedTransition(null);
-                      setPlayhead(c.start);
-                      setSeekToken((t) => t + 1);
-                    }}
-                    className={cn("absolute top-0 h-full overflow-hidden border text-left text-[11.5px]", c.joinedToPrevious ? "rounded-l-none border-l-0 pl-0" : "rounded-l-[var(--radius-sm)] pl-2", joinsNext ? "rounded-r-none border-r-0 pr-0" : "rounded-r-[var(--radius-sm)] pr-2", selectedRun.has(c.id) ? "border-accent bg-accent-soft text-ink" : c.introRole && introReg && i <= introReg.scenes.length ? "border-[#d9a400]/60 bg-[#d9a400]/15 text-muted" : "border-edge bg-raised text-muted")}
-                    style={{ left: c.start * pxPerSec, width: Math.max(4, (c.end - c.start) * pxPerSec - (joinsNext ? 0 : 1)) }}
-                    title={`${c.introRole === "card" ? "Intro title card · " : c.introRole ? "Intro scene · " : ""}${project.media[c.media]?.name} ${fmtTime(c.in)}–${fmtTime(c.out)}${c.joinedToPrevious ? " · joined to the previous clip" : ""}${describeWhere(project, project.media[c.media]) ? ` · ${describeWhere(project, project.media[c.media])}` : ""}${c.introRole ? "" : " · drag to move it"}`}
-                    data-clip={c.id}
-                    data-joined={c.joinedToPrevious ? "true" : undefined}
-                    data-intro-clip={c.introRole}
-                  >
-                    {!c.joinedToPrevious && (
-                      <>
-                        <span className="block truncate font-medium">
-                          {c.introRole === "card" ? "Title card" : c.introRole ? `Intro ${introReg ? introReg.scenes.findIndex((s) => s.id === c.id) + 1 : ""}` : project.media[c.media]?.name}
-                          {runCount > 1 ? ` +${runCount - 1}` : ""}
-                        </span>
-                        <span className="block truncate text-faint">
-                          {clipSpeed(c) !== 1 ? `${clipSpeed(c)}× · ` : ""}
-                          {c.grade.lut !== "none" || c.grade.exposure || c.grade.saturation !== 1 ? "graded · " : ""}
-                          {c.transform.rotate || c.transform.straighten || c.transform.crop.w !== 1 || c.transform.crop.h !== 1 ? "cropped · " : ""}
-                          {runCount > 1 ? `${runCount} joined · ${fmtTime(runEnd - c.start)}` : fmtTime(c.end - c.start)}
-                        </span>
-                      </>
-                    )}
-                  </button>
-                );
-              })}
-              {range && <div className="pointer-events-none absolute top-0 h-full border-x-2 border-accent bg-accent/10" style={{ left: range.from * pxPerSec, width: (range.to - range.from) * pxPerSec }} title={`Export range ${fmtTime(range.from)} → ${fmtTime(range.to)}`} data-export-band />}
-              {job?.kind === "export" && job.progress && job.label !== "Test render" && <div className="pointer-events-none absolute top-0 h-full bg-accent/25" style={{ left: (range?.from ?? 0) * pxPerSec, width: Math.max(0, job.progress.timelineT) * pxPerSec }} title={`Rendered up to ${fmtTime((range?.from ?? 0) + job.progress.timelineT)}`} data-export-progress-band />}
-              {windows.map((w) => (
-                <button
-                  key={w.incoming.id}
-                  type="button"
-                  onPointerDown={(e) => e.stopPropagation()}
-                  onClick={() => {
-                    setTab("trim");
-                    focusTransition(w.incoming.id);
-                  }}
-                  className={cn("absolute top-0 flex h-full items-center justify-center border-x border-ink/60 bg-white/50 text-[11px] text-ink hover:bg-white/70", selectedTransition === w.incoming.id && "bg-accent-soft ring-2 ring-accent")}
-                  style={{ left: w.start * pxPerSec, width: Math.max(8, (w.end - w.start) * pxPerSec) }}
-                  title={`${TRANSITIONS.find((t) => t.kind === w.kind)?.name} · ${(w.end - w.start).toFixed(2)} s${w.note ? ` — ${w.note}` : ""} — click to change or remove`}
-                  aria-label={`Transition at ${fmtTime(w.cut)}`}
-                  data-transition
-                >
-                  ⋈
-                </button>
-              ))}
-              {activeStops.map((st) => (
-                <button
-                  key={stopKey(st)}
-                  type="button"
-                  onPointerDown={(e) => e.stopPropagation()}
-                  onClick={() => {
-                    setTab("trim");
-                    stepTo(st.stillFrom);
-                  }}
-                  className="absolute top-0 h-full border-x border-[#e5484d]/70 bg-[repeating-linear-gradient(135deg,rgba(229,72,77,0.35)_0_4px,transparent_4px_8px)] hover:bg-[#e5484d]/25"
-                  style={{ left: st.from * pxPerSec, width: Math.max(3, (st.to - st.from) * pxPerSec) }}
-                  title={`Stop: still for ${st.seconds.toFixed(1)} s — Cut out in Trim removes this part`}
-                  aria-label={`Stop at ${fmtTime(st.stillFrom)}`}
-                  data-stop-band
-                />
-              ))}
-            </div>
-            {/* title lanes: overlapping titles stack */}
-            <div className="relative mt-1" style={{ height: Math.max(0, titleLaneOf.count * 22 - 2) }}>
-              {!project.titles.length && project.clips.length > 0 && <div className="pointer-events-none absolute inset-0 rounded-[3px] border border-dashed border-edge px-2 text-[10.5px] leading-5 text-faint">Titles and lower thirds from the Titles tab land here</div>}
-              {project.titles.map((t) => (
-                <button
-                  key={t.id}
-                  type="button"
-                  onPointerDown={(e) => e.stopPropagation()}
-                  onClick={() => {
-                    setTab("titles");
-                    focusTitle(t);
-                  }}
-                  className={cn("absolute h-5 truncate rounded-[3px] bg-[#e5484d]/70 px-1 text-left text-[10.5px] text-white", selectedTitle === t.id && "ring-2 ring-white/90")}
-                  style={{ left: t.start * pxPerSec, width: Math.max(4, t.duration * pxPerSec), top: (titleLaneOf.lanes[t.id] ?? 0) * 22 }}
-                  title={t.text}
-                >
-                  {t.text}
-                </button>
-              ))}
-            </div>
-            {/* music lanes */}
-            {[0, 1, 2].map((lane) => (
-              <div key={lane} className="relative mt-1 h-7">
-                {lane === 0 && !project.music.length && project.clips.length > 0 && <div className="pointer-events-none absolute inset-0 rounded-[3px] border border-dashed border-edge px-2 text-[10.5px] leading-7 text-faint">Drop music onto the preview, or add it from the Audio tab</div>}
-                {project.music.filter((m) => m.lane === lane).map((m) => (
-                  <Fragment key={m.id}>
-                  <button
-                    type="button"
-                    onPointerDown={(e) => e.stopPropagation()}
-                    onClick={() => {
-                      setSelectedMusic(m.id);
-                      setSelected(null);
-                      setTab("audio");
-                    }}
-                    className={cn("absolute top-0 h-full truncate rounded-[3px] border px-1.5 text-left text-[11px]", selectedMusic === m.id ? "border-ink" : "border-transparent", m.muted && "opacity-40")}
-                    style={{ left: m.start * pxPerSec, width: Math.max(4, (effectiveMusicEnd(m, duration) - m.start) * pxPerSec), backgroundColor: LANE_COLORS[lane] + "66" }}
-                    title={project.media[m.media]?.name}
-                  >
-                    {project.media[m.media]?.name} {m.gainDb <= -60 ? "(off)" : `${m.gainDb} dB`}
-                    {musicUnused(m, duration) > 0 && m.start < duration ? " · cut at the end" : ""}
-                  </button>
-                  {musicUnused(m, duration) > 0 && (
-                    <div
-                      className="pointer-events-none absolute top-0 h-full truncate rounded-r-[3px] border border-l-0 border-dashed border-edge bg-[repeating-linear-gradient(135deg,rgba(128,128,128,0.28)_0_4px,transparent_4px_8px)] px-1.5 text-[10.5px] leading-7 text-faint"
-                      style={{ left: Math.max(m.start, effectiveMusicEnd(m, duration)) * pxPerSec, width: Math.max(4, musicUnused(m, duration) * pxPerSec) }}
-                      title={`${fmtTime(musicUnused(m, duration))} of ${project.media[m.media]?.name} runs past the end of the video and is not used`}
-                      data-music-unused={m.id}
-                    >
-                      {m.start >= duration ? "not used — starts after the video ends" : `not used · ${fmtTime(musicUnused(m, duration))} past the end`}
-                    </div>
-                  )}
-                  </Fragment>
-                ))}
-              </div>
-            ))}
-            {musicFarEnd > duration + 0.01 && (
-              <div className="pointer-events-none absolute top-5 bottom-0 border-l border-dashed border-edge bg-ink/[0.04]" style={{ left: duration * pxPerSec, width: (musicFarEnd - duration) * pxPerSec + 40 }} data-beyond-video>
-                <span className="absolute top-0.5 left-1.5 whitespace-nowrap text-[10px] text-faint">end of video — nothing past here is used</span>
-              </div>
-            )}
-            {/* hover time, drop target, playhead */}
-            <div ref={hoverLineRef} className="pointer-events-none absolute top-0 bottom-0 z-10 w-px bg-ink/30" style={{ display: "none" }} data-hover-line>
-              <span ref={hoverLabelRef} data-hover-label className="absolute top-0 left-1 rounded-[3px] bg-black/75 px-1 font-mono text-[10px] leading-4 text-white tabular" />
-            </div>
-            <div ref={dropLineRef} className="pointer-events-none absolute top-5 z-10 h-14 w-0.5 bg-accent" style={{ display: "none" }} data-drop-line />
-            <div className="pointer-events-none absolute bottom-0 top-0 w-px bg-[#e5484d]" style={{ left: playhead * pxPerSec }} />
-            <div className="pointer-events-none absolute top-0 h-0 w-0 border-x-[5px] border-t-[6px] border-x-transparent border-t-[#e5484d]" style={{ left: playhead * pxPerSec - 5 }} data-playhead-handle />
-          </div>
-        </div>
-        </div>
-        <p className="mt-1.5 text-[11.5px] text-faint">
-          Click the ruler to seek · Space plays, hold it for double speed · hold Control to skim the cuts · Q, W and C trim and split at the playhead · <kbd className="rounded border border-edge px-1 font-mono">?</kbd> lists every shortcut.
-        </p>
-      </div>
+        } second={timelinePanel} />
       {reviewOpen && (
         <ExportReview
           review={review}

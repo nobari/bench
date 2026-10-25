@@ -32,6 +32,8 @@ export interface SplitPaneProps {
   stackBelow?: "lg" | "md" | "never";
   /** Gap between the panes, pixels (the handle sits in it). */
   gap?: number;
+  /** Keep one pane mounted but out of sight (display none); the other takes the whole room and the handle goes. */
+  hidden?: "first" | "second" | null;
 }
 
 interface Saved {
@@ -57,7 +59,7 @@ const save = (id: string, s: Saved) => {
   }
 };
 
-export function SplitPane({ id, direction = "horizontal", first, second, defaultRatio = 0.6, minFirst = 240, minSecond = 240, collapsible = "both", firstLabel = "left pane", secondLabel = "right pane", className, stackBelow = "lg", gap = 12 }: SplitPaneProps) {
+export function SplitPane({ id, direction = "horizontal", first, second, defaultRatio = 0.6, minFirst = 240, minSecond = 240, collapsible = "both", firstLabel = "left pane", secondLabel = "right pane", className, stackBelow = "lg", gap = 12, hidden = null }: SplitPaneProps) {
   const horizontal = direction === "horizontal";
   const [state, setState] = useState<Saved>(() => load(id, { ratio: defaultRatio, collapsed: null }));
   const ref = useRef<HTMLDivElement>(null);
@@ -139,13 +141,22 @@ export function SplitPane({ id, direction = "horizontal", first, second, default
   const handleHidden = stackBelow === "lg" ? "max-lg:hidden" : stackBelow === "md" ? "max-md:hidden" : "";
   const STRIP = 28;
   const c = state.collapsed;
-  const pct = `${(state.ratio * 100).toFixed(2)}%`;
-  const firstSize = c === "first" ? `${STRIP}px` : c === "second" ? `calc(100% - ${STRIP + gap}px)` : `calc(${pct} - ${gap / 2}px)`;
-  const secondSize = c === "second" ? `${STRIP}px` : c === "first" ? `calc(100% - ${STRIP + gap}px)` : `calc(${(100 - state.ratio * 100).toFixed(2)}% - ${gap / 2}px)`;
+  // Sizes come from flex-grow shares, never from percentages: a percentage height inside nested flex columns is
+  // unreliable in Chrome, a grow share is not. A folded pane is a fixed strip; the other takes the rest.
+  const grow = (which: "first" | "second"): React.CSSProperties => {
+    if (hidden === which) return { display: "none" };
+    if (hidden) return { flex: "1 1 0px" };
+    if (c === which) return { flex: `0 0 ${STRIP}px` };
+    if (c) return { flex: "1 1 0px" };
+    const share = which === "first" ? state.ratio : 1 - state.ratio;
+    return { flex: `${share} 1 0px` };
+  };
+  // Below the breakpoint the panes stack at their natural size.
+  const stackedPane = stackBelow === "lg" ? "max-lg:!flex-none max-lg:!w-full" : stackBelow === "md" ? "max-md:!flex-none max-md:!w-full" : "";
   const FoldFirstIcon = horizontal ? ChevronLeft : ChevronUp, FoldSecondIcon = horizontal ? ChevronRight : ChevronDown;
   return (
     <div ref={ref} className={cn("flex min-h-0 min-w-0", horizontal ? "flex-row" : "flex-col", stacked, className)} style={{ gap: 0 }} data-split={id} data-split-collapsed={c ?? "none"} data-split-ratio={state.ratio.toFixed(3)}>
-      <div className={cn("min-h-0 min-w-0", c === "first" ? "shrink-0" : "shrink")} style={horizontal ? { width: firstSize, flex: "none" } : { height: firstSize, flex: "none" }} data-split-first>
+      <div className={cn("min-h-0 min-w-0", stackedPane)} style={grow("first")} data-split-first>
         {c === "first" ? <FoldedStrip which="first" label={firstLabel} horizontal={horizontal} onRestore={() => fold("first")} /> : first}
       </div>
       <div
@@ -161,7 +172,7 @@ export function SplitPane({ id, direction = "horizontal", first, second, default
         onPointerCancel={onPointerUp}
         onDoubleClick={reset}
         onKeyDown={onKeyDown}
-        className={cn("group relative flex shrink-0 items-center justify-center outline-none", horizontal ? "cursor-col-resize flex-col" : "cursor-row-resize flex-row", handleHidden)}
+        className={cn("group relative flex shrink-0 items-center justify-center outline-none", horizontal ? "cursor-col-resize flex-col" : "cursor-row-resize flex-row", handleHidden, hidden && "hidden")}
         style={horizontal ? { width: gap } : { height: gap }}
         title="Drag to resize · double-click to reset · arrows on the keyboard"
         data-split-handle
@@ -182,7 +193,7 @@ export function SplitPane({ id, direction = "horizontal", first, second, default
           </div>
         )}
       </div>
-      <div className={cn("min-h-0 min-w-0", c === "second" ? "shrink-0" : "shrink")} style={horizontal ? { width: secondSize, flex: "none" } : { height: secondSize, flex: "none" }} data-split-second>
+      <div className={cn("min-h-0 min-w-0", stackedPane)} style={grow("second")} data-split-second>
         {c === "second" ? <FoldedStrip which="second" label={secondLabel} horizontal={horizontal} onRestore={() => fold("second")} /> : second}
       </div>
     </div>

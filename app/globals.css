@@ -850,3 +850,23 @@ html[data-nav="hidden"] .tool-nav {
   margin-top: 0;
   min-height: calc(100dvh - 16px);
 }
+/* In focus mode a tool's split panes stretch to the viewport: the widget's root becomes a column, its top-level
+   split takes the room, and each pane's panel fills its pane. */
+:root[data-focus="on"] [data-tool-mount] {
+  display: flex;
+  flex-direction: column;
+}
+:root[data-focus="on"] [data-tool-mount] > * {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+:root[data-focus="on"] [data-tool-mount] > * > [data-split] {
+  flex: 1;
+  min-height: 0;
+}
+:root[data-focus="on"] [data-tool-mount] [data-split] > [data-split-first] > .panel,
+:root[data-focus="on"] [data-tool-mount] [data-split] > [data-split-second] > .panel {
+  height: 100%;
+}
