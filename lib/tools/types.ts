@@ -105,7 +105,8 @@ export type WidgetKey =
   | "bitcoin-wallet"
   | "track-changes"
   | "video-converter"
-  | "video-doctor";
+  | "video-doctor"
+  | "storage-doctor";
 
 /**
  * The unit of expansion. Adding a tool = appending one of these to the registry.

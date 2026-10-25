@@ -178,6 +178,7 @@ const WIDGETS: Record<WidgetKey, React.ComponentType<Record<string, unknown>>> =
   "track-changes": dynamic(() => import("@/components/widgets/track-changes").then((m) => m.TrackChangesWidget), { ssr: false, loading: Skeleton }),
   "video-converter": dynamic(() => import("@/components/widgets/video-converter").then((m) => m.VideoConverterWidget), { ssr: false, loading: Skeleton }),
   "video-doctor": dynamic(() => import("@/components/widgets/video-doctor").then((m) => m.VideoDoctorWidget), { ssr: false, loading: Skeleton }),
+  "storage-doctor": dynamic(() => import("@/components/widgets/storage-doctor").then((m) => m.StorageDoctorWidget), { ssr: false, loading: Skeleton }),
 };
 
 export function ToolMount({

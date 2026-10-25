@@ -56,7 +56,7 @@ import {
   Workflow,
   SquareCode,
   FilePenLine,
-  FileVideo, HeartPulse } from "lucide-react";
+  FileVideo, HeartPulse, HardDrive } from "lucide-react";
 import { toolId, type CategorySlug, type ToolDef, type ToolGroup } from "./types";
 import { sampleById } from "./text/markdown-samples";
 import { getCategory } from "./categories";
@@ -853,7 +853,7 @@ export const TOOLS: ToolDef[] = [
       { label: "Check a file for YouTube, full scan", query: "t=youtube&d=full" },
       { label: "Quick check for playback", query: "t=playback&d=quick" },
     ],
-    related: ["media/editor", "media/mp4-tags", "media/video-converter", "audio/converter"],
+    related: ["media/editor", "files/storage-doctor", "media/mp4-tags", "media/video-converter", "audio/converter"],
     aliases: ["video doctor", "video health check", "mp4 checker", "check video before upload", "youtube video checker", "repair mp4", "video file validator", "why is my youtube video stuck processing", "mp4 index repair"],
     added: "2026-10-24",
   },
@@ -1280,6 +1280,56 @@ export const TOOLS: ToolDef[] = [
   },
 
   /* ============================ FILES & ARCHIVES =========================== */
+  {
+    slug: "storage-doctor",
+    category: "files",
+    group: "storage",
+    title: "Storage & Card Doctor",
+    short: "Storage doctor",
+    tagline: "Check a memory card or drive: what is on it, how much room is left, what it really writes and reads, where it slows down when nearly full, and which recordings were cut short — with the fixes",
+    description:
+      "Diagnose a camera's microSD card or any drive in your browser: inventory and free space, a timed write and read-back test with the cache cliff, a fill test that charts write speed against the space left and proves the capacity, a check of every recording for ones cut short, and the computer-made clutter cleaned off. Explains why a card that works when empty stops recording when nearly full. Nothing is uploaded.",
+    keywords: [
+      "sd card health check",
+      "microsd speed test online",
+      "memory card test",
+      "camera stops recording card nearly full",
+      "sd card write speed slow",
+      "dji osmo action sd card slow",
+      "fake sd card test",
+      "h2testw alternative browser",
+      "f3 fake flash test",
+      "sustained write speed v30",
+      "sd card almost full slow",
+      "format sd card in camera",
+      "exfat fragmentation camera",
+      "remove ._ files from sd card",
+      "card too slow error fix",
+    ],
+    icon: HardDrive,
+    status: "beta",
+    widget: "storage-doctor",
+    howItWorks:
+      "Open the card — its root folder — in Chrome or Edge, pick the camera, and the doctor reads what is on it: files, folders and bytes by kind, the camera recognised from its file names, folders near the 999-file limit cameras impose, empty files, preview proxies left without their recording, and the clutter computers write onto exFAT cards (macOS ._ resource forks, .DS_Store, Spotlight and fseventsd folders, Windows Thumbs.db and System Volume Information). Used space comes from the files and free space from the card's size; the rule the verdicts apply is to keep a tenth of the card free. Every recording's tail is read for the index a camera writes when it closes a file, so the ones cut short when the camera stopped are listed. The speed test writes 1 to 32 GB of test files in 64 MB pieces and times each: the burst over the first quarter gigabyte, the sustained rate, the slowest second, and the point where the speed falls off — that is the card's write cache running out, and the rate after it is what the card really sustains. The files are read back and every byte checked against the pattern written, which measures the read speed and catches a card that corrupts data; then they are deleted. The verdict compares the slowest second with the speed class and with the camera's bitrate: a camera needs its bitrate in bytes with headroom, so 132 Mbps wants about 25 MB/s sustained, not the 30 MB/s a V30 label promises only when the card is empty. The fill test is for the card that works when empty and fails when nearly full: it writes the card full — to a margin you choose, or until the card refuses — charting the write speed against the space left, so the point where the speed falls under what the camera needs is visible; it finds the true free space, and reads samples back, which a counterfeit card fails past its real size. Large cards write quickly into a pseudo-SLC cache and move the data to the slow native flash later, and the cache and the controller's garbage collection both live on free blocks: with a few percent left there are none to spare, the writes go straight to native flash while the controller cleans, and the sustained rate falls — the camera's buffer overflows and it stops with a slow-card warning. Deleting single files on a computer fragments the free space and makes it worse. Each finding says what was found, why it matters and the fix: offload and format in the camera and keep the margin; a card larger than the camera's maker supports; a card whose sustained speed misses the class or the bitrate; a fake capacity; clutter, which a Clean button deletes after confirmation; a crowded folder; truncated recordings, which DJI cameras offer to repair at the next power-on. The report can be copied. Everything runs in the browser against the folder you picked; test files are removed when a test ends or is cancelled.",
+    faq: [
+      { q: "Why does my camera stop recording and say the card is slow only when the card is nearly full?", a: "A big card writes fast into a pseudo-SLC cache and moves the data to its slow native flash in the background; the cache and the controller's clean-up both use free blocks. With a few percent free there are no spare blocks: writes go straight to native flash while the controller cleans up at the same time, and the sustained rate can fall under what the camera needs — the camera's buffer overflows and it stops. Deleting single files on a computer fragments the free space and makes it worse. The fix is to offload, format the card in the camera, and stop recording while a tenth of the card is still free; the fill test shows exactly where your card falls under your bitrate." },
+      { q: "How do I test a card's real write speed?", a: "Run the speed test with 8 GB or more. The first quarter gigabyte is the burst (the operating system's cache and the card's); the sustained figure and the slowest second are what a camera lives on. A cliff in the chart is the card's cache running out. The verdict compares the slowest second with the V30/V60/V90 classes and with your camera's bitrate with headroom." },
+      { q: "Can it tell a fake card?", a: "Yes: the fill test writes a known pattern into files until the card is full and reads samples back. A counterfeit card reports a capacity it does not have, and files written past its real flash come back wrong or vanish. A card whose flash is failing shows the same." },
+      { q: "What does Clean delete?", a: "Only the files computers write onto exFAT cards and that cameras do not expect: ._ resource forks, .DS_Store, .Spotlight-V100, .fseventsd, .Trashes, .TemporaryItems, Thumbs.db, desktop.ini, System Volume Information and $RECYCLE.BIN. You confirm the list first; recordings are never touched. Eject the card properly afterwards so the computer does not write them back." },
+      { q: "Why format in the camera rather than on the computer?", a: "The camera lays out exFAT the way its firmware expects — cluster size, alignment, folder structure — and a fresh format leaves the free space as one sequential run, so the camera's writes stay sequential. Deleting files on a computer leaves holes; a computer format may pick a layout the camera handles slowly." },
+      { q: "How long does the fill test take, and is it safe?", a: "As long as writing the free space takes: at 60 MB/s a terabyte is about five hours. The test writes only into its own BENCH_CARD_DOCTOR folder and deletes it when done or cancelled; your recordings are not touched. Keep the card plugged in and the window open — the page keeps the display awake and warns before you leave." },
+      { q: "Does it read the card's health registers (SMART)?", a: "No browser can: SD cards expose no SMART to a web page, and only a few industrial cards expose health at all. The doctor measures what matters in practice — what the card writes and reads at the end of its capacity, whether data comes back as written, and what the camera left behind — and judges that against the camera's needs." },
+      { q: "Is anything uploaded?", a: "No. Reading the files, writing and verifying the test files and the deletions all happen in your browser through the File System Access API; the card never leaves your computer." },
+    ],
+    examples: [
+      { label: "DJI Osmo Action 6 with a 2 TB card", query: "cam=dji-action-6&cap=2000&size=8&margin=50" },
+      { label: "GoPro, 512 GB", query: "cam=gopro-hero-13&cap=512" },
+      { label: "Any drive at 100 Mbps", query: "cam=custom&cap=1000&mbps=100" },
+    ],
+    related: ["media/video-doctor", "media/editor", "files/unzip"],
+    aliases: ["sd card doctor", "memory card health", "card speed test", "microsd test", "fake card detector", "sd card almost full slow", "camera card slow error", "clean sd card dotfiles", "storage health check"],
+    added: "2026-10-25",
+  },
   {
     slug: "unzip",
     category: "files",

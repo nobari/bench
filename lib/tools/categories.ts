@@ -57,7 +57,7 @@ export const CATEGORIES: Category[] = [
   },
   {
     slug: "files",
-    groups: [{ id: "archives", name: "Archives" }, { id: "readers", name: "Readers" }],
+    groups: [{ id: "archives", name: "Archives" }, { id: "readers", name: "Readers" }, { id: "storage", name: "Storage" }],
     name: "Files & Archives",
     tagline: "Pack, unpack and read archives",
     description:
