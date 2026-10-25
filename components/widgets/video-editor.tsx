@@ -3,7 +3,7 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { AlertTriangle, Camera, ChevronDown, ChevronRight, ChevronUp, Sparkles, Clapperboard, Crop, Download, FolderOpen, Gauge, Loader, Maximize2, Minimize2, Music, Pause, Play, Repeat, Save, Scissors, SkipBack, SkipForward, SlidersHorizontal, StepBack, StepForward, Trash2, Type, Upload, Volume2, VolumeX, Keyboard, Search, Shuffle, X } from "lucide-react";
-import { DEFAULT_EXPORT, NEUTRAL_GRADE, NEUTRAL_TRANSFORM, TITLE_ALIGNS, TITLE_FAMILIES, TITLE_FONTS, TITLE_POSITIONS, TITLE_SHADOWS, TITLE_WEIGHTS, TRANSITIONS, addTransitionAt, appendMusic, applyAudioTo, applyGradeTo, applyTransitionToAll, clipAt, crossfades, dbToGain, effectiveMusicEnd, estimateExport, exportRange, fmtTime, musicGainAt, musicLength, newId, newProject, newTitle, orderRecordings, placeClips, planExport, removeRange, reorderMusic, setTransition, splitClip, timelineDuration, titleLanes, transitionAt, transitionWindows, CLIP_SPEEDS, canMergeWithNext, clipLength, clipSpeed, groupOf, sourceTimeAt, mergeWithNext, moveClip, unjoin, updateClip, visibleCuts, type Clip, type MediaRef, type MusicTrack, type Project, type ProxyHeight, type Title, type TitleFont, isFileLutKind, FILE_LUT_KINDS, type FileLutKind, type LutKind, type MathLutKind, type TitleAlign, type TitlePosition, type TitleShadow, type Transition, type TransitionKind, type ExportTags, type IntroSettings, type IntroCard, DEFAULT_CARD, cardSettings, hasCard, reorderClip, parseTime, type SteadyLights, STEADY_FRAMES, clampMusicStart, musicUnused, shuffleFillMusic, describeWhere, type MediaWhere, exportFingerprint, SOUND_MODES, SOUND_LABELS, soundLevels, applySoundLevels, soundState, type SoundMode, type SoundLevels } from "@/lib/tools/video/project";
+import { DEFAULT_EXPORT, NEUTRAL_GRADE, NEUTRAL_TRANSFORM, TITLE_ALIGNS, TITLE_FAMILIES, TITLE_FONTS, TITLE_POSITIONS, TITLE_SHADOWS, TITLE_WEIGHTS, TRANSITIONS, addTransitionAt, appendMusic, applyAudioTo, applyGradeTo, applyTransitionToAll, clipAt, crossfades, dbToGain, effectiveMusicEnd, estimateExport, exportRange, fmtTime, musicGainAt, musicLength, newId, newProject, newTitle, orderRecordings, placeClips, planExport, removeRange, reorderMusic, setTransition, splitClip, timelineDuration, titleLanes, transitionAt, transitionWindows, CLIP_SPEEDS, canMergeWithNext, clipLength, clipSpeed, groupOf, sourceTimeAt, mergeWithNext, moveClip, unjoin, updateClip, visibleCuts, type Clip, type MediaRef, type MusicTrack, type Project, type ProxyHeight, type Title, type TitleFont, isFileLutKind, FILE_LUT_KINDS, type FileLutKind, type LutKind, type MathLutKind, type TitleAlign, type TitlePosition, type TitleShadow, type Transition, type TransitionKind, type ExportTags, type IntroSettings, type IntroCard, DEFAULT_CARD, cardSettings, hasCard, reorderClip, parseTime, type SteadyLights, STEADY_FRAMES, clampMusicStart, musicUnused, shuffleFillMusic, describeWhere, nameSome, whereSummary, type MediaWhere, exportFingerprint, SOUND_MODES, SOUND_LABELS, soundLevels, applySoundLevels, soundState, type SoundMode, type SoundLevels } from "@/lib/tools/video/project";
 import { gainToReach, YOUTUBE_LUFS, type Loudness } from "@/lib/tools/video/loudness";
 import { drawTransition } from "@/lib/tools/video/transitions";
 import { LUT_OPTIONS, buildDlogLut, deriveLut, fetchOfficialLut, lutToCube, parseCube, type Lut3D } from "@/lib/tools/video/lut";
@@ -2742,7 +2742,8 @@ export function VideoEditorWidget() {
   const laneVideo = { flex: "3 1 0px", minHeight: 28 } as const;
   const laneTitles = { flex: `${titleLaneOf.count} 1 0px`, minHeight: Math.max(0, titleLaneOf.count * 20 - 2) } as const;
   const laneMusic = { flex: "1 1 0px", minHeight: 18 } as const;
-  // The smallest the timeline pane may be dragged: every lane at its floor plus the header, the hint line and padding.
+  // The smallest the timeline pane may be: every lane at its floor plus the header, the hint line and padding. The rows
+  // split holds it as a hard floor, so a notice or a result card above the rows squeezes the preview, never the lanes.
   const timelineFloor = 216 + 20 * titleLaneOf.count;
   const timelinePanel = (
       <div className="panel flex h-full min-h-0 flex-col select-none overflow-hidden p-2" data-timeline>
@@ -2761,7 +2762,7 @@ export function VideoEditorWidget() {
           </button>
         </div>
         <div className="flex min-h-0 flex-1" data-timeline-lanes>
-          <div className="flex w-14 shrink-0 flex-col pr-1.5 text-right text-[10.5px] leading-none text-faint select-none" style={{ paddingBottom: scrollbarH }} aria-hidden>
+          <div className="flex min-h-0 w-14 shrink-0 flex-col overflow-hidden pr-1.5 text-right text-[10.5px] leading-none text-faint select-none" style={{ paddingBottom: scrollbarH }} aria-hidden>
             <div className="h-5 shrink-0" />
             <div className="mt-1 flex items-center justify-end" style={laneVideo}>Video</div>
             <div className="mt-1 flex items-center justify-end" style={laneTitles}>Titles</div>
@@ -2976,12 +2977,12 @@ export function VideoEditorWidget() {
       {missingMedia.length > 0 && (
         <div className="flex flex-wrap items-center gap-2 rounded-[var(--radius-sm)] border border-warn/40 bg-warn/10 px-3 py-2 text-[13px]">
           <AlertTriangle size={14} className="text-warn" />
-          <span>
-            {missingMedia.length === 1 ? "One recording can" : `${missingMedia.length} recordings can`}&apos;t be found right now: {missingMedia.map((id) => project.media[id]?.name ?? id).join(", ")}. The timeline is intact; pick the file{missingMedia.length === 1 ? "" : "s"} again to preview and export.
+          <span className="min-w-0 flex-1">
+            {missingMedia.length === 1 ? "One recording can" : `${missingMedia.length} recordings can`}&apos;t be found right now: {nameSome(missingMedia.map((id) => project.media[id]?.name ?? id))}. The timeline is intact; pick the file{missingMedia.length === 1 ? "" : "s"} again to preview and export.
           </span>
-          {missingMedia.some((id) => project.media[id]?.where) && (
+          {whereSummary(project, missingMedia.map((id) => project.media[id]).filter(Boolean)) && (
             <span className="basis-full text-[12px] text-faint" data-missing-where>
-              Last seen at {missingMedia.filter((id) => project.media[id]?.where).map((id) => describeWhere(project, project.media[id])).join(", ")}.
+              Last seen {whereSummary(project, missingMedia.map((id) => project.media[id]).filter(Boolean))}.
             </span>
           )}
           <button type="button" onClick={() => void rememberFolder()} disabled={!hasFileSystemAccess()} className={cn(GHOST, "ml-auto")} title="Point at the folder the files live in: their paths inside it are recorded, missing ones are found there by name, and next time they are located without asking" data-remember-folder>
@@ -3046,11 +3047,11 @@ export function VideoEditorWidget() {
       {/* preview + inspector — a split pane (the tools fold away to leave the picture and the timeline), hidden while an export runs */}
       {/* preview + tools over the timeline: a vertical split, the row's height yours to drag; while an export runs the row is
           kept mounted but out of sight (the run view stands in for it) and the timeline takes the room */}
-      <SplitPane id="video-editor-rows" direction="vertical" defaultRatio={0.64} minFirst={260} minSecond={timelineFloor} collapsible="second" firstLabel="preview and tools" secondLabel="timeline" stackBelow="never" gap={12} className="min-h-0 flex-1" hidden={job?.kind === "export" ? "first" : null} first={
+      <SplitPane id="video-editor-rows" direction="vertical" defaultRatio={0.64} minFirst={260} minSecond={timelineFloor} floor="second" collapsible="second" firstLabel="preview and tools" secondLabel="timeline" stackBelow="never" gap={12} className="min-h-0 flex-1" hidden={job?.kind === "export" ? "first" : null} first={
       <SplitPane id="video-editor-main" direction="horizontal" defaultRatio={0.6} minFirst={320} minSecond={300} collapsible="both" firstLabel="preview" secondLabel="tools" className="h-full min-h-0 gap-0" first={<>
         <div className="panel flex h-full min-h-0 flex-col p-2">
           {/* The stage takes what the row leaves; the picture is the largest box of the video's shape that fits it. */}
-          <div ref={stageRef} className="flex min-h-0 flex-1 items-center justify-center" data-preview-stage>
+          <div ref={stageRef} className="flex min-h-0 flex-1 items-center justify-center overflow-hidden" data-preview-stage>
           <div
             ref={previewBoxRef}
             className={cn("group relative overflow-hidden rounded-[var(--radius-sm)] bg-black", dragOver && "ring-2 ring-accent")}

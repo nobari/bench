@@ -793,10 +793,33 @@ export interface Project {
 }
 
 /** A readable location for a media file. */
+const folderName = (p: Project, where: MediaWhere) => (where.folder === "project" ? "project folder" : (p.folders?.[where.folder] ?? "a remembered folder"));
 export function describeWhere(p: Project, m: MediaRef): string | null {
   if (!m.where) return null;
-  const folder = m.where.folder === "project" ? "project folder" : (p.folders?.[m.where.folder] ?? "a remembered folder");
-  return `${folder}/${m.where.path}`;
+  return `${folderName(p, m.where)}/${m.where.path}`;
+}
+
+/** A few names in full and the rest as a count, so a list of a hundred recordings stays one line: "a, b, c and 97 more". */
+export function nameSome(names: string[], max = 3): string {
+  if (names.length <= max) return names.join(", ");
+  return `${names.slice(0, max).join(", ")} and ${names.length - max} more`;
+}
+
+/**
+ * Where some recordings were last seen, for the missing-files notice: every path when there are a few ("at
+ * project folder/a.MP4, project folder/b.MP4"), otherwise the folders with how many each held ("in project folder (97),
+ * SD card (2)"). Null when none of them has a known place.
+ */
+export function whereSummary(p: Project, media: MediaRef[], max = 3): string | null {
+  const placed = media.filter((m) => m.where);
+  if (!placed.length) return null;
+  if (placed.length <= max) return `at ${placed.map((m) => describeWhere(p, m)).join(", ")}`;
+  const counts = new Map<string, number>();
+  for (const m of placed) {
+    const f = folderName(p, m.where as MediaWhere);
+    counts.set(f, (counts.get(f) ?? 0) + 1);
+  }
+  return `in ${[...counts].map(([f, n]) => `${f} (${n})`).join(", ")}`;
 }
 
 export const DEFAULT_EXPORT: ExportSettings = { codec: "hevc", bitrateMbps: 100, preset: "balanced", audioBitrateKbps: 256, resolution: "source", smartCopy: true, range: null, tags: { ...DEFAULT_TAGS }, steadyLights: "off", check: "full", review: "on" };

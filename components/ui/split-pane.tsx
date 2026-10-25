@@ -22,6 +22,11 @@ export interface SplitPaneProps {
   /** Smallest size of each pane in pixels before it folds. */
   minFirst?: number;
   minSecond?: number;
+  /**
+   * A pane whose minimum is a floor: it is never drawn smaller than it, whatever the saved split or the room, and the
+   * other pane yields instead. Off by default: the minimums then only hold while the handle is dragged.
+   */
+  floor?: "first" | "second" | "both" | "none";
   /** Which panes may be folded away. */
   collapsible?: "first" | "second" | "both" | "none";
   /** Names for the folded strips' restore controls. */
@@ -59,7 +64,7 @@ const save = (id: string, s: Saved) => {
   }
 };
 
-export function SplitPane({ id, direction = "horizontal", first, second, defaultRatio = 0.6, minFirst = 240, minSecond = 240, collapsible = "both", firstLabel = "left pane", secondLabel = "right pane", className, stackBelow = "lg", gap = 12, hidden = null }: SplitPaneProps) {
+export function SplitPane({ id, direction = "horizontal", first, second, defaultRatio = 0.6, minFirst = 240, minSecond = 240, collapsible = "both", floor = "none", firstLabel = "left pane", secondLabel = "right pane", className, stackBelow = "lg", gap = 12, hidden = null }: SplitPaneProps) {
   const horizontal = direction === "horizontal";
   const [state, setState] = useState<Saved>(() => load(id, { ratio: defaultRatio, collapsed: null }));
   const ref = useRef<HTMLDivElement>(null);
@@ -142,14 +147,16 @@ export function SplitPane({ id, direction = "horizontal", first, second, default
   const STRIP = 28;
   const c = state.collapsed;
   // Sizes come from flex-grow shares, never from percentages: a percentage height inside nested flex columns is
-  // unreliable in Chrome, a grow share is not. A folded pane is a fixed strip; the other takes the rest.
+  // unreliable in Chrome, a grow share is not. A folded pane is a fixed strip; the other takes the rest. A floored
+  // pane carries its minimum as a hard min size, so the shares only divide what is left above it.
   const grow = (which: "first" | "second"): React.CSSProperties => {
     if (hidden === which) return { display: "none" };
     if (hidden) return { flex: "1 1 0px" };
     if (c === which) return { flex: `0 0 ${STRIP}px` };
     if (c) return { flex: "1 1 0px" };
     const share = which === "first" ? state.ratio : 1 - state.ratio;
-    return { flex: `${share} 1 0px` };
+    const min = floor === which || floor === "both" ? (which === "first" ? minFirst : minSecond) : 0;
+    return { flex: `${share} 1 0px`, ...(min > 0 ? (horizontal ? { minWidth: min } : { minHeight: min }) : {}) };
   };
   // Below the breakpoint the panes stack at their natural size.
   const stackedPane = stackBelow === "lg" ? "max-lg:!flex-none max-lg:!w-full" : stackBelow === "md" ? "max-md:!flex-none max-md:!w-full" : "";
