@@ -391,6 +391,8 @@ export function VideoEditorWidget() {
   const rootRef = useRef<HTMLDivElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
   const [stage, setStage] = useState<{ w: number; h: number } | null>(null);
+  /** Height of the lane column's horizontal scrollbar (0 with overlay scrollbars); the label column leaves that room. */
+  const [scrollbarH, setScrollbarH] = useState(0);
   useEffect(() => {
     const el = stageRef.current;
     if (!el || typeof ResizeObserver === "undefined") return;
@@ -1023,7 +1025,10 @@ export function VideoEditorWidget() {
   useEffect(() => {
     const el = timelineRef.current;
     if (!el) return;
-    const ro = new ResizeObserver((entries) => setTimelineWidth(Math.max(200, Math.round(entries[0].contentRect.width))));
+    const ro = new ResizeObserver((entries) => {
+      setTimelineWidth(Math.max(200, Math.round(entries[0].contentRect.width)));
+      setScrollbarH(Math.max(0, el.offsetHeight - el.clientHeight));
+    });
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
@@ -2561,13 +2566,26 @@ export function VideoEditorWidget() {
     }
     return t;
   };
+  /**
+   * The time under the pointer: the clock while hovering; while the pointer is held, plain seconds (3600s, 12.5s) in
+   * the unit the title, music and range fields take, so a time can be read straight off the timeline and typed in.
+   */
+  const showHoverTime = (t: number) => {
+    const el = hoverLabelRef.current;
+    if (!el) return;
+    const held = !!scrubRef.current;
+    el.textContent = held ? `${Math.round(t * 100) / 100}s` : fmtTime(t);
+    el.dataset.held = held ? "true" : "false";
+  };
   const onTimelinePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     if (e.button !== 0) return;
     const el = e.currentTarget;
     el.setPointerCapture(e.pointerId);
     scrubRef.current = { pointerId: e.pointerId };
-    setPlayhead(timeAtPointer(el, e.clientX, !e.altKey));
+    const t = timeAtPointer(el, e.clientX, !e.altKey);
+    setPlayhead(t);
     setSeekToken((x) => x + 1);
+    showHoverTime(t);
   };
   const onTimelinePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
     const el = e.currentTarget;
@@ -2577,13 +2595,14 @@ export function VideoEditorWidget() {
       hoverLineRef.current.style.left = `${t * pxPerSec}px`;
       hoverLineRef.current.style.display = clipDragRef.current?.moved ? "none" : "block";
     }
-    if (hoverLabelRef.current) hoverLabelRef.current.textContent = fmtMs(t);
+    showHoverTime(t);
   };
   const onTimelinePointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
     if (!scrubRef.current) return;
     scrubRef.current = null;
     if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
     setSeekToken((x) => x + 1);
+    showHoverTime(timeAtPointer(e.currentTarget, e.clientX, !e.altKey));
   };
   const onTimelinePointerLeave = () => {
     if (hoverLineRef.current) hoverLineRef.current.style.display = "none";
@@ -2718,9 +2737,16 @@ export function VideoEditorWidget() {
   const thumbSize = `${Math.round((previewAspect * thumbH) / 2) * 2}×${thumbH}`;
 
   // The timeline panel, rendered under the row or alone while an export runs.
+  // The lanes share the panel's height by flex: the video lane three parts, each title row and music lane one, with
+  // floors so a short panel still shows every lane; nothing scrolls vertically.
+  const laneVideo = { flex: "3 1 0px", minHeight: 28 } as const;
+  const laneTitles = { flex: `${titleLaneOf.count} 1 0px`, minHeight: Math.max(0, titleLaneOf.count * 20 - 2) } as const;
+  const laneMusic = { flex: "1 1 0px", minHeight: 18 } as const;
+  // The smallest the timeline pane may be dragged: every lane at its floor plus the header, the hint line and padding.
+  const timelineFloor = 216 + 20 * titleLaneOf.count;
   const timelinePanel = (
-      <div className="panel h-full min-h-0 select-none overflow-y-auto p-2" data-timeline>
-        <div className="mb-1.5 flex flex-wrap items-center gap-x-3 gap-y-1">
+      <div className="panel flex h-full min-h-0 flex-col select-none overflow-hidden p-2" data-timeline>
+        <div className="mb-1.5 flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1">
           <span className="readout">Timeline</span>
           <span className="text-[11.5px] text-faint tabular">{placed.length ? `${placed.length} clip${placed.length === 1 ? "" : "s"} · ${fmtTime(duration)}` : "empty"}</span>
           <label className="ml-auto flex items-center gap-1.5 text-[12px] text-muted">
@@ -2734,19 +2760,19 @@ export function VideoEditorWidget() {
             <Keyboard size={13} /> <span className="max-sm:hidden">Shortcuts</span>
           </button>
         </div>
-        <div className="flex">
-          <div className="w-14 shrink-0 pr-1.5 text-right text-[10.5px] leading-none text-faint select-none" aria-hidden>
-            <div className="h-5" />
-            <div className="mt-1 flex h-12 items-center justify-end">Video</div>
-            <div className="mt-1 flex items-center justify-end" style={{ height: Math.max(0, titleLaneOf.count * 22 - 2) }}>Titles</div>
+        <div className="flex min-h-0 flex-1" data-timeline-lanes>
+          <div className="flex w-14 shrink-0 flex-col pr-1.5 text-right text-[10.5px] leading-none text-faint select-none" style={{ paddingBottom: scrollbarH }} aria-hidden>
+            <div className="h-5 shrink-0" />
+            <div className="mt-1 flex items-center justify-end" style={laneVideo}>Video</div>
+            <div className="mt-1 flex items-center justify-end" style={laneTitles}>Titles</div>
             {[0, 1, 2].map((lane) => (
-              <div key={lane} className="mt-1 flex h-7 items-center justify-end">Music {lane + 1}</div>
+              <div key={lane} className="mt-1 flex items-center justify-end" style={laneMusic}>Music {lane + 1}</div>
             ))}
           </div>
-        <div ref={timelineRef} className="relative min-w-0 flex-1 overflow-x-auto" onScroll={onTimelineScroll} onPointerDown={onTimelinePointerDown} onPointerMove={onTimelinePointerMove} onPointerUp={onTimelinePointerUp} onPointerCancel={onTimelinePointerUp} onPointerLeave={onTimelinePointerLeave} data-timeline-scroll>
-          <div className="relative" style={{ width: Math.max(100, Math.max(duration, musicFarEnd) * pxPerSec + 40), minHeight: 150 }}>
+        <div ref={timelineRef} className="relative min-h-0 min-w-0 flex-1 overflow-x-auto overflow-y-hidden" onScroll={onTimelineScroll} onPointerDown={onTimelinePointerDown} onPointerMove={onTimelinePointerMove} onPointerUp={onTimelinePointerUp} onPointerCancel={onTimelinePointerUp} onPointerLeave={onTimelinePointerLeave} data-timeline-scroll>
+          <div className="relative flex h-full flex-col" style={{ width: Math.max(100, Math.max(duration, musicFarEnd) * pxPerSec + 40) }}>
             {/* ruler */}
-            <div className="h-5 cursor-ew-resize border-b border-edge text-[10px] text-faint" data-ruler title="Click or drag to scrub; snaps to cuts (hold ⌥ to scrub freely)">
+            <div className="h-5 shrink-0 cursor-ew-resize border-b border-edge text-[10px] text-faint" data-ruler title="Click or drag to scrub; snaps to cuts (hold ⌥ to scrub freely)">
               {Array.from({ length: Math.ceil(duration / rulerStep(duration, zoom)) + 1 }, (_, i) => i * rulerStep(duration, zoom)).map((t) => (
                 <span key={t} className="absolute top-0" style={{ left: t * pxPerSec }}>
                   {fmtTime(t)}
@@ -2754,7 +2780,7 @@ export function VideoEditorWidget() {
               ))}
             </div>
             {/* video lane */}
-            <div className="relative mt-1 h-12">
+            <div className="relative mt-1" style={laneVideo} data-video-lane>
               {placed.map((c, i) => {
                 // Joined clips draw as one continuous bar: no edge or gap at the hidden cut, and only the first carries a label.
                 const { joinsNext, runCount, runEnd } = runInfo[i];
@@ -2780,7 +2806,7 @@ export function VideoEditorWidget() {
                       setPlayhead(c.start);
                       setSeekToken((t) => t + 1);
                     }}
-                    className={cn("absolute top-0 h-full overflow-hidden border text-left text-[11.5px]", c.joinedToPrevious ? "rounded-l-none border-l-0 pl-0" : "rounded-l-[var(--radius-sm)] pl-2", joinsNext ? "rounded-r-none border-r-0 pr-0" : "rounded-r-[var(--radius-sm)] pr-2", selectedRun.has(c.id) ? "border-accent bg-accent-soft text-ink" : c.introRole && introReg && i <= introReg.scenes.length ? "border-[#d9a400]/60 bg-[#d9a400]/15 text-muted" : "border-edge bg-raised text-muted")}
+                    className={cn("absolute top-0 flex h-full flex-col justify-center overflow-hidden border text-left text-[11.5px]", c.joinedToPrevious ? "rounded-l-none border-l-0 pl-0" : "rounded-l-[var(--radius-sm)] pl-2", joinsNext ? "rounded-r-none border-r-0 pr-0" : "rounded-r-[var(--radius-sm)] pr-2", selectedRun.has(c.id) ? "border-accent bg-accent-soft text-ink" : c.introRole && introReg && i <= introReg.scenes.length ? "border-[#d9a400]/60 bg-[#d9a400]/15 text-muted" : "border-edge bg-raised text-muted")}
                     style={{ left: c.start * pxPerSec, width: Math.max(4, (c.end - c.start) * pxPerSec - (joinsNext ? 0 : 1)) }}
                     title={`${c.introRole === "card" ? "Intro title card · " : c.introRole ? "Intro scene · " : ""}${project.media[c.media]?.name} ${fmtTime(c.in)}–${fmtTime(c.out)}${c.joinedToPrevious ? " · joined to the previous clip" : ""}${describeWhere(project, project.media[c.media]) ? ` · ${describeWhere(project, project.media[c.media])}` : ""}${c.introRole ? "" : " · drag to move it"}`}
                     data-clip={c.id}
@@ -2842,8 +2868,8 @@ export function VideoEditorWidget() {
               ))}
             </div>
             {/* title lanes: overlapping titles stack */}
-            <div className="relative mt-1" style={{ height: Math.max(0, titleLaneOf.count * 22 - 2) }}>
-              {!project.titles.length && project.clips.length > 0 && <div className="pointer-events-none absolute inset-0 rounded-[3px] border border-dashed border-edge px-2 text-[10.5px] leading-5 text-faint">Titles and lower thirds from the Titles tab land here</div>}
+            <div className="relative mt-1" style={laneTitles} data-title-lane>
+              {!project.titles.length && project.clips.length > 0 && <div className="pointer-events-none absolute inset-0 flex items-center rounded-[3px] border border-dashed border-edge px-2 text-[10.5px] text-faint">Titles and lower thirds from the Titles tab land here</div>}
               {project.titles.map((t) => (
                 <button
                   key={t.id}
@@ -2853,8 +2879,8 @@ export function VideoEditorWidget() {
                     setTab("titles");
                     focusTitle(t);
                   }}
-                  className={cn("absolute h-5 truncate rounded-[3px] bg-[#e5484d]/70 px-1 text-left text-[10.5px] text-white", selectedTitle === t.id && "ring-2 ring-white/90")}
-                  style={{ left: t.start * pxPerSec, width: Math.max(4, t.duration * pxPerSec), top: (titleLaneOf.lanes[t.id] ?? 0) * 22 }}
+                  className={cn("absolute truncate rounded-[3px] bg-[#e5484d]/70 px-1 text-left text-[10.5px] text-white", selectedTitle === t.id && "ring-2 ring-white/90")}
+                  style={{ left: t.start * pxPerSec, width: Math.max(4, t.duration * pxPerSec), top: `${((titleLaneOf.lanes[t.id] ?? 0) / titleLaneOf.count) * 100}%`, height: `calc(${100 / titleLaneOf.count}% - 2px)` }}
                   title={t.text}
                 >
                   {t.text}
@@ -2863,8 +2889,8 @@ export function VideoEditorWidget() {
             </div>
             {/* music lanes */}
             {[0, 1, 2].map((lane) => (
-              <div key={lane} className="relative mt-1 h-7">
-                {lane === 0 && !project.music.length && project.clips.length > 0 && <div className="pointer-events-none absolute inset-0 rounded-[3px] border border-dashed border-edge px-2 text-[10.5px] leading-7 text-faint">Drop music onto the preview, or add it from the Audio tab</div>}
+              <div key={lane} className="relative mt-1" style={laneMusic} data-music-lane={lane}>
+                {lane === 0 && !project.music.length && project.clips.length > 0 && <div className="pointer-events-none absolute inset-0 flex items-center rounded-[3px] border border-dashed border-edge px-2 text-[10.5px] text-faint">Drop music onto the preview, or add it from the Audio tab</div>}
                 {project.music.filter((m) => m.lane === lane).map((m) => (
                   <Fragment key={m.id}>
                   <button
@@ -2884,7 +2910,7 @@ export function VideoEditorWidget() {
                   </button>
                   {musicUnused(m, duration) > 0 && (
                     <div
-                      className="pointer-events-none absolute top-0 h-full truncate rounded-r-[3px] border border-l-0 border-dashed border-edge bg-[repeating-linear-gradient(135deg,rgba(128,128,128,0.28)_0_4px,transparent_4px_8px)] px-1.5 text-[10.5px] leading-7 text-faint"
+                      className="pointer-events-none absolute top-0 flex h-full items-center truncate rounded-r-[3px] border border-l-0 border-dashed border-edge bg-[repeating-linear-gradient(135deg,rgba(128,128,128,0.28)_0_4px,transparent_4px_8px)] px-1.5 text-[10.5px] text-faint"
                       style={{ left: Math.max(m.start, effectiveMusicEnd(m, duration)) * pxPerSec, width: Math.max(4, musicUnused(m, duration) * pxPerSec) }}
                       title={`${fmtTime(musicUnused(m, duration))} of ${project.media[m.media]?.name} runs past the end of the video and is not used`}
                       data-music-unused={m.id}
@@ -2905,13 +2931,13 @@ export function VideoEditorWidget() {
             <div ref={hoverLineRef} className="pointer-events-none absolute top-0 bottom-0 z-10 w-px bg-ink/30" style={{ display: "none" }} data-hover-line>
               <span ref={hoverLabelRef} data-hover-label className="absolute top-0 left-1 rounded-[3px] bg-black/75 px-1 font-mono text-[10px] leading-4 text-white tabular" />
             </div>
-            <div ref={dropLineRef} className="pointer-events-none absolute top-5 z-10 h-14 w-0.5 bg-accent" style={{ display: "none" }} data-drop-line />
+            <div ref={dropLineRef} className="pointer-events-none absolute top-5 bottom-0 z-10 w-0.5 bg-accent" style={{ display: "none" }} data-drop-line />
             <div className="pointer-events-none absolute bottom-0 top-0 w-px bg-[#e5484d]" style={{ left: playhead * pxPerSec }} />
             <div className="pointer-events-none absolute top-0 h-0 w-0 border-x-[5px] border-t-[6px] border-x-transparent border-t-[#e5484d]" style={{ left: playhead * pxPerSec - 5 }} data-playhead-handle />
           </div>
         </div>
         </div>
-        <p className="mt-1.5 text-[11.5px] text-faint">
+        <p className="mt-1.5 shrink-0 truncate text-[11.5px] text-faint">
           Click the ruler to seek · Space plays, hold it for double speed · hold Control to skim the cuts · Q, W and C trim and split at the playhead · <kbd className="rounded border border-edge px-1 font-mono">?</kbd> lists every shortcut.
         </p>
       </div>
@@ -3020,7 +3046,7 @@ export function VideoEditorWidget() {
       {/* preview + inspector — a split pane (the tools fold away to leave the picture and the timeline), hidden while an export runs */}
       {/* preview + tools over the timeline: a vertical split, the row's height yours to drag; while an export runs the row is
           kept mounted but out of sight (the run view stands in for it) and the timeline takes the room */}
-      <SplitPane id="video-editor-rows" direction="vertical" defaultRatio={0.64} minFirst={260} minSecond={150} collapsible="second" firstLabel="preview and tools" secondLabel="timeline" stackBelow="never" gap={12} className="min-h-0 flex-1" hidden={job?.kind === "export" ? "first" : null} first={
+      <SplitPane id="video-editor-rows" direction="vertical" defaultRatio={0.64} minFirst={260} minSecond={timelineFloor} collapsible="second" firstLabel="preview and tools" secondLabel="timeline" stackBelow="never" gap={12} className="min-h-0 flex-1" hidden={job?.kind === "export" ? "first" : null} first={
       <SplitPane id="video-editor-main" direction="horizontal" defaultRatio={0.6} minFirst={320} minSecond={300} collapsible="both" firstLabel="preview" secondLabel="tools" className="h-full min-h-0 gap-0" first={<>
         <div className="panel flex h-full min-h-0 flex-col p-2">
           {/* The stage takes what the row leaves; the picture is the largest box of the video's shape that fits it. */}
