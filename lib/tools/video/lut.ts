@@ -127,46 +127,72 @@ const GREY_DISPLAY = pchip(DJI_TONE, 0.4);
 export const LUT_OPTIONS: { kind: MathLutKind | FileLutKind; name: string; hint: string }[] = [
   { kind: "dji-official", name: "D-Log M → Rec.709 (DJI's own file)", hint: "DJI's official Osmo Action 6 D-Log M to Rec.709 LUT (v1.0, November 2025), applied exactly as DJI ships it. Punchy, saturated and faithful; the reference everything else is measured against." },
   { kind: "dlogm", name: "D-Log M → Rec.709 (DJI, modelled)", hint: "A compact model of DJI's file: tone, hue and saturation measured from it. Within about two 8-bit levels of the file on real footage." },
+  { kind: "dji-official-vivid", name: "D-Log M → Vivid (on DJI's file)", hint: "The attractive look for travel, drives and scenery: DJI's own colour science with the Vivid treatment on top — richer colour where it is muted (vibrance, skin tones held back), a gentle S-curve about mid grey with a soft shoulder so bright sky and clouds stay clean and nothing clips, mids a touch brighter and a hint of warmth." },
   { kind: "dji-official-study", name: "D-Log M → Study (on DJI's file)", hint: "The recommended look for long-play study, focus and work videos: DJI's own colour science with the Study treatment on top — crisp mids, a soft shoulder, sky held off cyan and neutral near white, shadows opened a touch, a hint of warmth, saturation 0.9." },
   { kind: "dlogm-study", name: "D-Log M → Study", hint: "Tuned on Osmo Action 6 footage for long-play study, focus and work videos: DJI's tone with mids kept crisp, a soft shoulder that keeps sky gradients smooth, bright sky held off cyan, shadows opened a touch, a hint of warmth and calmer saturation." },
   { kind: "dlogm-natural", name: "D-Log M → Natural", hint: "DJI's rendering with 12 % less saturation and slightly less contrast — flattering for overcast days and muted scenes." },
-  { kind: "dlogm-vivid", name: "D-Log M → Vivid", hint: "DJI's rendering with 10 % more saturation and a little more contrast, in the spirit of DJI's own vivid LUTs." },
+  { kind: "dlogm-vivid", name: "D-Log M → Vivid", hint: "The Vivid treatment on the modelled conversion: richer colour where it is muted with skin tones held back, a gentle S-curve with a soft shoulder, mids a touch brighter and a hint of warmth." },
   { kind: "dlog", name: "D-Log → Rec.709 (DJI)", hint: "DJI's published D-Log curve and D-Gamut matrix (Mavic 3 Pro Hasselblad camera, Inspire 3, Zenmuse), rendered with the same tone as the D-Log M look." },
 ];
 /**
  * A look is a few display-space moves after DJI's rendering: exposure (stops),
  * warmth (as the Temperature slider, 1 = +100), a nudge of blue-dominant
  * pixels away from cyan, saturation with extra desaturation towards white
- * (keeps bright sky and clouds neutral), contrast about 18 % grey, a soft
- * shoulder above a display level, and a black lift.
+ * (keeps bright sky and clouds neutral), vibrance (extra saturation that
+ * fades as a colour gets richer, so muted colours bloom while strong ones
+ * don't go neon), skin protection (how much of the vibrance and saturation
+ * skin-coloured pixels are spared), contrast about 18 % grey, a soft
+ * shoulder above a display level, a soft toe below one (so added contrast
+ * deepens shadows without crushing them to black), and a black lift.
  */
-interface Look {
+export interface Look {
   exposure: number;
   warm: number;
   blueHue: number;
   sat: number;
   hiDesat: number;
+  vibrance: number;
+  skin: number;
   con: number;
   shoulder: number;
+  toe: number;
   lift: number;
 }
-const PLAIN: Look = { exposure: 0, warm: 0, blueHue: 0, sat: 1, hiDesat: 0, con: 1, shoulder: 1, lift: 0 };
+const PLAIN: Look = { exposure: 0, warm: 0, blueHue: 0, sat: 1, hiDesat: 0, vibrance: 0, skin: 0, con: 1, shoulder: 1, toe: 0, lift: 0 };
 // Measured on a sunny Tokyo drive: median 0.4 stop over grey, sky at code 0.35/0.5/0.65, p99 three stops over grey.
-export const STUDY_LOOK: Look = { exposure: -0.05, warm: 0.05, blueHue: 0.08, sat: 0.9, hiDesat: 0.35, con: 1, shoulder: 0.88, lift: 0.008 };
+export const STUDY_LOOK: Look = { ...PLAIN, exposure: -0.05, warm: 0.05, blueHue: 0.08, sat: 0.9, hiDesat: 0.35, shoulder: 0.88, lift: 0.008 };
+/**
+ * Tuned on Osmo Action 6 drives, an autumn mountain road and an overcast street against DJI's file: colour up by about
+ * a quarter where it is muted and a tenth where it is already strong, skin spared half of that, an S-curve of 8 % about
+ * mid grey with the shoulder from 0.9 so clouds and sky keep their gradients, mids a twentieth of a stop brighter, a
+ * hint of warmth, bright near-whites kept clean, and a toe from 0.03 so the shadows the S-curve deepens never crush.
+ */
+export const VIVID_LOOK: Look = { ...PLAIN, exposure: 0.05, warm: 0.04, blueHue: 0.04, sat: 1.1, hiDesat: 0.25, vibrance: 0.28, skin: 0.5, con: 1.08, shoulder: 0.9, toe: 0.03 };
 const LOOKS: Record<MathLutKind | FileLutKind, Look> = {
   "dji-official": PLAIN,
+  "dji-official-vivid": VIVID_LOOK,
   "dji-official-study": STUDY_LOOK,
   dlogm: PLAIN,
   "dlogm-study": STUDY_LOOK,
   "dlogm-natural": { ...PLAIN, sat: 0.88, con: 0.94 },
-  "dlogm-vivid": { ...PLAIN, sat: 1.1, con: 1.04 },
+  "dlogm-vivid": VIVID_LOOK,
   dlog: PLAIN,
 };
 const smoothstep = (a: number, b: number, x: number) => {
   const t = clamp01((x - a) / (b - a));
   return t * t * (3 - 2 * t);
 };
-function applyLook(rgb: [number, number, number], L: Look): [number, number, number] {
+/** How skin-coloured a display pixel is: a hue between orange-red and yellow-orange with some colour in it. */
+function skinWeight(r: number, g: number, b: number): number {
+  const max = Math.max(r, g, b), min = Math.min(r, g, b), c = max - min;
+  if (c < 0.03 || max !== r) return 0;
+  // Hue in degrees for the red-dominant sextant: 0 at red, 60 at yellow (g ≥ b); b > r never counts.
+  const hue = g >= b ? 60 * ((g - b) / c) : 360 - 60 * ((b - g) / c);
+  if (hue > 60) return 0;
+  return smoothstep(8, 18, hue) * (1 - smoothstep(40, 52, hue)) * smoothstep(0.03, 0.1, c);
+}
+/** A look applied to one display-referred RGB triplet; exported for the tests and for tuning. */
+export function applyLook(rgb: [number, number, number], L: Look): [number, number, number] {
   let [r, g, b] = rgb;
   if (L.exposure) {
     const gain = 2 ** L.exposure;
@@ -180,7 +206,14 @@ function applyLook(rgb: [number, number, number], L: Look): [number, number, num
   }
   if (L.blueHue && b > r && b > g) g -= L.blueHue * (b - r);
   const y = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-  const s = L.sat * (1 - L.hiDesat * smoothstep(0.7, 1, y));
+  let boost = L.sat - 1;
+  if (L.vibrance) {
+    // Richness as HSV saturation: 0 for grey, 1 for a pure colour; the vibrance fades out as it rises.
+    const max = Math.max(r, g, b), c = max - Math.min(r, g, b);
+    boost += L.vibrance * (1 - (max > 0 ? c / max : 0));
+  }
+  if (L.skin && boost > 0) boost *= 1 - L.skin * skinWeight(r, g, b);
+  const s = (1 + boost) * (1 - L.hiDesat * smoothstep(0.7, 1, y));
   if (s !== 1) {
     r = y + s * (r - y);
     g = y + s * (g - y);
@@ -191,9 +224,11 @@ function applyLook(rgb: [number, number, number], L: Look): [number, number, num
     g = GREY_DISPLAY + (g - GREY_DISPLAY) * L.con;
     b = GREY_DISPLAY + (b - GREY_DISPLAY) * L.con;
   }
-  const k = L.shoulder;
+  const k = L.shoulder, t = L.toe;
   const sh = (v: number) => (k < 1 && v > k ? k + (1 - k) * (1 - Math.exp(-(v - k) / (1 - k))) : v);
-  const fin = (v: number) => clamp01(L.lift + (1 - L.lift) * clamp01(sh(v)));
+  // The toe mirrors the shoulder: below t it eases towards 0 instead of clipping, meeting the line at t with the same slope.
+  const to = (v: number) => (t > 0 && v < t ? t * Math.exp(-(t - v) / t) : v);
+  const fin = (v: number) => clamp01(L.lift + (1 - L.lift) * clamp01(sh(to(v))));
   return [fin(r), fin(g), fin(b)];
 }
 

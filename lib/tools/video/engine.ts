@@ -43,6 +43,7 @@ import {
   fontFamilyCss,
   exportRange,
   isFileLutKind,
+  FILE_LUT_KINDS,
   musicGainAt,
   placeClips,
   planExport,
@@ -1286,11 +1287,7 @@ async function exportWithPulse(
   }
   if (needsFileLut) {
     const base = await fetchOfficialLut();
-    grader.provideLut("dji-official", deriveLut(base, "dji-official"));
-    grader.provideLut(
-      "dji-official-study",
-      deriveLut(base, "dji-official-study"),
-    );
+    for (const kind of FILE_LUT_KINDS) grader.provideLut(kind, deriveLut(base, kind));
   }
   const encoderConfig = {
     codec,
@@ -1933,11 +1930,7 @@ export async function renderFrame(opts: FrameOptions): Promise<RenderedFrame> {
   }
   if (project.clips.some((c) => isFileLutKind(c.grade.lut))) {
     const base = await fetchOfficialLut();
-    grader.provideLut("dji-official", deriveLut(base, "dji-official"));
-    grader.provideLut(
-      "dji-official-study",
-      deriveLut(base, "dji-official-study"),
-    );
+    for (const kind of FILE_LUT_KINDS) grader.provideLut(kind, deriveLut(base, kind));
   }
   const main = await frameOf(under.clip, under.sourceTime);
   if (!main) throw new Error("Couldn't decode a frame at the playhead.");
