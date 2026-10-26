@@ -84,6 +84,14 @@ import {
 import pkg from "@/package.json";
 import type { MotionTrace } from "./stops";
 import { isSpaceError } from "./space";
+
+/** The drive refused a write: the export stops at the last finished part, and the editor can tell why. */
+const spaceStop = (cause: unknown) => {
+  // the stream's stored error comes back through every later write and close: already ours, pass it on as it is
+  if (cause instanceof DOMException && cause.name === "QuotaExceededError" && cause.message.startsWith("The drive holding")) return cause;
+  const why = (cause as { message?: string } | null)?.message || (cause as { name?: string } | null)?.name || "no room";
+  return new DOMException(`The drive holding the project folder refused a write (${why}): it is full.`, "QuotaExceededError");
+};
 import { LoudnessMeter, softLimit, type Loudness } from "./loudness";
 import { patchKindType } from "./tags";
 
@@ -907,6 +915,7 @@ export interface ExportOptions {
   /** Awaited between frames and audio blocks: return a promise while paused, nothing otherwise. */
   whilePaused?: () => Promise<void> | void;
   /** A write failed, most likely because the disk is full: resolve once the user has made room and the chunk is retried. */
+  /** The drive refused a write for lack of room: the output being written is lost and the export stops at the last finished part once this returns. */
   onWriteBlocked?: (error: unknown) => Promise<void>;
   /** Speeds from an earlier export on this machine, to estimate from before anything is measured. */
   priors?: SpeedPriors;
@@ -1240,14 +1249,14 @@ async function exportWithPulse(
         if (isFinal) fileBytes += chunk.data.byteLength;
         if (isFinal && finalizing.on) patchKindType(chunk.data);
         emit();
-        for (;;) {
-          try {
-            await fileWriter.write(chunk);
-            return;
-          } catch (e) {
-            if (!opts.onWriteBlocked || !isSpaceError(e)) throw e;
-            await opts.onWriteBlocked(e);
-          }
+        try {
+          await fileWriter.write(chunk);
+        } catch (e) {
+          if (!isSpaceError(e)) throw e;
+          // A writable that has refused a write rejects every later one with the same stored error, so there is no
+          // retrying it: say so, then stop the export at the last finished part (the parts are kept).
+          await opts.onWriteBlocked?.(e);
+          throw spaceStop(e);
         }
       },
       close: async () => {
@@ -1387,6 +1396,7 @@ async function exportWithPulse(
       await seg.output.finalize();
     } catch (e) {
       console.warn(`Part ${seg.file} could not be finished and is discarded:`, e);
+      if (isSpaceError(e)) closeFailure ??= spaceStop(e);
       await discardSegment(seg);
       return false;
     }

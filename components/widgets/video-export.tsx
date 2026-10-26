@@ -9,6 +9,7 @@
 import { useState, type ReactNode, type RefObject } from "react";
 import Link from "next/link";
 import { AlertTriangle, Check, ChevronDown, ChevronRight, Circle, Download, Eye, FlaskConical, FolderOpen, Gauge, Info, Loader, Pause, Play, RotateCcw, Square, Trash2, X, XCircle } from "lucide-react";
+import { ENOUGH_SPACE } from "@/lib/tools/video/space";
 import { cn } from "@/lib/utils";
 import { GHOST, PRIMARY, SEL } from "./video-styles";
 import { fmtBytes, fmtDelta, fmtDuration, fmtMs, type EstimateSource, type ExportProgress, type StepProgress } from "@/lib/tools/video/progress";
@@ -76,6 +77,9 @@ export interface DoneResult {
   message?: string;
   keptAt?: number;
   keptParts?: number;
+  /** Stopped because the drive refused a write; the free space the browser reports for its own disk at that moment. */
+  space?: boolean;
+  freeBytes?: number | null;
   /** The doctor's report on the written file (done exports only); null when the check is off. */
   report?: DoctorReport | null;
   /** While the doctor runs: its stage and fraction. */
@@ -303,7 +307,7 @@ export function ExportRun({ job, events, skipped, liveRef, liveAt, onPause, onRe
           <AlertTriangle size={15} className="shrink-0 text-danger" />
           <span>
             <span className="font-medium text-ink">Paused: the disk is almost full</span>
-            {job.freeBytes != null ? ` — ${fmtBytes(job.freeBytes)} free as the browser reports it.` : "."} Free some space and it continues on its own, or press Resume to try now. Nothing written so far is lost.
+            {job.freeBytes != null ? ` — ${fmtBytes(job.freeBytes)} free as the browser reports it for its own disk; the drive holding the project folder may differ.` : "."} Free some space and it continues on its own, or press Resume to try now. Nothing written so far is lost.
           </span>
         </div>
       )}
@@ -565,6 +569,8 @@ export function FileVerdict({ report, checking, error, repaired, onCancel, onAga
 
 export function ExportDone({ done, busy, onDismiss, onAgain, onFiles, onRecheck, onCancelCheck, canFix, onFixFinding, onResume, onDiscard, onFix }: { done: DoneResult; busy: boolean; onDismiss: () => void; onAgain: () => void; onFiles: () => void; onRecheck: (depth: DoctorDepth) => void; onCancelCheck: () => void; canFix: (kind: FixKind) => boolean; onFixFinding: (finding: Finding) => void; onResume: () => void; onDiscard: () => void; onFix: () => void }) {
   const ok = done.kind === "done";
+  // Room on the browser's own disk while a write was refused means the full drive is another one.
+  const elsewhere = done.freeBytes != null && done.freeBytes >= ENOUGH_SPACE;
   const ratio = done.estimatedMs > 0 ? done.activeMs / done.estimatedMs : 1;
   const pace = done.estimatedMs <= 0 ? "" : Math.abs(ratio - 1) < 0.05 ? "as estimated" : ratio > 1.5 ? `${ratio.toFixed(1)}× the estimate` : ratio < 0.67 ? `${(1 / ratio).toFixed(1)}× faster than estimated` : ratio > 1 ? `${Math.round((ratio - 1) * 100)}% slower than estimated` : `${Math.round((1 - ratio) * 100)}% faster than estimated`;
   const realtime = done.activeMs > 0 ? done.seconds / (done.activeMs / 1000) : 0;
@@ -604,6 +610,19 @@ export function ExportDone({ done, busy, onDismiss, onAgain, onFiles, onRecheck,
           <X size={15} />
         </button>
       </div>
+      {done.space && (
+        <div className="flex flex-wrap items-center gap-2 rounded-[var(--radius-sm)] border border-danger/50 bg-danger/10 px-3 py-2 text-[13px]" role="alert" data-done-space data-elsewhere={elsewhere ? "true" : "false"}>
+          <AlertTriangle size={15} className="shrink-0 text-danger" />
+          <span>
+            <span className="font-medium text-ink">The drive refused a write.</span>
+            {done.freeBytes != null
+              ? ` The browser reports ${fmtBytes(done.freeBytes)} free on its own disk${elsewhere ? ", so the full drive is the one holding the project folder: free room there, then press Resume." : done.keptParts ? "; the export continues on its own once 3 GB are free, or press Resume."
+                : "."}`
+              : " Free some room on the drive holding the project folder, then press Resume."}
+            {done.keptParts ? " Nothing finished is lost." : " Nothing was finished yet, so the export starts again from the beginning."}
+          </span>
+        </div>
+      )}
       {ok && <FileVerdict report={done.report} checking={done.checking} error={done.checkError} repaired={done.repaired} onCancel={onCancelCheck} onAgain={onRecheck} canFix={canFix} onFix={onFixFinding} busy={busy} hook="done-check" />}
       <div className="flex flex-wrap items-center gap-1.5 text-[12.5px]">
         {!ok && done.keptParts ? (

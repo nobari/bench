@@ -16,7 +16,7 @@ import { DEFAULT_STOPS, cutOutStops, stillRuns, stillThreshold, stopKey, stopsOn
 import { parseTemplateImport, videoTemplate } from "@/lib/tools/video/template";
 import { useUnsavedWork } from "@/lib/unsaved-work";
 import { useKeepAwake } from "@/lib/keep-awake";
-import { ENOUGH_SPACE, LOW_SPACE, estimateFree, overrideFreeSpace } from "@/lib/tools/video/space";
+import { ENOUGH_SPACE, LOW_SPACE, estimateFree, isSpaceError, overrideFreeSpace } from "@/lib/tools/video/space";
 import { PART_SECONDS } from "@/lib/tools/video/engine";
 import { GHOST, INPUT, PRIMARY, RANGE, SEL } from "./video-styles";
 import { ExportDone, ExportFiles, ExportRun, ExportSummary, PHASE_LABEL, Preflight, PresetsRow, Section, type DoneResult, type ExportJobView, type FileEntry, type FixState, type ResumableView, type RunEvent, type Skip, ExportReview } from "./video-export";
@@ -222,8 +222,23 @@ const MAX_PREVIEW_RATE = 16;
 const PREVIEW_SPEEDS = [0.25, 0.5, 1, 1.5, 2, 4, 8, 12, 16];
 /** Tests can watch every frame time the export hands to the encoder (see window.__benchVideo.traceFrames). */
 let frameTrace: ((timelineT: number) => void) | null = null;
-/** Tests can shorten the parts (window.__benchVideo.exportOptions). */
-const testExportOptions: { partSeconds?: number; joinMode?: "keep" | "remove"; failJoinAfter?: number; noParts?: boolean } = {};
+/** Tests can shorten the parts and make the drive refuse writes (window.__benchVideo.exportOptions). */
+const testExportOptions: { partSeconds?: number; joinMode?: "keep" | "remove"; failJoinAfter?: number; noParts?: boolean; refuseAfterBytes?: number } = {};
+/** Tests: a writable that refuses like a full disk once this many bytes have gone through a run's writables. */
+let testBytes = 0;
+const refusingAfter = (target: WritableStream<import("mediabunny").StreamTargetChunk>, limit: number): WritableStream<import("mediabunny").StreamTargetChunk> => {
+  const writer = target.getWriter();
+  return new WritableStream<import("mediabunny").StreamTargetChunk>({
+    write: async (chunk) => {
+      testBytes += chunk.data.byteLength;
+      if (testBytes > limit) throw new DOMException("Test: the disk is full", "QuotaExceededError");
+      await writer.write(chunk);
+    },
+    close: () => writer.close(),
+    abort: (reason) => writer.abort(reason),
+  });
+};
+const testWritable = (w: WritableStream<import("mediabunny").StreamTargetChunk>) => (testExportOptions.refuseAfterBytes === undefined ? w : refusingAfter(w, testExportOptions.refuseAfterBytes));
 
 /** YouTube wants 1280×720 thumbnails under 2 MB; the frame is scaled to this height (never upscaled). */
 const THUMB_HEIGHT = 720;
@@ -721,6 +736,10 @@ export function VideoEditorWidget() {
   };
   // A stopped export's finished parts, found in the project folder: what the Export tab offers to resume.
   const [resumable, setResumable] = useState<{ manifest: ExportManifest; folder: string; bytes: number } | null>(null);
+  const resumableRef = useRef(resumable);
+  useEffect(() => {
+    resumableRef.current = resumable;
+  }, [resumable]);
   const loadResumable = useCallback(async () => {
     if (!store.hasFolder) return setResumable(null);
     for (const folder of await store.subFolders()) {
@@ -752,6 +771,7 @@ export function VideoEditorWidget() {
   }, [folder, loadResumable]);
   const discardParts = async () => {
     if (!resumable) return;
+    disarmSpaceResume();
     if (!window.confirm(`Remove the ${resumable.manifest.parts.length} kept part${resumable.manifest.parts.length === 1 ? "" : "s"} (${fmtBytes(resumable.bytes)})? A later export starts from the beginning.`)) return;
     await store.remove(null, resumable.folder);
     setResumable(null);
@@ -2170,7 +2190,10 @@ export function VideoEditorWidget() {
       traceFrames: (fn: ((timelineT: number) => void) | null) => {
         frameTrace = fn;
       },
-      exportOptions: (o: { partSeconds?: number }) => Object.assign(testExportOptions, o),
+      exportOptions: (o: Partial<typeof testExportOptions>) => {
+        Object.assign(testExportOptions, o);
+        testBytes = 0;
+      },
       getJob: () => job,
       getResumable: () => resumable,
       measureMix,
@@ -2230,13 +2253,42 @@ export function VideoEditorWidget() {
     const id = setInterval(() => void tick(), 3000);
     return () => clearInterval(id);
   };
-  /** A write just failed for lack of room: pause, and resolve when the export may try that chunk again. */
-  const onWriteBlocked = async () => {
+  /**
+   * The drive refused a write: the output being written is lost (a writable that has refused once refuses for good),
+   * so the engine stops at the last finished part once this returns; the kept parts carry the export on.
+   */
+  const onWriteBlocked = async (error: unknown) => {
     const free = await estimateFree();
-    pauseForSpace(free, "The disk refused a write.");
-    pauseRef.current.paused = true;
-    await new Promise<void>((r) => pauseRef.current.waiters.push(r));
+    const why = error instanceof Error && error.message ? error.message : "no room";
+    logEvent("space", `The drive refused a write (${why}) — stopping at the last finished part${free !== null ? `; the browser reports ${fmtBytes(free)} free on its own disk` : ""}`);
+    alertUser("Drive full — export stopped at the last finished part", "Free some room on the drive holding the project folder; the export carries on from the kept parts.");
   };
+  // After a stop for space: once the browser reports room again, the export carries on from the kept parts by
+  // itself. Only when the browser's own disk was the short one — room there while a write was refused means the
+  // full drive is another one, and trying again would only fail again.
+  const spaceResumeRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const runExportRef = useRef<((resume: { manifest: ExportManifest; folder: string } | null) => Promise<void>) | null>(null);
+  const disarmSpaceResume = () => {
+    if (spaceResumeRef.current) clearInterval(spaceResumeRef.current);
+    spaceResumeRef.current = null;
+  };
+  const armSpaceResume = () => {
+    disarmSpaceResume();
+    spaceResumeRef.current = setInterval(() => {
+      void estimateFree().then((free) => {
+        if (free === null || free < ENOUGH_SPACE) {
+          setDone((d) => (d && d.space ? { ...d, freeBytes: free } : d));
+          return;
+        }
+        disarmSpaceResume();
+        const r = resumableRef.current;
+        if (!r) return;
+        setStatus(`Space is back (${fmtBytes(free)} free) — resuming from the kept parts`);
+        void runExportRef.current?.(r);
+      });
+    }, 3000);
+  };
+  useEffect(() => () => disarmSpaceResume(), []);
   /** Before an export: warn when the browser reports less room than the file needs; the choice stays with the user. */
   const spaceWarning = async (expectedBytes: number): Promise<boolean> => {
     const free = await estimateFree();
@@ -2337,6 +2389,7 @@ export function VideoEditorWidget() {
     // What this run still has to encode; the join at the end frees each part as it goes in when room is short.
     if (!(await spaceWarning(estimate.bytes * (1 - covered / Math.max(1e-6, exportSeconds)) + estimate.bytes * (PART_SECONDS / Math.max(PART_SECONDS, exportSeconds))))) return;
     notifyAt.current = 0;
+    disarmSpaceResume();
     const abort = new AbortController();
     pauseRef.current = { paused: false, waiters: [] };
     lowSpaceRef.current = false;
@@ -2345,7 +2398,7 @@ export function VideoEditorWidget() {
     const output = { name, codec: project.export.codec.toUpperCase(), width: outW, height: outH, bitrateMbps: project.export.bitrateMbps, preset: project.export.preset, estimatedBytes: estimate.bytes };
     const profile = speedProfile;
     const partStore: PartStore = {
-      createWritable: async (file) => (await store.createWritable(file, partsFolder)).writable as unknown as WritableStream<import("mediabunny").StreamTargetChunk>,
+      createWritable: async (file) => testWritable((await store.createWritable(file, partsFolder)).writable as unknown as WritableStream<import("mediabunny").StreamTargetChunk>),
       file: (file) => store.fileIn(file, partsFolder),
       remove: (file) => store.remove(file, partsFolder),
       save: (m) => store.writeText("resume.json", JSON.stringify(m), partsFolder),
@@ -2364,7 +2417,7 @@ export function VideoEditorWidget() {
         project,
         getFile: (id) => store.getFile(id),
         logo,
-        writable: writable as unknown as WritableStream<import("mediabunny").StreamTargetChunk>,
+        writable: testWritable(writable as unknown as WritableStream<import("mediabunny").StreamTargetChunk>),
         signal: abort.signal,
         priors: loadPriors(profile, `${outH}p ${project.export.codec.toUpperCase()}`),
         whilePaused: () => (pauseRef.current.paused ? new Promise<void>((r) => pauseRef.current.waiters.push(r)) : undefined),
@@ -2417,11 +2470,20 @@ export function VideoEditorWidget() {
       const consumed = manifest.parts.length - keptParts.length;
       const parts = `${keptParts.length} part${keptParts.length === 1 ? "" : "s"}${consumed ? `; ${consumed} already joined into the unfinished file will be exported again` : ""}`;
       const aborted = (e as DOMException).name === "AbortError";
+      const space = !aborted && isSpaceError(e);
+      const freeNow = space ? await estimateFree() : null;
+      // Room on the browser's own disk while a write was refused: the full drive is the project folder's.
+      const elsewhere = freeNow !== null && freeNow >= ENOUGH_SPACE;
       if (!aborted || kept > 0) {
         const p = lastProgress.current;
-        setDone({ kind: aborted ? "stopped" : "failed", at: Date.now(), name, folder, seconds: exportSeconds, bytes: p?.bytesWritten ?? 0, activeMs: p?.elapsedMs ?? 0, pausedMs: p?.pausedMs ?? 0, estimatedMs: estimate.wallSeconds * 1000, codec: output.codec, width: outW, height: outH, bitrateMbps: output.bitrateMbps, audioKbps: project.export.audioBitrateKbps, parts: keptParts.length, resumedFrom, skipped: manifest.skipped, message: aborted ? "Stopped on request." : message, keptAt: kept, keptParts: keptParts.length });
+        setDone({ kind: aborted || (space && kept > 0) ? "stopped" : "failed", at: Date.now(), name, folder, seconds: exportSeconds, bytes: p?.bytesWritten ?? 0, activeMs: p?.elapsedMs ?? 0, pausedMs: p?.pausedMs ?? 0, estimatedMs: estimate.wallSeconds * 1000, codec: output.codec, width: outW, height: outH, bitrateMbps: output.bitrateMbps, audioKbps: project.export.audioBitrateKbps, parts: keptParts.length, resumedFrom, skipped: manifest.skipped, message: aborted ? "Stopped on request." : message, keptAt: kept, keptParts: keptParts.length, space, freeBytes: freeNow });
       }
-      if (aborted) {
+      if (space) {
+        const where = elsewhere ? `The browser reports ${fmtBytes(freeNow)} free on its own disk, so the full drive is the one holding the project folder — free room there, then press Resume.` : "It continues on its own once 3 GB are free, or press Resume.";
+        setStatus(kept > 0 ? `Export stopped at ${fmtTime(kept)} of ${fmtTime(exportSeconds)}: the drive refused a write. ${parts} kept. ${where}` : `Export failed: the drive refused a write and nothing was finished yet. Free some room, then export again.`);
+        notifyDone("Drive full — export stopped", kept > 0 ? `Finished parts are kept — it resumes from ${fmtTime(kept)}.` : "Nothing was finished yet.", lastProgress.current ?? undefined);
+        if (kept > 0 && !elsewhere) armSpaceResume();
+      } else if (aborted) {
         setStatus(kept > 0 ? `Export stopped at ${fmtTime(kept)} of ${fmtTime(exportSeconds)} — ${parts} kept. Resume continues from there; Discard removes them.` : "Export cancelled.");
       } else {
         setError(kept > 0 ? `Export stopped at ${fmtTime(kept)} of ${fmtTime(exportSeconds)}: ${message} Everything finished so far is kept (${parts}); press Resume to carry on from there.` : `Export failed: ${message}`);
@@ -2434,6 +2496,9 @@ export function VideoEditorWidget() {
       setJob(null);
     }
   };
+  useEffect(() => {
+    runExportRef.current = runExport;
+  });
   /** Once the user says "skip any that fail", the rest of this export skips without asking. */
   const autoSkipRef = useRef(false);
   const askAboutFault = (fault: ExportFault): Promise<"skip" | "stop"> => {
@@ -3006,7 +3071,10 @@ export function VideoEditorWidget() {
         <ExportDone
           done={done}
           busy={!!job}
-          onDismiss={() => setDone(null)}
+          onDismiss={() => {
+            disarmSpaceResume();
+            setDone(null);
+          }}
           onAgain={() => {
             setDone(null);
             setTab("export");
