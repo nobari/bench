@@ -19,15 +19,22 @@ export interface CameraProfile {
   /** Recordings are recognised by their file names. */
   namePattern: RegExp;
   notes: string;
+  /** The top-level folders the camera makes; recordings anywhere else are ones a computer moved. */
+  folders: string[];
+  /** Where the camera's own format lives in its menus. */
+  formatPath: string;
 }
 
+/** Folders cameras of every make write into; recordings anywhere else were moved by a computer. */
+export const GENERIC_CAMERA_FOLDERS = ["DCIM", "MISC", "PRIVATE", "MP_ROOT", "AVCHD", "BDMV", "MOVIE", "CLIP", "XDROOT", "M4ROOT"];
+
 export const CAMERAS: CameraProfile[] = [
-  { id: "dji-action-6", name: "DJI Osmo Action 6", bitrateMbps: 132, mode: "8K/30 as the camera records it (DJI lists 120 Mbps as the maximum)", maxCardGb: 1000, classNeeded: "V30", namePattern: /^DJI_\d{14}_\d{4}_[A-Z]\.(MP4|LRF|SRT|JPG|DNG|WAV)$/i, notes: "DJI lists microSD support up to 1 TB and recommends U3 A2 V30 cards (Lexar SILVER PLUS, Kingston CANVAS Go! Plus); the camera stops recording with a slow-card warning when its write buffer runs over." },
-  { id: "dji-action-5", name: "DJI Osmo Action 5 Pro / 4", bitrateMbps: 130, mode: "4K/120", maxCardGb: 1000, classNeeded: "V30", namePattern: /^DJI_\d{14}_\d{4}_[A-Z]\.(MP4|LRF|SRT|JPG|DNG|WAV)$/i, notes: "DJI lists microSD support up to 1 TB (512 GB on the Action 4) and recommends U3 A2 V30 cards." },
-  { id: "dji-osmo-360", name: "DJI Osmo 360 / Pocket 3", bitrateMbps: 200, mode: "8K/30 360°", maxCardGb: 1000, classNeeded: "V30", namePattern: /^DJI_\d{14}_\d{4}_[A-Z]\.(MP4|LRF|SRT|JPG|DNG|WAV)$/i, notes: "DJI lists microSD support up to 1 TB and recommends V30 cards." },
-  { id: "gopro-hero-13", name: "GoPro HERO13 / 12", bitrateMbps: 120, mode: "5.3K/60 at the high bitrate", maxCardGb: 1000, classNeeded: "V30", namePattern: /^G[HXL]\d{6}\.(MP4|LRV|THM|JPG)$/i, notes: "GoPro asks for V30 cards and keeps a list of tested ones; the high-bitrate setting is 120 Mbps." },
-  { id: "insta360", name: "Insta360 X4 / X5", bitrateMbps: 200, mode: "8K/30 360°", maxCardGb: 1000, classNeeded: "V30", namePattern: /^(VID|IMG|LRV)_\d{8}_\d{6}/i, notes: "Insta360 asks for V30 or better, exFAT, and warns that 32 and 64 GB cards trigger speed warnings more often." },
-  { id: "custom", name: "Another camera or drive", bitrateMbps: 100, mode: "set the bitrate", maxCardGb: null, classNeeded: "V30", namePattern: /$^/, notes: "Set the bitrate of the heaviest mode you record; the verdicts follow from it." },
+  { id: "dji-action-6", name: "DJI Osmo Action 6", bitrateMbps: 132, mode: "8K/30 as the camera records it (DJI lists 120 Mbps as the maximum)", maxCardGb: 1000, classNeeded: "V30", namePattern: /^DJI_\d{14}_\d{4}_[A-Z]\.(MP4|LRF|SRT|JPG|DNG|WAV)$/i, notes: "DJI lists microSD support up to 1 TB and recommends U3 A2 V30 cards (Lexar SILVER PLUS, Kingston CANVAS Go! Plus); the camera stops recording with a slow-card warning when its write buffer runs over.", folders: ["DCIM", "MISC"], formatPath: "Swipe down on the touchscreen → Settings → Format → microSD card" },
+  { id: "dji-action-5", name: "DJI Osmo Action 5 Pro / 4", bitrateMbps: 130, mode: "4K/120", maxCardGb: 1000, classNeeded: "V30", namePattern: /^DJI_\d{14}_\d{4}_[A-Z]\.(MP4|LRF|SRT|JPG|DNG|WAV)$/i, notes: "DJI lists microSD support up to 1 TB (512 GB on the Action 4) and recommends U3 A2 V30 cards.", folders: ["DCIM", "MISC"], formatPath: "Swipe down on the touchscreen → Settings → Format → microSD card" },
+  { id: "dji-osmo-360", name: "DJI Osmo 360 / Pocket 3", bitrateMbps: 200, mode: "8K/30 360°", maxCardGb: 1000, classNeeded: "V30", namePattern: /^DJI_\d{14}_\d{4}_[A-Z]\.(MP4|LRF|SRT|JPG|DNG|WAV)$/i, notes: "DJI lists microSD support up to 1 TB and recommends V30 cards.", folders: ["DCIM", "MISC"], formatPath: "Swipe down on the touchscreen → Settings → Format → microSD card" },
+  { id: "gopro-hero-13", name: "GoPro HERO13 / 12", bitrateMbps: 120, mode: "5.3K/60 at the high bitrate", maxCardGb: 1000, classNeeded: "V30", namePattern: /^G[HXL]\d{6}\.(MP4|LRV|THM|JPG)$/i, notes: "GoPro asks for V30 cards and keeps a list of tested ones; the high-bitrate setting is 120 Mbps.", folders: ["DCIM", "MISC"], formatPath: "Swipe down → Preferences → Reset → Format SD Card" },
+  { id: "insta360", name: "Insta360 X4 / X5", bitrateMbps: 200, mode: "8K/30 360°", maxCardGb: 1000, classNeeded: "V30", namePattern: /^(VID|IMG|LRV)_\d{8}_\d{6}/i, notes: "Insta360 asks for V30 or better, exFAT, and warns that 32 and 64 GB cards trigger speed warnings more often.", folders: ["DCIM", "MISC"], formatPath: "Swipe down → Settings → Storage → Format" },
+  { id: "custom", name: "Another camera or drive", bitrateMbps: 100, mode: "set the bitrate", maxCardGb: null, classNeeded: "V30", namePattern: /$^/, notes: "Set the bitrate of the heaviest mode you record; the verdicts follow from it.", folders: GENERIC_CAMERA_FOLDERS, formatPath: "the device's own menu (Settings → Storage → Format), not a computer" },
 ];
 export const DEFAULT_CAMERA = CAMERAS[0];
 
@@ -62,10 +69,17 @@ export interface FileEntry {
   size: number;
   lastModified: number;
 }
-export type Kind = "video" | "proxy" | "sidecar" | "image" | "audio" | "clutter" | "other";
+export type Kind = "video" | "proxy" | "sidecar" | "image" | "audio" | "clutter" | "trash" | "repair" | "other";
 
 const CLUTTER_NAMES = new Set([".DS_Store", "Thumbs.db", "desktop.ini", ".apdisk", ".VolumeIcon.icns", ".metadata_never_index", "ehthumbs.db", ".directory"]);
-const CLUTTER_DIRS = [".Spotlight-V100", ".fseventsd", ".Trashes", ".TemporaryItems", "System Volume Information", "$RECYCLE.BIN", ".Trash-1000", "__MACOSX"];
+const CLUTTER_DIRS = [".Spotlight-V100", ".fseventsd", ".TemporaryItems", "System Volume Information", "__MACOSX"];
+/** Where computers park what you delete from a card: the files are still there, still taking room. */
+export const TRASH_DIRS = [".Trashes", "$RECYCLE.BIN", ".Trash-1000"];
+/** Where a file-system repair leaves the pieces it could not place: fsck.exfat's LOST+FOUND, Windows' FOUND.000. */
+export const REPAIR_DIR = /^(LOST\+FOUND|FOUND\.\d{3})$/i;
+const topOf = (path: string) => (path.includes("/") ? path.slice(0, path.indexOf("/")) : null);
+export const isTrash = (e: Pick<FileEntry, "path">) => TRASH_DIRS.includes(topOf(e.path) ?? "");
+export const isRepair = (e: Pick<FileEntry, "path">) => REPAIR_DIR.test(topOf(e.path) ?? "");
 const VIDEO = /\.(mp4|mov|m4v|mkv|avi|mts|m2ts|insv|360)$/i, PROXY = /\.(lrf|lrv|thm)$/i, SIDECAR = /\.(srt|xml|txt|log|json|gpx|bin|dat)$/i, IMAGE = /\.(jpe?g|dng|raw|png|heic|heif|tif|tiff|cr3|arw|insp)$/i, AUDIO = /\.(wav|mp3|aac|m4a|flac)$/i;
 
 export function isClutter(e: Pick<FileEntry, "path" | "name">): boolean {
@@ -74,6 +88,8 @@ export function isClutter(e: Pick<FileEntry, "path" | "name">): boolean {
   return parts.slice(0, -1).some((d) => CLUTTER_DIRS.includes(d));
 }
 export function kindOf(e: Pick<FileEntry, "path" | "name">): Kind {
+  if (isTrash(e)) return "trash";
+  if (isRepair(e)) return "repair";
   if (isClutter(e)) return "clutter";
   if (VIDEO.test(e.name)) return "video";
   if (PROXY.test(e.name)) return "proxy";
@@ -103,6 +119,12 @@ export interface Inventory {
   oldest: FileEntry | null;
   clutter: FileEntry[];
   clutterBytes: number;
+  /** Deleted on a computer and parked in the card's Trash or Recycle Bin: still on the card. */
+  trash: FileEntry[];
+  trashBytes: number;
+  /** Fragments a file-system repair left in LOST+FOUND or FOUND.000. */
+  repairs: FileEntry[];
+  repairBytes: number;
   /** Proxies (LRF/LRV) whose recording is missing. */
   orphans: FileEntry[];
   zeroBytes: FileEntry[];
@@ -112,9 +134,9 @@ export interface Inventory {
 }
 
 export function inventory(entries: FileEntry[]): Inventory {
-  const byKind = Object.fromEntries((["video", "proxy", "sidecar", "image", "audio", "clutter", "other"] as Kind[]).map((k) => [k, { files: 0, bytes: 0 }])) as Inventory["byKind"];
+  const byKind = Object.fromEntries((["video", "proxy", "sidecar", "image", "audio", "clutter", "trash", "repair", "other"] as Kind[]).map((k) => [k, { files: 0, bytes: 0 }])) as Inventory["byKind"];
   const folders = new Map<string, FolderStat>();
-  const clutter: FileEntry[] = [], zeroBytes: FileEntry[] = [], videos: FileEntry[] = [];
+  const clutter: FileEntry[] = [], trash: FileEntry[] = [], repairs: FileEntry[] = [], zeroBytes: FileEntry[] = [], videos: FileEntry[] = [];
   const stems = new Set<string>();
   const cams = new Map<string, { camera: CameraProfile; files: number; bytes: number }>();
   let bytes = 0, newest: FileEntry | null = null, oldest: FileEntry | null = null;
@@ -129,6 +151,8 @@ export function inventory(entries: FileEntry[]): Inventory {
     f.bytes += e.size;
     folders.set(dir, f);
     if (k === "clutter") clutter.push(e);
+    else if (k === "trash") trash.push(e);
+    else if (k === "repair") repairs.push(e);
     else {
       if (e.size === 0) zeroBytes.push(e);
       if (!newest || e.lastModified > newest.lastModified) newest = e;
@@ -154,11 +178,15 @@ export function inventory(entries: FileEntry[]): Inventory {
     byKind,
     folders: folderList,
     crowded: folderList.filter((f) => f.files >= DCIM_LIMIT * 0.9),
-    largest: [...entries].filter((e) => kindOf(e) !== "clutter").sort((a, b) => b.size - a.size).slice(0, 5),
+    largest: [...entries].filter((e) => !["clutter", "trash", "repair"].includes(kindOf(e))).sort((a, b) => b.size - a.size).slice(0, 5),
     newest,
     oldest,
     clutter,
     clutterBytes: clutter.reduce((a, e) => a + e.size, 0),
+    trash,
+    trashBytes: trash.reduce((a, e) => a + e.size, 0),
+    repairs,
+    repairBytes: repairs.reduce((a, e) => a + e.size, 0),
     orphans,
     zeroBytes,
     cameras: [...cams.values()].sort((a, b) => b.bytes - a.bytes),
@@ -321,6 +349,10 @@ export interface RecordingIssue {
 }
 export interface Judged {
   inventory: Inventory;
+  /** What the folders say about the card's history; null until a folder is open. */
+  layout: Layout | null;
+  /** Pasted from the operating system: what a browser cannot see. */
+  volume: VolumeInfo | null;
   space: SpaceView | null;
   speed: SpeedStats | null;
   fill: FillResult | null;
@@ -352,6 +384,9 @@ export function findings(j: Judged): Finding[] {
     else if (j.fill.points.length) out.push({ id: "fill-ok", severity: "ok", title: `The speed held to ${fmtGb(Math.min(...j.fill.points.map((p) => p.free)))} free`, what: `${j.fill.points.length} test files written down to that point, the slowest at ${Math.min(...j.fill.points.map((p) => p.mbps)).toFixed(0)} MB/s; ${j.fill.verified} read back and verified.`, why: "No fullness cliff above that point: the card keeps up with the camera at least this far." });
     if (j.fill.trueFree !== null) out.push({ id: "true-free", severity: "info", title: `${fmtGb(j.fill.trueFree)} truly free`, what: "What the test could write before the card refused, plus the margin it stopped at.", why: "Exact, unlike the capacity minus the files, which depends on the card's formatted size." });
   }
+  // the card's history: what the folders and the volume details say
+  out.push(...layoutFindings(j));
+  out.push(...volumeFindings(j));
   // the files
   if (inv.clutter.length) out.push({ id: "clutter", severity: "warn", title: `${inv.clutter.length} computer-made files on the card (${fmtGb(inv.clutterBytes)})`, what: `${summarise(inv.clutter.map((e) => e.name))}`, why: "macOS writes ._ resource forks, .DS_Store, Spotlight and fseventsd folders onto any exFAT card it touches; Windows adds Thumbs.db and System Volume Information. Cameras do not expect them: they count against folder limits, confuse some firmwares' file scans, and the hidden folders keep growing. Detected by name.", fix: { id: "clean", label: "Clean them off", detail: "Deletes exactly these files and folders; the recordings are not touched. Eject the card properly afterwards so the computer does not write them back." } });
   if (inv.crowded.length) out.push({ id: "crowded", severity: "warn", title: `${inv.crowded.map((f) => `${f.path || "root"} holds ${f.files} files`).join(", ")}`, what: `Camera folders hold at most ${DCIM_LIMIT} files; the camera rolls to a new folder or refuses to record when one fills.`, why: "DCIM numbering runs 100MEDIA to 999MEDIA with 999 files each; a camera that cannot make the next folder stops. Detected by counting files per folder.", fix: { id: "offload", label: "Offload and format", detail: "Copy everything off and format in the camera; the numbering starts again." } });
@@ -411,7 +446,283 @@ export function patternMatches(buf: Uint8Array, fileIndex: number, chunkIndex: n
 export function reportText(j: Judged, list: Finding[]): string {
   const lines = [`Storage & Card Doctor — ${new Date().toISOString().slice(0, 10)}`, `${j.profile.name} · ${j.bitrateMbps} Mbps · card ${fmtGb(j.cardGb * 1e9)}`, `${j.inventory.files} files, ${fmtGb(j.inventory.bytes)} used${j.space ? `, ${fmtGb(j.space.free)} free (${(j.space.freeShare * 100).toFixed(1)}%)` : ""}`];
   if (j.speed) lines.push(`Write: burst ${j.speed.burst.toFixed(0)}, sustained ${j.speed.sustained.toFixed(0)}, low ${j.speed.worst.toFixed(0)} MB/s${j.speed.cliffAt !== null ? `, cache ${fmtGb(j.speed.cliffAt)}` : ""}`);
+  if (j.volume) lines.push(`Volume: ${[j.volume.fileSystem, j.volume.clusterBytes ? `${j.volume.clusterBytes / 1024} KB clusters` : null, j.volume.totalBytes ? `${fmtGb(j.volume.totalBytes)} total` : null, j.volume.freeBytes !== undefined ? `${fmtGb(j.volume.freeBytes)} free` : null].filter(Boolean).join(", ")}`);
+  if (j.layout?.stray.length) lines.push(`Outside the camera's folders: ${j.layout.stray.map((f) => `${f.folder || "root"} ${f.files} files ${fmtGb(f.bytes)}`).join("; ")}`);
   if (j.fill) lines.push(`Fill: ${j.fill.points.length} files, ${j.fill.fallsAtFree !== null ? `falls under the need below ${fmtGb(j.fill.fallsAtFree)} free` : "no cliff"}${j.fill.trueFree !== null ? `, ${fmtGb(j.fill.trueFree)} truly free` : ""}, ${j.fill.corrupt} of ${j.fill.verified} corrupt`);
   for (const f of list) lines.push(`[${f.severity}] ${f.title} — ${f.what}`);
   return lines.join("\n");
+}
+
+/* ------------------------------------------------------------------ layout: what the folders say about the card's history */
+
+export interface StrayFolder {
+  /** Top-level folder, "" for the root. */
+  folder: string;
+  files: number;
+  bytes: number;
+  from: number;
+  to: number;
+}
+export interface RepairFolder {
+  folder: string;
+  files: number;
+  bytes: number;
+  /** When the repair ran, from the newest fragment; null when the folder is empty. */
+  at: number | null;
+}
+export interface Layout {
+  /** The name of the folder opened: the volume's name when it is the card itself. */
+  rootName: string;
+  /** Whether the opened folder looks like a card's root: a camera's folders, computer residue or nothing at all. */
+  isRoot: boolean;
+  /** The camera's own folders found at the top level. */
+  cameraFolders: string[];
+  /** Recordings in folders the camera never looks in — renamed or moved on a computer — by top-level folder. */
+  stray: StrayFolder[];
+  strayBytes: number;
+  /** Repair folders at the root, with what they hold. */
+  repairs: RepairFolder[];
+  /** The volume carries a name no camera gives. */
+  namedOnComputer: boolean;
+  /** Folders on the card, for the space each one's directory takes. */
+  dirs: number;
+}
+/** Names cameras and factories give a card, or none at all; anything else was typed on a computer. */
+const CAMERA_LABELS = /^(|NO NAME|NONAME|UNTITLED|OsmoAction|DJI[\w -]*|GOPRO[\w -]*|Insta360[\w -]*|EOS_DIGITAL|NIKON[\w -]*|LUMIX|CANON[\w -]*|SONY[\w -]*|SDXC|SDHC|SD CARD|disk\d*)$/i;
+
+export function layoutOf(entries: FileEntry[], dirPaths: string[], rootName: string, profile: CameraProfile): Layout {
+  const top = new Set<string>();
+  for (const d of dirPaths) if (d && !d.includes("/")) top.add(d);
+  for (const e of entries) {
+    const t = topOf(e.path);
+    if (t) top.add(t);
+  }
+  const allowed = new Set([...profile.folders, ...(profile.id === "custom" ? [] : GENERIC_CAMERA_FOLDERS)].map((f) => f.toLowerCase()));
+  const cameraFolders = [...top].filter((d) => allowed.has(d.toLowerCase()));
+  const residue = [...top].some((d) => CLUTTER_DIRS.includes(d) || TRASH_DIRS.includes(d) || REPAIR_DIR.test(d));
+  const isRoot = cameraFolders.length > 0 || residue || (entries.length === 0 && top.size === 0);
+  // recordings outside the camera's folders, grouped by their top-level folder
+  const strays = new Map<string, StrayFolder>();
+  for (const e of entries) {
+    const k = kindOf(e);
+    if (k !== "video" && k !== "image" && k !== "proxy") continue;
+    const t = topOf(e.path) ?? "";
+    if (t && allowed.has(t.toLowerCase())) continue;
+    const g = strays.get(t) ?? { folder: t, files: 0, bytes: 0, from: e.lastModified, to: e.lastModified };
+    g.files++;
+    g.bytes += e.size;
+    g.from = Math.min(g.from, e.lastModified);
+    g.to = Math.max(g.to, e.lastModified);
+    strays.set(t, g);
+  }
+  const stray = [...strays.values()].sort((a, b) => b.bytes - a.bytes);
+  const repairs: RepairFolder[] = [...top]
+    .filter((d) => REPAIR_DIR.test(d))
+    .map((folder) => {
+      const inside = entries.filter((e) => topOf(e.path) === folder);
+      return { folder, files: inside.length, bytes: inside.reduce((a, e) => a + e.size, 0), at: inside.length ? Math.max(...inside.map((e) => e.lastModified)) : null };
+    });
+  return { rootName, isRoot, cameraFolders, stray, strayBytes: stray.reduce((a, f) => a + f.bytes, 0), repairs, namedOnComputer: isRoot && !CAMERA_LABELS.test(rootName.trim()), dirs: dirPaths.filter(Boolean).length };
+}
+
+const when = (ms: number) => new Date(ms).toLocaleDateString();
+const span = (from: number, to: number) => (when(from) === when(to) ? when(from) : `${when(from)} – ${when(to)}`);
+
+function layoutFindings(j: Judged): Finding[] {
+  const out: Finding[] = [];
+  const L = j.layout, inv = j.inventory, profile = j.profile;
+  if (!L) return out;
+  if (inv.trash.length)
+    out.push({ id: "trash", severity: "warn", title: `${fmtGb(inv.trashBytes)} deleted on a computer is still on the card`, what: `${inv.trash.length} file${inv.trash.length === 1 ? "" : "s"} in ${summarise(inv.trash.map((e) => topOf(e.path) ?? e.name))}: ${summarise(inv.trash.map((e) => e.name), 4)}.`, why: "Deleting from a card on a Mac (or a PC with the bin enabled for removable drives) moves the files into a hidden Trash folder on the card itself; the room comes back only when that Trash is emptied — with the card connected — or the folder is removed.", fix: { id: "empty-trash", label: "Empty the card's Trash", detail: "Removes the Trash folders on the card and the deleted files in them; nothing else is touched." } });
+  for (const r of L.repairs) {
+    if (r.files)
+      out.push({ id: `repaired-${r.folder}`, severity: "warn", title: `A file-system repair left ${r.files} fragment${r.files === 1 ? "" : "s"} (${fmtGb(r.bytes)}) in ${r.folder}`, what: `${r.folder} was made by a check of the card's file system${r.at ? ` around ${when(r.at)}` : ""}: pieces of files that no folder pointed to any more, after a recording was cut off, the card was pulled while writing, or the file system was damaged.`, why: "Each fragment is a run of clusters the repair could not place; the camera ignores the folder but the room is used. The fragments may hold a recording's data without its index — rarely worth keeping.", fix: { id: "delete-repair", label: "Delete the fragments", detail: "Removes the repair folder and what it holds. Copy anything you want to try to recover first." } });
+    else out.push({ id: `repaired-${r.folder}`, severity: "info", title: `The card's file system was checked and found nothing to rescue (${r.folder} is empty)`, what: `${r.folder} is left by the file-system check cameras and computers run when a card is mounted; an empty one means no stray clusters were found.`, why: "Harmless. The camera will make it again; deleting it changes nothing." });
+  }
+  if (L.stray.length) {
+    const inFolders = L.stray.filter((f) => f.folder);
+    out.push({ id: "stray", severity: "warn", title: `${fmtGb(L.strayBytes)} of recordings in folders the camera does not look in`, what: L.stray.map((f) => `${f.folder || "the root"}: ${f.files} file${f.files === 1 ? "" : "s"}, ${fmtGb(f.bytes)}, ${span(f.from, f.to)}`).join("; ") + ".", why: `The camera records and counts only inside ${profile.folders.join(" and ")}; a folder renamed or moved on a computer (DCIM-0, "old", a copy) keeps its files on the card, invisible to the camera and still taking the room it needs.`, fix: inFolders.length ? { id: "delete-stray", label: "Delete these folders", detail: "Only after the recordings are copied off: the whole folder goes, and nothing can bring it back. Move the files back under DCIM on the computer instead if the camera should still play them." } : undefined });
+  }
+  if (L.namedOnComputer) out.push({ id: "named", severity: "info", title: `The card is named "${L.rootName}"`, what: "Cameras do not let you name a card and label one they format with their own name or none; this one was named by a computer's disk tools or a rename in Finder or Explorer.", why: "A sign the card has been through a computer's formatting at least once. Harmless in itself; the volume details below tell whether the layout is the camera's." });
+  if (L.isRoot && !L.cameraFolders.length && !inv.files) out.push({ id: "wiped", severity: "info", title: "Empty card: the camera's folders are not there yet", what: `The camera makes ${profile.folders.join(" and ")} when it starts with the card in.`, why: "A card formatted or wiped on a computer looks like this. Formatting it once more in the camera gives it the layout the camera expects before the first recording." });
+  return out;
+}
+
+/* ------------------------------------------------------------------ volume details, pasted from the operating system */
+
+export interface VolumeInfo {
+  source: "diskutil" | "fsutil" | "chkdsk" | "powershell" | "other";
+  fileSystem?: string;
+  clusterBytes?: number;
+  totalBytes?: number;
+  usedBytes?: number;
+  freeBytes?: number;
+  name?: string;
+  partitionOffsetBytes?: number;
+  deviceBlockBytes?: number;
+  protocol?: string;
+  removable?: boolean;
+  solidState?: boolean;
+  /** TRIM on (true), off (false), or not stated. */
+  trim?: boolean;
+  scheme?: string;
+}
+const num = (s: string) => Number(s.replace(/[,\s_]/g, ""));
+const normaliseFs = (s: string) => {
+  const t = s.trim();
+  if (/exfat/i.test(t)) return "exFAT";
+  if (/fat32|MS-DOS/i.test(t)) return "FAT32";
+  if (/\bfat\b|fat16|vfat/i.test(t)) return "FAT";
+  if (/ntfs/i.test(t)) return "NTFS";
+  if (/apfs/i.test(t)) return "APFS";
+  if (/hfs|Mac OS Extended/i.test(t)) return "HFS+";
+  if (/ext[234]/i.test(t)) return t.toLowerCase();
+  return t;
+};
+/**
+ * Reads what `diskutil info /Volumes/NAME` (macOS), `fsutil fsinfo ntfsinfo X:` and `fsutil fsinfo volumeinfo X:`,
+ * `chkdsk X:` or PowerShell's Get-Volume / Get-Partition (Windows) print: the file system, cluster size, exact space,
+ * name, partition offset, TRIM. Null when nothing in the text is recognised.
+ */
+export function parseVolumeInfo(text: string): VolumeInfo | null {
+  const t = text.replace(/\r/g, "");
+  if (!t.trim()) return null;
+  const info: VolumeInfo = { source: "other" };
+  const grab = (re: RegExp) => {
+    const m = t.match(re);
+    return m ? m[1].trim() : undefined;
+  };
+  const bytesIn = (re: RegExp) => {
+    const m = t.match(re);
+    return m ? num(m[1]) : undefined;
+  };
+  if (/File System Personality:|Volume Total Space:|Allocation Block Size:/.test(t)) {
+    info.source = "diskutil";
+    info.fileSystem = grab(/File System Personality:[ \t]*(.+)/);
+    info.name = grab(/Volume Name:[ \t]*(.+)/);
+    info.clusterBytes = bytesIn(/Allocation Block Size:[ \t]*([\d,]+) Bytes/);
+    info.totalBytes = bytesIn(/Volume Total Space:.*?\(([\d,]+) Bytes\)/) ?? bytesIn(/(?:Disk|Total) Size:.*?\(([\d,]+) Bytes\)/);
+    info.usedBytes = bytesIn(/Volume Used Space:.*?\(([\d,]+) Bytes\)/);
+    info.freeBytes = bytesIn(/Volume (?:Free|Available) Space:.*?\(([\d,]+) Bytes\)/);
+    info.partitionOffsetBytes = bytesIn(/Partition Offset:[ \t]*([\d,]+) Bytes/);
+    info.deviceBlockBytes = bytesIn(/Device Block Size:[ \t]*([\d,]+) Bytes/);
+    info.protocol = grab(/Protocol:[ \t]*(.+)/);
+    const ss = grab(/Solid State:[ \t]*(\w+)/), tr = grab(/TRIM Support:[ \t]*(\w+)/), rm = grab(/Removable Media:[ \t]*(\w+)/);
+    if (ss) info.solidState = /yes/i.test(ss);
+    if (tr) info.trim = /yes/i.test(tr);
+    if (rm) info.removable = /removable/i.test(rm);
+    info.scheme = grab(/Partition Type:[ \t]*(.+)/) ?? grab(/Content \(IOContent\):[ \t]*(.+)/);
+  } else if (/Bytes Per Cluster|File System Name|bytes in each allocation unit|FileSystemType|AllocationUnitSize|DisableDeleteNotify|The type of the file system is/.test(t)) {
+    info.source = /FileSystemType|AllocationUnitSize|SizeRemaining/.test(t) ? "powershell" : /bytes in each allocation unit/.test(t) ? "chkdsk" : "fsutil";
+    info.fileSystem = grab(/File System Name[ \t]*:[ \t]*(\S+)/) ?? grab(/The type of the file system is (\w+)\./) ?? grab(/FileSystemType[ \t]*:[ \t]*(\S+)/);
+    info.name = grab(/Volume Name[ \t]*:[ \t]*(.*)/) ?? grab(/FileSystemLabel[ \t]*:[ \t]*(.*)/) ?? grab(/Volume label is (.+)\./);
+    info.clusterBytes = bytesIn(/Bytes Per Cluster[ \t]*:[ \t]*(?:0x[0-9a-f]+\s*\()?([\d,]+)/i) ?? bytesIn(/([\d,]+) bytes in each allocation unit/) ?? bytesIn(/AllocationUnitSize[ \t]*:[ \t]*([\d,]+)/);
+    const totalKb = bytesIn(/([\d,]+) KB total disk space/), freeKb = bytesIn(/([\d,]+) KB available on disk/);
+    if (totalKb) {
+      info.totalBytes = totalKb * 1024;
+      if (freeKb !== undefined) info.freeBytes = freeKb * 1024;
+    }
+    const totalCl = bytesIn(/Total Clusters[ \t]*:[ \t]*(?:0x[0-9a-f]+\s*\()?([\d,]+)/i), freeCl = bytesIn(/Free Clusters[ \t]*:[ \t]*(?:0x[0-9a-f]+\s*\()?([\d,]+)/i);
+    if (info.clusterBytes && totalCl) {
+      info.totalBytes ??= totalCl * info.clusterBytes;
+      if (freeCl !== undefined) info.freeBytes ??= freeCl * info.clusterBytes;
+    }
+    const size = bytesIn(/\bSize[ \t]*:[ \t]*([\d,]+)/), rem = bytesIn(/SizeRemaining[ \t]*:[ \t]*([\d,]+)/);
+    if (size) {
+      info.totalBytes ??= size;
+      if (rem !== undefined) info.freeBytes ??= rem;
+    }
+    info.partitionOffsetBytes = bytesIn(/\bOffset[ \t]*:[ \t]*([\d,]+)/) ?? bytesIn(/StartingOffset\s*[:=]?\s*([\d,]+)/);
+    const ddn = grab(/DisableDeleteNotify[ \t]*=[ \t]*(\d)/);
+    if (ddn) info.trim = ddn === "0";
+    const dt = grab(/MediaType[ \t]*:[ \t]*(\w+)/);
+    if (dt) info.solidState = /ssd/i.test(dt);
+  } else {
+    info.clusterBytes = bytesIn(/(?:Cluster size|Bytes per cluster)\s*[:=]\s*([\d,]+)/i);
+    info.fileSystem = grab(/\b(exfat|vfat|fat32|ntfs|ext[234]|apfs|hfs\+?)\b/i);
+    if (!info.clusterBytes && !info.fileSystem) return null;
+  }
+  if (info.fileSystem) info.fileSystem = normaliseFs(info.fileSystem);
+  if (info.name !== undefined && !info.name) delete info.name;
+  if (info.usedBytes === undefined && info.totalBytes !== undefined && info.freeBytes !== undefined) info.usedBytes = info.totalBytes - info.freeBytes;
+  if (info.freeBytes === undefined && info.totalBytes !== undefined && info.usedBytes !== undefined) info.freeBytes = info.totalBytes - info.usedBytes;
+  if (!info.fileSystem && !info.clusterBytes && !info.totalBytes && info.trim === undefined) return null;
+  return info;
+}
+
+/** The cluster size a camera's own format (and the SD specification) gives a card of this size: 128 KB past 32 GB. */
+export const cameraCluster = (totalBytes: number) => (totalBytes > 32 * 2 ** 30 ? 131072 : totalBytes > 256 * 2 ** 20 ? 32768 : 4096);
+/** A partition that starts on a 4 MB boundary sits on the flash's own block boundaries. */
+export const ALIGN = 4 * 2 ** 20;
+
+/**
+ * Room the volume says is used beyond what the files account for, after the slack each file wastes in its last
+ * cluster, a cluster per folder and the file system's own tables. Clusters nothing points to any more — after a
+ * pull mid-write or a crash — show up here. Null without exact used space.
+ */
+export function unaccounted(info: VolumeInfo, inv: Inventory, dirs: number): number | null {
+  if (info.usedBytes === undefined) return null;
+  const cluster = info.clusterBytes ?? 131072;
+  const expected = inv.bytes + (inv.files * cluster) / 2 + (dirs + 1) * cluster + 64 * 2 ** 20;
+  return Math.max(0, info.usedBytes - expected);
+}
+
+function volumeFindings(j: Judged): Finding[] {
+  const out: Finding[] = [];
+  const v = j.volume, L = j.layout, inv = j.inventory, profile = j.profile;
+  if (!v) return out;
+  const isCard = v.removable !== false && !v.solidState;
+  if (v.fileSystem) {
+    if (v.fileSystem === "exFAT") out.push({ id: "fs", severity: "ok", title: "exFAT, as cameras expect", what: "The file system cameras format cards with: no 4 GB file limit, readable by every camera and computer.", why: "FAT32 would split recordings at 4 GB; NTFS, APFS or ext would not mount in the camera at all." });
+    else if (v.fileSystem === "FAT32" || v.fileSystem === "FAT") out.push({ id: "fs", severity: isCard ? "warn" : "info", title: `${v.fileSystem}: files stop at 4 GB`, what: "A recording longer than 4 GB has to be split or ends there; cameras format cards above 32 GB as exFAT for that reason.", why: "A computer's quick format of a big card sometimes picks FAT32. Format the card in the camera and it becomes exFAT.", fix: { id: "format", label: "Format in the camera", detail: profile.formatPath } });
+    else out.push({ id: "fs", severity: isCard ? "error" : "info", title: `${v.fileSystem}: a camera cannot use this file system`, what: `${v.fileSystem} is for computers; a camera mounts exFAT (and FAT32 on small cards) only.`, why: "This card or drive was formatted for a computer. If it is meant for the camera, format it there after copying everything off.", fix: isCard ? { id: "format", label: "Format in the camera", detail: profile.formatPath } : undefined });
+  }
+  if (v.clusterBytes && v.totalBytes) {
+    const want = cameraCluster(v.totalBytes);
+    if (v.clusterBytes === want) out.push({ id: "cluster", severity: "ok", title: `${v.clusterBytes / 1024} KB clusters: the layout a camera's format makes`, what: `A camera (and the SD specification) formats a card of this size with ${want / 1024} KB clusters; this one has them.`, why: "The cluster size is the clearest trace of who formatted the card." });
+    else out.push({ id: "cluster", severity: isCard ? "warn" : "info", title: `${v.clusterBytes / 1024} KB clusters: not the layout the camera makes`, what: `A camera's format gives a card of this size ${want / 1024} KB clusters, aligned to the flash's own blocks; ${v.clusterBytes / 1024} KB is what a computer's or the factory's format chose, so the camera has not formatted this card.`, why: "Cards formatted by an operating system are laid out without regard to the flash underneath; the SD Association measured such cards at about 60% slower random writes than its aligned layout. The camera's own format puts the tables and clusters where the controller wants them and erases the flash, which also resets a card that has slowed.", fix: isCard ? { id: "format", label: "Format in the camera", detail: `Copy everything off first. ${profile.formatPath}.` } : undefined });
+  }
+  if (v.partitionOffsetBytes !== undefined && v.partitionOffsetBytes > 0 && v.partitionOffsetBytes % ALIGN !== 0) out.push({ id: "aligned", severity: "warn", title: `The partition starts at ${fmtGb(v.partitionOffsetBytes)}, off the flash's block boundary`, what: `An offset that is not a multiple of 4 MB puts every cluster across two flash blocks; the controller writes both for each one.`, why: "Old partitioning tools and some computer formats start the partition at 31.5 KB or 1 MB. The camera's format and the SD Memory Card Formatter align it.", fix: isCard ? { id: "format", label: "Format in the camera", detail: profile.formatPath } : undefined });
+  if (v.totalBytes && v.freeBytes !== undefined) out.push({ id: "exact-space", severity: "info", title: `${fmtGb(v.freeBytes)} free of ${fmtGb(v.totalBytes)}, from the volume details`, what: `Exact figures from the operating system replace the estimate from the card's nominal size and the files found.`, why: "A card's formatted size is a little under what the label says, and hidden folders a browser cannot list still take room." });
+  if (L?.isRoot && (!v.name || v.name.toLowerCase() === L.rootName.toLowerCase())) {
+    const lost = unaccounted(v, inv, L.dirs);
+    if (lost !== null && v.totalBytes && lost > Math.max(2e9, v.totalBytes * 0.01)) out.push({ id: "lost", severity: lost > v.totalBytes * 0.1 ? "error" : "warn", title: `${fmtGb(lost)} used by nothing that can be seen`, what: `The volume reports ${fmtGb(v.usedBytes ?? 0)} used, the files on it add up to ${fmtGb(inv.bytes)} and slack and folders explain only part of the rest.`, why: "Clusters marked used that no file points to any more: a card pulled while writing, a camera that lost power mid-recording, a copy interrupted. Only a repair of the file system (First Aid on macOS, chkdsk /f on Windows, which may leave the pieces in a repair folder) or a format in the camera gives the room back.", fix: { id: "repair", label: "Repair or format", detail: "Copy everything off, then run the repair or format the card in the camera." } });
+  }
+  if (v.solidState || (v.removable === false && v.protocol && /USB|Thunderbolt/i.test(v.protocol))) {
+    if (v.fileSystem === "exFAT") out.push({ id: "trim", severity: "info", title: "An SSD on exFAT gets no TRIM", what: "Neither macOS nor Windows sends TRIM to an exFAT volume, so the drive learns of deleted data only when the blocks are rewritten and slows as it fills.", why: "For a drive that stays with a computer, APFS (macOS) or NTFS (Windows) brings TRIM back; a drive that must stay exFAT for a camera recovers its speed with a full erase (not a quick format) every so often, and by keeping a tenth free." });
+    else if (v.trim === false) out.push({ id: "trim", severity: "warn", title: "TRIM is off for this drive", what: "The operating system is not telling the SSD which blocks are free; writes slow as the drive fills with data it believes is still in use.", why: "On macOS `sudo trimforce enable` turns TRIM on for third-party SATA SSDs (external USB drives need an enclosure that passes it on); on Windows `fsutil behavior set DisableDeleteNotify 0` and Optimize Drives." });
+    else if (v.trim === true) out.push({ id: "trim", severity: "ok", title: "TRIM is on", what: "The operating system tells the SSD which blocks are free as files are deleted.", why: "Nothing to do: the drive keeps its write speed on its own. Defragmenting it would only add wear." });
+  }
+  return out;
+}
+
+/* ------------------------------------------------------------------ the repair guide */
+
+export interface GuideStep {
+  id: string;
+  title: string;
+  detail: string;
+  /** Something to type, when a step has one. */
+  command?: string;
+}
+/** The steps that fit what was found, in the order to take them; the guide is the part the browser cannot do itself. */
+export function repairGuide(j: Judged, list: Finding[]): GuideStep[] {
+  const ids = new Set(list.map((f) => f.id));
+  const sev = (id: string) => list.find((f) => f.id === id)?.severity;
+  const steps: GuideStep[] = [];
+  const v = j.volume, profile = j.profile, inv = j.inventory;
+  const isCard = !v?.solidState && v?.removable !== false;
+  const repaired = list.some((f) => f.id.startsWith("repaired-") && f.severity === "warn");
+  const needsFormat = sev("cluster") === "warn" || sev("fs") === "warn" || sev("fs") === "error" || ids.has("aligned") || ids.has("lost") || repaired || ids.has("fill-cliff") || sev("speed") === "error" || sev("speed") === "warn" || ids.has("stray") || ids.has("truncated");
+  if (!v) steps.push({ id: "details", title: "Read the volume details", detail: "The browser sees the files, not the file system. One command shows the cluster size, exact free space and (for an SSD) TRIM; paste its output into the Volume details box.", command: `macOS: diskutil info /Volumes/${j.layout?.rootName || "CARD"}    Windows: fsutil fsinfo ntfsinfo E: & fsutil fsinfo volumeinfo E:` });
+  if (inv.trash.length) steps.push({ id: "trash", title: "Empty the card's Trash", detail: `${fmtGb(inv.trashBytes)} you deleted on a computer is still on the card. The button above removes it here; on a Mac, emptying the Trash while the card is connected does the same.` });
+  if (ids.has("stray")) steps.push({ id: "stray", title: "Put the moved recordings back or take them off", detail: `${fmtGb(j.layout?.strayBytes ?? 0)} sits in folders the camera does not look in. Copy them to the computer (or move them back under DCIM there) and delete the folders from the card.` });
+  if (needsFormat && inv.files) steps.push({ id: "offload", title: "Copy everything off the card", detail: "A format erases the card. Copy the recordings to the computer or a drive first and check that they open." });
+  if (needsFormat || ids.has("wiped") || ids.has("named")) steps.push({ id: "format-camera", title: isCard ? "Format the card in the camera" : "Format the drive where it will be used", detail: isCard ? `${profile.formatPath}. The camera lays out exFAT with the cluster size and alignment its firmware expects, writes its own folders and erases the flash — which is also what brings a slowed card back; a computer's format does none of that.` : "The device that records onto the drive should format it: it chooses the file system and layout it expects." });
+  if (needsFormat && isCard) steps.push({ id: "format-computer", title: "If a computer has to format it, use the SD Memory Card Formatter", detail: "The SD Association's free formatter (sdcard.org) aligns the tables and clusters to the flash like a camera does; Disk Utility and Explorer do not. Choose Overwrite format when the card has slowed: it erases every block, not just the directory. Never pick FAT32 for a card above 32 GB." });
+  if (ids.has("lost") || ids.has("truncated") || repaired) steps.push({ id: "repair-fs", title: "Repair the file system before trusting the card again", detail: "macOS: Disk Utility → the card → First Aid. Windows: chkdsk with /f (the pieces it rescues land in FOUND.000). A repair reclaims lost clusters and closes damaged folders; a format in the camera does the same more thoroughly.", command: "chkdsk E: /f" });
+  if (isCard) steps.push({ id: "no-defrag", title: "Do not defragment a card or SSD", detail: "Flash has no moving head: fragments cost nothing to read, and a defragmenter's rewrites only use up the flash's write cycles. The fragmentation that slows a card lives inside its controller — blocks half full of stale data — and only an erase clears it: the camera's format, or the formatter's overwrite. Deleting files does not, because card readers pass no TRIM." });
+  else steps.push({ id: "ssd", title: "Keep TRIM on and skip defragmenting", detail: "An SSD defragments itself inside its controller when the operating system tells it which blocks are free. Check TRIM (macOS: System Information → NVMExpress or SATA → TRIM Support; Windows: fsutil behavior query DisableDeleteNotify, 0 means on) and let Optimize Drives (Windows) retrim on schedule. exFAT gets no TRIM on either system: a full erase restores a drive that stays exFAT.", command: "fsutil behavior query DisableDeleteNotify" });
+  steps.push({ id: "keep-free", title: "Keep a tenth of the card free", detail: `${fmtGb((j.space?.capacity ?? j.cardGb * 1e9) * FREE_SHARE_SAFE)} on this card. The controller's fast cache and its clean-up need spare blocks; near full, writes go straight to the slow native flash and the camera stops with a speed warning. Offload and format in the camera rather than deleting single recordings.` });
+  return steps;
 }

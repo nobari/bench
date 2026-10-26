@@ -10,7 +10,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useQueryState, parseAsString, parseAsInteger, parseAsFloat } from "nuqs";
-import { Activity, AlertTriangle, Check, Copy, FolderOpen, Gauge, Info, Loader, Square, Trash2, XCircle } from "lucide-react";
+import { Activity, AlertTriangle, Check, Copy, FolderOpen, Gauge, Info, Loader, Square, Trash2, Wrench, XCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { GHOST, PRIMARY, SEL, INPUT } from "./video-styles";
 import { SplitPane } from "@/components/ui/split-pane";
@@ -18,7 +18,7 @@ import { useUnsavedWork } from "@/lib/unsaved-work";
 import { useKeepAwake } from "@/lib/keep-awake";
 import { checkMp4 } from "@/lib/tools/video/check";
 import { isSpaceError } from "@/lib/tools/video/space";
-import { CAMERAS, CARD_SIZES_GB, CHUNK, DEFAULT_CAMERA, fillCurve, fillPattern, findings as judge, fmtDuration, fmtGb, inventory, needMBps, patternMatches, reportText, spaceView, speedStats, type FileEntry, type FillResult, type Finding, type Inventory, type Judged, type RecordingIssue, type Sample, type Severity, type SpeedStats } from "@/lib/tools/files/storage-doctor";
+import { CAMERAS, CARD_SIZES_GB, CHUNK, DEFAULT_CAMERA, fillCurve, fillPattern, findings as judge, fmtDuration, fmtGb, inventory, layoutOf, needMBps, parseVolumeInfo, patternMatches, repairGuide, reportText, spaceView, speedStats, type FileEntry, type FillResult, type Finding, type Inventory, type Judged, type RecordingIssue, type Sample, type Severity, type SpeedStats } from "@/lib/tools/files/storage-doctor";
 
 const TEST_DIR = "BENCH_CARD_DOCTOR";
 type Picker = { showDirectoryPicker(opts?: { id?: string; mode?: "read" | "readwrite" }): Promise<FileSystemDirectoryHandle> };
@@ -38,6 +38,10 @@ interface Walked {
   files: Map<string, FileSystemFileHandle>;
   dirs: Map<string, FileSystemDirectoryHandle>;
 }
+/** Tests reach the widget through window.__benchStorage. */
+const expose = (api: unknown) => {
+  (window as unknown as { __benchStorage?: unknown }).__benchStorage = api;
+};
 /** Tests can shrink the tests. */
 const testOptions: { speedBytes?: number; fillCapBytes?: number; fileBytes?: number; chunk?: number } = {};
 
@@ -65,6 +69,9 @@ export function StorageDoctorWidget() {
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [dragging, setDragging] = useState(false);
+  // what the operating system says about the volume, pasted in: the file system, cluster size, exact space, TRIM
+  const [volumeText, setVolumeText] = useState("");
+  const volume = parseVolumeInfo(volumeText);
   const abortRef = useRef<AbortController | null>(null);
   const log = (text: string) => setEvents((l) => [...l.slice(-40), `${new Date().toLocaleTimeString()} ${text}`]);
 
@@ -176,14 +183,6 @@ export function StorageDoctorWidget() {
       setError(message(err));
     }
   };
-  // Tests hand a directory handle over and shrink the tests.
-  useEffect(() => {
-    (window as unknown as { __benchStorage?: unknown }).__benchStorage = {
-      open: (h: FileSystemDirectoryHandle) => open(h),
-      options: (o: typeof testOptions) => Object.assign(testOptions, o),
-      getState: () => ({ dir: dir?.name ?? null, files: inv?.files ?? null, bytes: inv?.bytes ?? null, job: job?.kind ?? null, recordings, speed, readSpeed, fill, events, error }),
-    };
-  });
 
   /* ------------------------------------------------------------ test files */
   const testDir = async (create: boolean) => dir!.getDirectoryHandle(TEST_DIR, { create });
@@ -328,8 +327,9 @@ export function StorageDoctorWidget() {
   };
 
   /* ------------------------------------------------------------ fill test */
-  const capacity = cardGb * 1e9;
-  const used = inv?.bytes ?? 0;
+  // the pasted volume details give the exact size and use; otherwise the nominal size and the files found
+  const capacity = volume?.totalBytes ?? cardGb * 1e9;
+  const used = volume?.usedBytes ?? inv?.bytes ?? 0;
   const runFill = async () => {
     if (!dir || job || !inv) return;
     const need = needMBps(bitrateMbps);
@@ -396,6 +396,30 @@ export function StorageDoctorWidget() {
   };
 
   /* ------------------------------------------------------------ fixes */
+  // what the folders say about the card's history
+  const layout = walked && dir ? layoutOf(walked.entries, [...walked.dirs.keys()], dir.name, profile) : null;
+  /** Removes whole top-level folders — a renamed DCIM, a repair folder — after a confirmation, and the typed word for recordings. */
+  const deleteFolders = async (names: string[], what: string, bytes: number, typed: boolean) => {
+    if (!dir || job || !names.length) return;
+    const listing = names.join(", ");
+    if (!window.confirm(`Delete ${what} from ${dir.name}: ${listing} (${fmtGb(bytes)})?\n\nEverything inside goes and cannot be brought back.`)) return;
+    if (typed && window.prompt(`This removes ${fmtGb(bytes)} of recordings for good. Have they been copied off? Type delete to go on.`) !== "delete") return;
+    setJob({ kind: "clean", label: `Deleting ${what}`, fraction: 0, detail: "" });
+    try {
+      let n = 0;
+      for (const name of names) {
+        await dir.removeEntry(name, { recursive: true });
+        n++;
+        setJob({ kind: "clean", label: `Deleting ${what}`, fraction: n / names.length, detail: `${n} of ${names.length}` });
+      }
+      log(`Deleted ${n} folder${n === 1 ? "" : "s"}: ${listing}`);
+    } catch (e) {
+      setError(message(e));
+    } finally {
+      setJob(null);
+      void scan(dir);
+    }
+  };
   const deleteEntries = async (list: FileEntry[], what: string) => {
     if (!dir || !walked || job) return;
     if (!window.confirm(`Delete ${list.length} ${what} from ${dir.name}?\n\n${list.slice(0, 8).map((e) => e.path).join("\n")}${list.length > 8 ? `\n… and ${list.length - 8} more` : ""}\n\nNothing else is touched. This cannot be undone.`)) return;
@@ -407,7 +431,7 @@ export function StorageDoctorWidget() {
       for (const e of list) {
         const top = e.path.split("/")[0];
         const h = walked.dirs.get(top);
-        if (h && e.path.includes("/") && [".Spotlight-V100", ".fseventsd", ".Trashes", ".TemporaryItems", "System Volume Information", "$RECYCLE.BIN", "__MACOSX"].includes(top)) roots.add(top);
+        if (h && e.path.includes("/") && [".Spotlight-V100", ".fseventsd", ".Trashes", ".TemporaryItems", "System Volume Information", "$RECYCLE.BIN", ".Trash-1000", "__MACOSX"].includes(top)) roots.add(top);
       }
       for (const top of roots) {
         await dir.removeEntry(top, { recursive: true });
@@ -434,13 +458,26 @@ export function StorageDoctorWidget() {
     if (f.fix.id === "clean") void deleteEntries(inv.clutter, "computer-made files");
     else if (f.fix.id === "delete-empty") void deleteEntries(inv.zeroBytes, "empty files");
     else if (f.fix.id === "delete-orphans") void deleteEntries(inv.orphans, "orphaned proxies");
+    else if (f.fix.id === "empty-trash") void deleteEntries(inv.trash, "files in the card's Trash");
+    else if (f.fix.id === "delete-repair" && layout) void deleteFolders(layout.repairs.map((r) => r.folder), "repair leftovers", layout.repairs.reduce((a, r) => a + r.bytes, 0), false);
+    else if (f.fix.id === "delete-stray" && layout) void deleteFolders(layout.stray.filter((f) => f.folder).map((f) => f.folder), "recordings the camera does not see", layout.strayBytes, true);
   };
   const cancel = () => abortRef.current?.abort();
 
   /* ------------------------------------------------------------ judging */
-  const space = inv ? spaceView(capacity, inv.bytes, fill?.trueFree ?? null) : null;
-  const judged: Judged | null = inv ? { inventory: inv, space, speed, fill, recordings, profile, bitrateMbps, cardGb } : null;
+  const space = inv ? spaceView(capacity, used, fill?.trueFree ?? volume?.freeBytes ?? null) : null;
+  const judged: Judged | null = inv ? { inventory: inv, layout, volume, space, speed, fill, recordings, profile, bitrateMbps, cardGb: capacity / 1e9 } : null;
   const list = judged ? judge(judged) : [];
+  const guide = judged ? repairGuide(judged, list) : [];
+  // Tests hand a directory handle over and shrink the tests.
+  useEffect(() => {
+    expose({
+      open: (h: FileSystemDirectoryHandle) => open(h),
+      options: (o: typeof testOptions) => Object.assign(testOptions, o),
+      setVolumeText: (t: string) => setVolumeText(t),
+      getState: () => ({ dir: dir?.name ?? null, files: inv?.files ?? null, bytes: inv?.bytes ?? null, job: job?.kind ?? null, recordings, speed, readSpeed, fill, events, error, volume, layout: layout ? { stray: layout.stray, repairs: layout.repairs, named: layout.namedOnComputer, isRoot: layout.isRoot } : null, findings: list.map((f) => f.id), guide: guide.map((g) => g.id) }),
+    });
+  });
   const need = needMBps(bitrateMbps);
   const copy = async () => {
     if (!judged) return;
@@ -558,6 +595,32 @@ export function StorageDoctorWidget() {
         )}
       </div>
 
+      <div className="panel space-y-2 p-4" data-storage-volume>
+        <div className="flex flex-wrap items-baseline gap-2">
+          <span className="font-medium text-ink">Volume details</span>
+          <span className="text-[12px] text-faint">what a browser cannot see: the file system, cluster size, exact space, TRIM</span>
+        </div>
+        <div className="grid gap-1 text-[12px] text-muted sm:grid-cols-2">
+          <div>
+            macOS Terminal: <code className="rounded bg-raised px-1 py-0.5 font-mono text-[11.5px] text-ink">diskutil info /Volumes/{dir?.name || "CARD"}</code>
+          </div>
+          <div>
+            Windows Command Prompt: <code className="rounded bg-raised px-1 py-0.5 font-mono text-[11.5px] text-ink">fsutil fsinfo ntfsinfo E: &amp; fsutil fsinfo volumeinfo E:</code>
+          </div>
+        </div>
+        <textarea value={volumeText} onChange={(e) => setVolumeText(e.target.value)} rows={3} placeholder="Paste the output here" className={cn(INPUT, "w-full resize-y font-mono text-[11.5px]")} aria-label="Volume details" data-storage-volume-text />
+        {volumeText.trim() &&
+          (volume ? (
+            <p className="font-mono text-[12px] text-ink" data-storage-volume-parsed data-state="read">
+              {[volume.fileSystem, volume.clusterBytes ? `${volume.clusterBytes / 1024} KB clusters` : null, volume.totalBytes ? `${fmtGb(volume.totalBytes)} total` : null, volume.freeBytes !== undefined ? `${fmtGb(volume.freeBytes)} free` : null, volume.name ? `“${volume.name}”` : null, volume.solidState ? "SSD" : volume.removable ? "removable" : null, volume.trim === undefined ? null : volume.trim ? "TRIM on" : "TRIM off"].filter(Boolean).join(" · ")}
+            </p>
+          ) : (
+            <p className="text-[12px] text-warn" data-storage-volume-parsed data-state="unknown">
+              Nothing recognised in that text — paste the whole output of the command.
+            </p>
+          ))}
+      </div>
+
       {inv && (
         <div className="panel space-y-2 p-4 text-[12.5px]" data-storage-inventory>
           <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
@@ -575,9 +638,9 @@ export function StorageDoctorWidget() {
             <div className={cn("h-full", space && space.state !== "ok" ? "bg-warn" : "bg-accent")} style={{ width: `${Math.min(100, (inv.bytes / Math.max(1, capacity)) * 100)}%` }} />
           </div>
           <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-muted">
-            {(["video", "proxy", "image", "audio", "sidecar", "other", "clutter"] as const).filter((k) => inv.byKind[k].files).map((k) => (
+            {(["video", "proxy", "image", "audio", "sidecar", "other", "clutter", "trash", "repair"] as const).filter((k) => inv.byKind[k].files).map((k) => (
               <span key={k}>
-                {inv.byKind[k].files} {k === "proxy" ? "proxies" : k === "clutter" ? "computer files" : k === "sidecar" ? "sidecars" : `${k}s`} · {fmtGb(inv.byKind[k].bytes)}
+                {inv.byKind[k].files} {k === "proxy" ? "proxies" : k === "clutter" ? "computer files" : k === "trash" ? "in the card's Trash" : k === "repair" ? "repair fragments" : k === "sidecar" ? "sidecars" : `${k}s`} · {fmtGb(inv.byKind[k].bytes)}
               </span>
             ))}
           </div>
@@ -651,7 +714,7 @@ export function StorageDoctorWidget() {
                         <Link href={f.fix.href} className={cn(GHOST, "h-7 px-2 text-[12px] no-underline")} title={f.fix.detail} data-fix={f.fix.id}>
                           {f.fix.label}
                         </Link>
-                      ) : ["clean", "delete-empty", "delete-orphans"].includes(f.fix.id) ? (
+                      ) : ["clean", "delete-empty", "delete-orphans", "empty-trash", "delete-repair", "delete-stray"].includes(f.fix.id) ? (
                         <button type="button" onClick={() => onFix(f)} disabled={!!job} className={cn(GHOST, "h-7 border-accent px-2 text-[12px] text-accent")} title={f.fix.detail} data-fix={f.fix.id}>
                           <Trash2 size={12} /> {f.fix.label}
                         </button>
@@ -671,6 +734,26 @@ export function StorageDoctorWidget() {
               </li>
             ))}
           </ul>
+        </div>
+      )}
+      {guide.length > 0 && (
+        <div className="panel space-y-2 p-4" data-storage-guide>
+          <div className="flex flex-wrap items-center gap-2">
+            <Wrench size={14} className="text-accent" />
+            <span className="font-medium text-ink">Repair and refresh</span>
+            <span className="text-[12px] text-faint">what to do about it, in order — the part a browser cannot do itself</span>
+          </div>
+          <ol className="space-y-2 text-[12.5px]">
+            {guide.map((s, i) => (
+              <li key={s.id} className="space-y-0.5" data-guide-step={s.id}>
+                <div className="font-medium text-ink">
+                  {i + 1}. {s.title}
+                </div>
+                <p className="text-muted">{s.detail}</p>
+                {s.command && <code className="block w-fit max-w-full overflow-x-auto rounded bg-raised px-2 py-1 font-mono text-[11.5px] text-ink">{s.command}</code>}
+              </li>
+            ))}
+          </ol>
         </div>
       )}
       {events.length > 0 && (
