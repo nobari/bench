@@ -108,7 +108,8 @@ export interface SpeedPriors {
 export function defaultSpeeds(sourcePixels: number, outputPixels: number): Required<Omit<SpeedPriors, "label">> {
   const px = Math.max(1, sourcePixels, outputPixels);
   const encode = Math.min(8, Math.max(0.15, 25e6 / px));
-  return { encode, copy: Math.min(12, encode * 1.6), audio: 40, prepareMs: 800, flushMs: 1500, closeBytesPerS: 400e6 };
+  // Copying moves packets at the drive's pace: tens of seconds of footage a second, whatever the picture size.
+  return { encode, copy: 20, audio: 40, prepareMs: 800, flushMs: 1500, closeBytesPerS: 400e6 };
 }
 
 export interface PlanInput {
@@ -133,7 +134,7 @@ export function planSteps(input: PlanInput): ExportStep[] {
   let offset = 0;
   input.spans.forEach((span, i) => {
     const n = i + 1, len = span.end - span.start;
-    const what = span.kind === "copy" ? "re-encode as is, no grade" : `decode, grade on the GPU${span.reasons.length ? ` (${span.reasons.join(", ")})` : ""}, draw titles and overlays, encode`;
+    const what = span.kind === "copy" ? "copy the recording's own packets as they are — no decoding, no encoding" : `decode, grade on the GPU${span.reasons.length ? ` (${span.reasons.join(", ")})` : ""}, draw titles and overlays, encode`;
     steps.push({
       id: `span-${n}`,
       kind: "video",

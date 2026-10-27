@@ -44,6 +44,7 @@ import {
   exportRange,
   isFileLutKind,
   FILE_LUT_KINDS,
+  keyTolerance,
   musicGainAt,
   placeClips,
   planExport,
@@ -94,6 +95,76 @@ const spaceStop = (cause: unknown) => {
 };
 import { LoudnessMeter, softLimit, type Loudness } from "./loudness";
 import { patchKindType } from "./tags";
+import { parameterSetNals, patchSampleDescriptions, readSampleDescriptions, readVideoDescriptions } from "./check";
+
+/**
+ * Rewrites a file's index as the file is written when its video samples come from more than one codec
+ * configuration — a recording's own packets copied beside re-encoded bridges. mediabunny writes one sample
+ * description per track, so once it hands over the moov (`onMoov`, before the chunked writes flush), whatever
+ * reaches the file from the moov's position on is replaced by a moov that lists every configuration and points
+ * each chunk at its own. The media bytes are untouched. With one configuration, nothing changes.
+ */
+class DescriptionPatch {
+  private entries: Uint8Array[] = [];
+  private switches: { sample: number; entry: number }[] = [];
+  private moov: { at: number; data: Uint8Array<ArrayBuffer> } | null = null;
+  private written = false;
+  /** The sample entry boxes in play and, in decode order, the first sample of each stretch with the entry it uses. */
+  set(entries: Uint8Array[], switches: { sample: number; entry: number }[]) {
+    this.entries = entries;
+    this.switches = switches;
+  }
+  get active() {
+    return this.entries.length > 1;
+  }
+  get count() {
+    return Math.max(1, this.entries.length);
+  }
+  private held: StreamTargetChunk[] = [];
+  onMoov = (data: Uint8Array, position: number) => {
+    this.moov = { at: position, data: new Uint8Array(data) as Uint8Array<ArrayBuffer> };
+  };
+  /**
+   * A chunk written while the file is being finalized: passed straight on when nothing is to be patched, held
+   * back otherwise — the writer may flush a full chunk holding the head of the moov before it reports where the
+   * moov begins, so the tail of the file is settled only once everything has been written (see `release`).
+   */
+  take(chunk: StreamTargetChunk): StreamTargetChunk[] {
+    if (!this.active) return [chunk];
+    this.held.push(chunk);
+    return [];
+  }
+  /** The held chunks to write, in order: each as it was before the moov, the patched moov once, nothing after it. */
+  release(): StreamTargetChunk[] {
+    const held = this.held;
+    this.held = [];
+    if (!this.active || !this.moov) return held;
+    const at = this.moov.at;
+    const out: StreamTargetChunk[] = [];
+    for (const chunk of held) {
+      const end = chunk.position + chunk.data.byteLength;
+      if (end <= at) {
+        out.push(chunk);
+        continue;
+      }
+      const head = chunk.position < at ? chunk.data.subarray(0, at - chunk.position) : null;
+      if (this.written) {
+        if (head) out.push({ ...chunk, data: head });
+        continue;
+      }
+      this.written = true;
+      const patched = patchSampleDescriptions(this.moov.data, this.entries, this.switches);
+      if (!head) out.push({ ...chunk, data: patched, position: at });
+      else {
+        const joined = new Uint8Array(head.byteLength + patched.byteLength);
+        joined.set(head, 0);
+        joined.set(patched, head.byteLength);
+        out.push({ ...chunk, data: joined });
+      }
+    }
+    return out;
+  }
+}
 
 export interface Probe {
   duration: number;
@@ -795,7 +866,10 @@ export async function mixAudio(
     if (!o) return out;
     const needStart = sourceT,
       needEnd = sourceT + n / sampleRate;
-    if (!o.iter || needStart < o.bufStart) {
+    const bufEnd = o.bufStart + o.buf.length / 2 / o.sampleRate;
+    // Backwards, or forwards past what is buffered by more than a second (the footage between two kept ranges):
+    // seek rather than decode through the gap.
+    if (!o.iter || needStart < o.bufStart || needStart > bufEnd + 1) {
       // Let the old generator release the sample it has decoded ahead before starting over.
       await o.iter?.return(undefined);
       o.iter = o.sink.samples(Math.max(0, needStart - 0.05));
@@ -898,6 +972,65 @@ export async function mixAudio(
   }
 }
 
+/* --------------------------------------------------------------- keyframes */
+
+/** The type of the first picture NAL unit in a length-prefixed sample: HEVC 19/20 = IDR, 21 = CRA; H.264 5 = IDR. */
+function firstVclNalType(codec: string | null, data: Uint8Array, lengthSize: number): number | null {
+  let p = 0;
+  while (p + lengthSize < data.length) {
+    let len = 0;
+    for (let i = 0; i < lengthSize; i++) len = len * 256 + data[p + i];
+    const at = p + lengthSize;
+    if (len <= 0 || at + len > data.length) return null;
+    if (codec === "hevc") {
+      const type = (data[at] >> 1) & 0x3f;
+      if (type < 32) return type;
+    } else if (codec === "avc") {
+      const type = data[at] & 0x1f;
+      if (type >= 1 && type <= 5) return type;
+    } else return null;
+    p = at + len;
+  }
+  return null;
+}
+
+/**
+ * Where a recording's keyframes fall (presentation seconds), read from its index without touching the picture
+ * data, except the first keyframe, whose bytes say whether the groups are closed (an IDR frame, which a decoder
+ * can start on) — an open group (CRA) cannot be copied whole, so such a recording is re-encoded instead and the
+ * note says why. A few thousand index lookups for a 3-hour file.
+ */
+export async function probeKeyframes(file: File, signal?: AbortSignal): Promise<{ times: number[]; note?: string }> {
+  const input = new Input({ source: new BlobSource(file), formats: ALL_FORMATS });
+  try {
+    const track = await input.getPrimaryVideoTrack();
+    if (!track) return { times: [], note: "no picture track" };
+    const sink = new EncodedPacketSink(track);
+    const first = await sink.getFirstKeyPacket({ verifyKeyPackets: true });
+    if (!first) return { times: [], note: "the index lists no keyframes" };
+    const config = await track.getDecoderConfig();
+    const desc = config?.description ? new Uint8Array(config.description as ArrayBuffer) : null;
+    const lengthSize = track.codec === "hevc" ? (desc && desc.length > 21 ? (desc[21] & 3) + 1 : 4) : track.codec === "avc" ? (desc && desc.length > 4 ? (desc[4] & 3) + 1 : 4) : 4;
+    const nal = firstVclNalType(track.codec, first.data, lengthSize);
+    if (track.codec === "hevc" && nal === 21) return { times: [], note: "open keyframe groups (CRA frames), which cannot be copied whole" };
+    if (track.codec === "avc" && nal !== null && nal !== 5) return { times: [], note: "keyframes that are not IDR frames, which cannot be copied whole" };
+    if (track.codec !== "hevc" && track.codec !== "avc") return { times: [], note: `${track.codec ?? "this codec"} is not copied as is` };
+    const times = [first.timestamp];
+    let p = first;
+    for (;;) {
+      if (signal?.aborted) throw new DOMException("Cancelled", "AbortError");
+      const next = await sink.getNextKeyPacket(p, { metadataOnly: true });
+      if (!next) break;
+      if (next.timestamp > p.timestamp) times.push(next.timestamp);
+      p = next;
+      if (times.length > 400_000) return { times: [], note: "more keyframes than a recording is expected to have" };
+    }
+    return { times };
+  } finally {
+    input.dispose?.();
+  }
+}
+
 /* ------------------------------------------------------------------ export */
 
 /** Something worth a line in the export's log: a part written, a stretch skipped, the join starting. */
@@ -957,6 +1090,8 @@ export interface ExportPart {
   frames: number;
   /** Already copied into a file that was not finished, and removed to make room: the stretch is exported again. */
   consumed?: boolean;
+  /** "copy": the recording's own packets, as they are; otherwise (or absent) frames the encoder made. */
+  kind?: "copy" | "encode";
 }
 
 export interface ExportManifest {
@@ -1104,6 +1239,10 @@ export interface ExportResult {
   /** Where this run started in the export's time (0 unless it continued earlier parts). */
   resumedFrom: number;
   join?: JoinInfo;
+  /** Seconds of picture copied from the recordings as they are in this run (the rest was encoded). */
+  copiedSeconds: number;
+  /** Codec configurations in the file's picture track: 1, or 2 when copied footage sits beside re-encoded bridges. */
+  descriptions: number;
 }
 
 /** The spans inside [from, to), cut to fit. */
@@ -1239,28 +1378,36 @@ async function exportWithPulse(
   // Count what reaches a file: every chunk passes through here on its way to the folder. The tracker sees every
   // byte (parts included, for its rates); the result reports the file's own.
   let fileBytes = 0;
-  // While the file is being finalized its index goes out; the media-kind atom in it gets the integer type ffmpeg writes.
+  // While the file is being finalized its index goes out: the media-kind atom in it gets the integer type ffmpeg
+  // writes, and a picture carrying more than one codec configuration gets an index that says which frames use which.
   const finalizing = { on: false };
+  const descriptionPatch = new DescriptionPatch();
   const countedStream = (target: WritableStream<StreamTargetChunk>, isFinal: boolean) => {
     const fileWriter = target.getWriter();
+    const put = async (chunk: StreamTargetChunk) => {
+      tracker.addBytes(chunk.data.byteLength);
+      if (isFinal) fileBytes += chunk.data.byteLength;
+      if (isFinal && finalizing.on) patchKindType(chunk.data);
+      emit();
+      try {
+        await fileWriter.write(chunk);
+      } catch (e) {
+        if (!isSpaceError(e)) throw e;
+        // A writable that has refused a write rejects every later one with the same stored error, so there is no
+        // retrying it: say so, then stop the export at the last finished part (the parts are kept).
+        await opts.onWriteBlocked?.(e);
+        throw spaceStop(e);
+      }
+    };
     return new WritableStream<StreamTargetChunk>({
-      write: async (chunk) => {
-        tracker.addBytes(chunk.data.byteLength);
-        if (isFinal) fileBytes += chunk.data.byteLength;
-        if (isFinal && finalizing.on) patchKindType(chunk.data);
-        emit();
-        try {
-          await fileWriter.write(chunk);
-        } catch (e) {
-          if (!isSpaceError(e)) throw e;
-          // A writable that has refused a write rejects every later one with the same stored error, so there is no
-          // retrying it: say so, then stop the export at the last finished part (the parts are kept).
-          await opts.onWriteBlocked?.(e);
-          throw spaceStop(e);
-        }
+      write: async (raw) => {
+        for (const chunk of isFinal && finalizing.on ? descriptionPatch.take(raw) : [raw]) await put(chunk);
       },
       close: async () => {
-        // Everything is written; from here the browser reads the file back to check it, then moves it into place.
+        // The tail of the file, held back for the index rewrite, goes out now that the writer has said where the
+        // index begins; then everything is written, and from here the browser reads the file back to check it
+        // before moving it into place.
+        if (isFinal) for (const chunk of descriptionPatch.release()) await put(chunk);
         if (isFinal) {
           tracker.beginClose();
           emit(true);
@@ -1343,14 +1490,18 @@ async function exportWithPulse(
     return inp;
   };
 
-  // Parts: the one being written now (export time, not timeline time).
+  // Parts: the one being written now (export time, not timeline time). An encode part takes frames off the canvas
+  // through the encoder; a copy part takes one recording's own packets, and never mixes two configurations.
   interface Segment {
     file: string;
     start: number;
     end: number;
     frames: number;
+    kind: "encode" | "copy";
     output: Output;
-    source: CanvasSource;
+    source: CanvasSource | null;
+    packets: EncodedVideoPacketSource | null;
+    configKey: string | null;
   }
   let segment: Segment | null = null;
   const partError = (message: string) => Object.assign(new Error(message), { name: "PartError" });
@@ -1362,7 +1513,7 @@ async function exportWithPulse(
     }
     await parts!.store.remove(seg.file).catch(() => undefined);
   };
-  const openSegment = async (startT: number) => {
+  const openSegment = async (startT: number, kind: Segment["kind"] = "encode", configKey: string | null = null) => {
     const n = manifest!.nextPart ?? manifest!.parts.length + 1;
     manifest!.nextPart = n + 1;
     const file = `part-${String(n).padStart(4, "0")}.mp4`;
@@ -1372,13 +1523,16 @@ async function exportWithPulse(
       start: startT,
       end: startT,
       frames: 0,
+      kind,
       output: new Output({
         format: new Mp4OutputFormat({ fastStart: false }),
         target: new StreamTarget(countedStream(writable, false), { chunked: true }),
       }),
-      source: new CanvasSource(canvas, encoderConfig),
+      source: kind === "encode" ? new CanvasSource(canvas, encoderConfig) : null,
+      packets: kind === "copy" ? new EncodedVideoPacketSource(codec) : null,
+      configKey,
     };
-    seg.output.addVideoTrack(seg.source, { frameRate: fps });
+    seg.output.addVideoTrack((seg.source ?? seg.packets)!, { frameRate: fps });
     await seg.output.start();
     segment = seg;
   };
@@ -1392,7 +1546,8 @@ async function exportWithPulse(
       return true;
     }
     try {
-      seg.source.close();
+      seg.source?.close();
+      seg.packets?.close();
       await seg.output.finalize();
     } catch (e) {
       console.warn(`Part ${seg.file} could not be finished and is discarded:`, e);
@@ -1400,12 +1555,12 @@ async function exportWithPulse(
       await discardSegment(seg);
       return false;
     }
-    manifest!.parts.push({ file: seg.file, start: seg.start, end: seg.end, frames: seg.frames });
+    manifest!.parts.push({ file: seg.file, start: seg.start, end: seg.end, frames: seg.frames, kind: seg.kind });
     manifest!.parts.sort((a, b) => a.start - b.start);
     manifest!.updatedAt = Date.now();
     runCursor = Math.max(runCursor, seg.end);
     await saveManifest();
-    opts.onEvent?.({ at: Date.now(), kind: "part", text: `Part ${manifest!.parts.length} written — ${fmtMs(seg.start)} → ${fmtMs(seg.end)}, ${seg.frames.toLocaleString()} frames, safe if the export stops` });
+    opts.onEvent?.({ at: Date.now(), kind: "part", text: `Part ${manifest!.parts.length} ${seg.kind === "copy" ? "copied" : "written"} — ${fmtMs(seg.start)} → ${fmtMs(seg.end)}, ${seg.frames.toLocaleString()} frames${seg.kind === "copy" ? " taken from the recording as they are" : ""}, safe if the export stops` });
     return true;
   };
   /** Finishes the open part now (used when the export stops or ends). */
@@ -1445,6 +1600,12 @@ async function exportWithPulse(
   /** Export time this run has finished work up to (the end of the last part it closed). */
   let runCursor = gaps[0]?.from ?? 0;
   const doneUntil = () => runCursor;
+  /** The open part goes off to be finished in the background; two finishing at once is plenty, a third waits. */
+  const rotateSegment = async () => {
+    if (!segment) return;
+    closeSegmentLater();
+    if (pendingCloses.size > 2) await settleCloses();
+  };
 
   // The timeline time of the last frame handed to an encoder: frames must only ever go forward, whatever the spans
   // and the footage's frame grid do, or the file would carry a frame before its predecessor (and the muxer refuses
@@ -1463,16 +1624,12 @@ async function exportWithPulse(
     const duration = 1 / fps;
     if (parts) {
       if (closeFailure) await settleCloses();
-      if (!segment || t - segment.start >= partSeconds) {
-        if (segment) {
-          closeSegmentLater();
-          // Two parts finishing at once is plenty; a third waits so the disk is never asked for more.
-          if (pendingCloses.size > 2) await settleCloses();
-        }
-        await openSegment(t);
+      if (!segment || segment.kind !== "encode" || t - segment.start >= partSeconds) {
+        await rotateSegment();
+        await openSegment(t, "encode");
       }
       const seg = segment!;
-      await seg.source.add(t - seg.start, duration);
+      await seg.source!.add(t - seg.start, duration);
       seg.frames++;
       seg.end = t + duration;
     } else await videoSource!.add(t, duration);
@@ -1494,6 +1651,66 @@ async function exportWithPulse(
   /** Export time of the frame being composed or encoded right now, when one is. */
   let pendingT: number | null = null;
 
+  // The codec configuration of each recording whose packets are copied, with a key so a part never mixes two.
+  const configs = new Map<string, { config: VideoDecoderConfig; key: string }>();
+  const configOf = async (mediaId: string, track: InputVideoTrack) => {
+    let c = configs.get(mediaId);
+    if (!c) {
+      const config = await track.getDecoderConfig();
+      if (!config) throw new Error(`${project.media[mediaId]?.name ?? mediaId}: the recording's codec configuration could not be read, so its packets cannot be copied as they are.`);
+      const desc = config.description ? new Uint8Array(config.description as ArrayBuffer) : new Uint8Array(0);
+      let h = 0x811c9dc5;
+      for (const b of desc) h = Math.imul(h ^ b, 0x01000193) >>> 0;
+      c = { config, key: `${config.codec}|${config.codedWidth}x${config.codedHeight}|${desc.length}|${h.toString(16)}` };
+      configs.set(mediaId, c);
+    }
+    return c;
+  };
+  let copiedSeconds = 0;
+  /**
+   * A copy span: the recording's packets forwarded into copy parts as they are — no decoding, no encoding — from
+   * the keyframe at the span's start up to the one at its end, placed on the export's frame grid. A copy part
+   * holds one recording's configuration and starts a successor on a keyframe once it has run its length.
+   */
+  const copySpan = async (span: ExportSpan, track: InputVideoTrack, clip: Clip, media: MediaRef | undefined) => {
+    const clipName = media?.name ?? clip.media;
+    const tol = keyTolerance(media?.fps || fps);
+    const { config, key: configKey } = await configOf(clip.media, track);
+    const psink = new EncodedPacketSink(track);
+    const first = await psink.getKeyPacket(span.sourceIn + tol, { verifyKeyPackets: true });
+    if (!first || Math.abs(first.timestamp - span.sourceIn) > tol) throw new Error(`${clipName}: no keyframe at ${fmtMs(span.sourceIn)} in the recording, where the plan expected one. Remove the recording and add it again so its keyframes are read afresh, or turn smart copy off.`);
+    // The first copied frame lands on the grid tick of the span's start, after every frame already written.
+    const baseTick = Math.max(tickOf(span.start), lastTick + 1);
+    const base = baseTick / fps - first.timestamp;
+    for await (const packet of psink.packets(first)) {
+      if (signal?.aborted) throw new DOMException("Cancelled", "AbortError");
+      await pauseGate();
+      if (signal?.aborted) throw new DOMException("Cancelled", "AbortError");
+      if (closeFailure) await settleCloses();
+      const isKey = packet.type === "key";
+      if (isKey && packet !== first && packet.timestamp >= span.sourceOut - tol) break;
+      if (packet.timestamp >= span.sourceOut + tol) throw new Error(`${clipName}: a frame at ${fmtMs(packet.timestamp)} belongs to the keyframe group before it, so the recording's groups are not closed and it cannot be copied as is. Turn smart copy off for this export.`);
+      const t = base + packet.timestamp;
+      if (!segment || segment.kind !== "copy" || segment.configKey !== configKey || (isKey && t - segment.start >= partSeconds)) {
+        if (!isKey) throw new Error(`${clipName}: a new part could not start on a keyframe at ${fmtMs(packet.timestamp)}.`);
+        await rotateSegment();
+        await openSegment(t, "copy", configKey);
+      }
+      const seg = segment!;
+      await seg.packets!.add(packet.clone({ timestamp: t - seg.start }), seg.frames === 0 ? { decoderConfig: config } : undefined);
+      seg.frames++;
+      seg.end = Math.max(seg.end, t + (packet.duration || 1 / fps));
+      const tick = Math.round(t * fps);
+      if (tick > lastTick) {
+        lastTick = tick;
+        lastFrameT = offset + t;
+      }
+      tracker.frame(progressAt(t));
+      emit();
+    }
+    copiedSeconds += span.end - span.start;
+  };
+
   // Video, span by span, in timeline order, from `fromExport` on.
   const runVideo = async (fromExport: number) => {
     let spanIndex = 0;
@@ -1509,8 +1726,15 @@ async function exportWithPulse(
       const media = project.media[clip.media];
       const input = await openInput(clip.media);
       const track = (await input.getPrimaryVideoTrack())!;
-      // A copy span is only truly copyable if the encoder/container accept the source packets; we re-encode here
-      // frame-accurately instead, but skip the GPU grade (identity draw) so it is still much faster than a graded span.
+      if (span.kind === "copy" && parts) {
+        // The recording's own packets, into copy parts: no decoding, no encoding.
+        await copySpan(span, track, clip, media);
+        tracker.endStep();
+        emit(true);
+        continue;
+      }
+      // Without parts (a test render) a copy span is decoded and encoded again like any other, only without the
+      // GPU grade (identity draw).
       const sink = new VideoSampleSink(track);
       const srcW = media.width ?? track.displayWidth,
         srcH = media.height ?? track.displayHeight;
@@ -1767,7 +1991,7 @@ async function exportWithPulse(
     if (parts) {
       // The file: the parts copied packet by packet (no re-encoding), each shifted to its place, then the audio.
       output = new Output({
-        format: new Mp4OutputFormat({ fastStart: false }),
+        format: new Mp4OutputFormat({ fastStart: false, onMoov: descriptionPatch.onMoov }),
         target: new StreamTarget(countedStream(opts.writable, true), { chunked: true }),
       });
       const copied = new EncodedVideoPacketSource(codec);
@@ -1802,16 +2026,50 @@ async function exportWithPulse(
       parts.onJoin?.(joinInfo);
       opts.onEvent?.({ at: Date.now(), kind: "join", text: `Joining ${ordered.length} parts (${fmtBytes(partBytes)}) into the file${mode === "remove" ? ", removing each as it goes in to spare the disk" : ""}` });
       let first = true;
+      // Each part's codec configuration: a copy part carries its recording's, an encode part the encoder's. Where
+      // they differ, the file's index must say which samples use which (see DescriptionPatch), and every keyframe
+      // also carries its configuration's parameter sets in-band, for players that read one sample entry only.
+      const entries: Uint8Array<ArrayBuffer>[] = [], entryKeys: string[] = [], entryOf: number[] = [];
+      const described = await Promise.all(files.map((f) => readVideoDescriptions(f)));
+      for (const list of described) {
+        const e = list[0];
+        if (!e) {
+          entryOf.push(-1);
+          continue;
+        }
+        let key = "";
+        for (const b of e.box) key += String.fromCharCode(b);
+        let entry = entryKeys.indexOf(key);
+        if (entry < 0) {
+          entry = entries.length;
+          entries.push(e.box);
+          entryKeys.push(key);
+        }
+        entryOf.push(entry);
+      }
+      const inband = entries.length > 1 ? described.map((list) => (list[0] ? parameterSetNals(list[0]) : null)) : [];
+      const switches: { sample: number; entry: number }[] = [];
+      let sampleCount = 0;
       for (const [index, part] of ordered.entries()) {
         const inp = new Input({ source: new BlobSource(files[index]), formats: ALL_FORMATS });
         const track = await inp.getPrimaryVideoTrack();
         if (!track) throw new Error(`Part ${part.file} holds no video. Discard the parts and export again.`);
         const config = first ? await track.getDecoderConfig() : null;
+        const entry = entryOf[index];
+        if (entry >= 0 && (!switches.length || switches[switches.length - 1].entry !== entry)) switches.push({ sample: sampleCount, entry });
+        const sets = inband[index];
         for await (const packet of new EncodedPacketSink(track).packets()) {
           if (signal?.aborted) throw new DOMException("Cancelled", "AbortError");
           await pauseGate();
-          await copied.add(packet.clone({ timestamp: packet.timestamp + part.start }), first && config ? { decoderConfig: config } : undefined);
+          let data: Uint8Array | undefined;
+          if (sets?.length && packet.type === "key") {
+            data = new Uint8Array(sets.length + packet.data.length);
+            data.set(sets, 0);
+            data.set(packet.data, sets.length);
+          }
+          await copied.add(packet.clone({ timestamp: packet.timestamp + part.start, ...(data ? { data } : {}) }), first && config ? { decoderConfig: config } : undefined);
           first = false;
+          sampleCount++;
         }
         if (mode === "remove") {
           // Its bytes are in the file now; should the file not get finished, this stretch is exported again.
@@ -1822,6 +2080,10 @@ async function exportWithPulse(
         }
         if (parts.testFailJoinAfter !== undefined && index + 1 >= parts.testFailJoinAfter) throw new Error("Test: the join was interrupted.");
         emit(true);
+      }
+      if (entries.length > 1) {
+        descriptionPatch.set(entries, switches);
+        opts.onEvent?.({ at: Date.now(), kind: "join", text: `The picture carries ${entries.length} codec configurations — the recording's own for the copied footage, the encoder's for the re-encoded stretches — switching ${switches.length - 1} times; the file's index says which frames use which, and every keyframe carries its parameter sets as well` });
       }
       copied.close();
       tracker.endStep();
@@ -1862,6 +2124,8 @@ async function exportWithPulse(
     parts: manifest?.parts.length ?? 0,
     resumedFrom: resumeFrom,
     join: joinInfo,
+    copiedSeconds,
+    descriptions: descriptionPatch.count,
   };
 }
 
@@ -2300,17 +2564,28 @@ export async function fixLevel(opts: FixLevelOptions): Promise<{ bytes: number; 
   const fileWriter = opts.writable.getWriter();
   const finalizing = { on: false };
   let bytes = 0;
+  // A picture with more than one codec configuration (copied footage beside re-encoded bridges) keeps its index
+  // saying which frames use which: the packets go across one for one, so the sample numbers hold.
+  const patch = new DescriptionPatch();
+  const descriptions = await readSampleDescriptions(file);
+  if (descriptions && descriptions.entries.length > 1) patch.set(descriptions.entries.map((e) => e.box), descriptions.switches.map(({ sample, entry }) => ({ sample, entry })));
+  const put = async (chunk: StreamTargetChunk) => {
+    if (finalizing.on) patchKindType(chunk.data);
+    bytes += chunk.data.byteLength;
+    await fileWriter.write(chunk);
+  };
   const counted = new WritableStream<StreamTargetChunk>({
-    write: async (chunk) => {
-      if (finalizing.on) patchKindType(chunk.data);
-      bytes += chunk.data.byteLength;
-      await fileWriter.write(chunk);
+    write: async (raw) => {
+      for (const chunk of finalizing.on ? patch.take(raw) : [raw]) await put(chunk);
     },
-    close: () => fileWriter.close(),
+    close: async () => {
+      for (const chunk of patch.release()) await put(chunk);
+      await fileWriter.close();
+    },
     abort: (reason) => fileWriter.abort(reason),
   });
   const output = new Output({
-    format: new Mp4OutputFormat({ fastStart: false }),
+    format: new Mp4OutputFormat({ fastStart: false, onMoov: patch.onMoov }),
     target: new StreamTarget(counted, { chunked: true }),
   });
   const copied = new EncodedVideoPacketSource(codec);

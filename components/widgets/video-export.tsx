@@ -72,6 +72,9 @@ export interface DoneResult {
   parts: number;
   resumedFrom: number;
   joinMode?: JoinInfo["mode"];
+  /** Seconds of picture copied from the recordings as they are, and how many codec configurations the picture carries. */
+  copiedSeconds?: number;
+  descriptions?: number;
   skipped: { from: number; to: number; message: string }[];
   /** Stopped or failed: why, and what is kept. */
   message?: string;
@@ -175,7 +178,7 @@ export function ExportSummary({ name, auto, onName, folder, onPickFolder, lines,
           roughly <span className="font-mono text-ink">{fmtDuration(estimate.wallSeconds * 1000)}</span>
         </span>
         <span className="text-faint">{basis}</span>
-        {estimate.copySeconds > 0 && <span className="text-faint">{fmtTime(estimate.copySeconds)} passes through without re-encoding</span>}
+        {estimate.copySeconds > 0 && <span className="text-faint">{fmtTime(estimate.copySeconds)} copied as is, no re-encoding</span>}
       </div>
       <div className="flex flex-wrap items-center gap-1.5">
         <button type="button" onClick={onExport} disabled={busy || !hasClips || blockers.length > 0} className={cn(PRIMARY, "h-10 flex-1 justify-center px-5")} title={blockers[0] ?? "Write the file into the project folder"} data-export-run>
@@ -586,6 +589,7 @@ export function ExportDone({ done, busy, onDismiss, onAgain, onFiles, onRecheck,
             {ok ? (
               <>
                 {fmtBytes(done.bytes)} · {fmtTime(done.seconds)} · {done.codec} {done.height}p at {done.bitrateMbps} Mbps · AAC {done.audioKbps} kbps · took {fmtDuration(done.activeMs)}
+                {done.copiedSeconds ? ` · ${fmtTime(done.copiedSeconds)} copied as is` : ""}
                 {done.pausedMs > 500 ? ` (+${fmtDuration(done.pausedMs)} paused)` : ""}
                 {realtime > 0 ? ` at ${realtime.toFixed(2)}× realtime` : ""}
                 {pace ? `, ${pace}` : ""}

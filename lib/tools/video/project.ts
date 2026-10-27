@@ -65,6 +65,15 @@ export interface MediaRef {
   codec?: string;
   hasAudio?: boolean;
   sampleRate?: number;
+  /** Rotation the file asks players for, degrees; a recording is only copied as is when it needs none. */
+  rotation?: number;
+  /**
+   * Where the recording's keyframes fall (source seconds, presentation order), read from its index when it is linked.
+   * The export copies whole keyframe groups as they are and re-encodes only around cuts, transitions and titles; a
+   * recording without this list is re-encoded throughout, and `keyframeNote` says why none could be read.
+   */
+  keyframeTimes?: number[];
+  keyframeNote?: string;
 }
 
 export interface Clip {
@@ -1125,29 +1134,99 @@ export interface ExportSpan {
 const isNeutralGrade = (g: Grade) => g.lut === "none" && g.exposure === 0 && g.temperature === 0 && g.tint === 0 && g.contrast === 1 && g.saturation === 1;
 const isNeutralTransform = (t: Transform) => t.rotate === 0 && t.straighten === 0 && t.crop.x === 0 && t.crop.y === 0 && t.crop.w === 1 && t.crop.h === 1;
 
+/** Half a frame: a cut this close to a keyframe counts as on it. */
+export const keyTolerance = (fps?: number) => 0.5 / (fps && fps > 0 ? fps : 30);
+
+/** Why an unchanged stretch is re-encoded all the same: it runs from a cut to the next keyframe, or from the last keyframe to a cut. */
+export const BRIDGE_REASON = "cut between keyframes";
+/** Why a recording is re-encoded throughout until its index has been read. */
+export const KEYFRAMES_PENDING = "keyframes not read yet";
+
+/** The first keyframe at or after `t`, and the last one at or before it, in a sorted list. */
+export function keyAtOrAfter(times: number[], t: number): number | null {
+  let lo = 0, hi = times.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (times[mid] < t) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo < times.length ? times[lo] : null;
+}
+export function keyAtOrBefore(times: number[], t: number): number | null {
+  let lo = 0, hi = times.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (times[mid] <= t) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo > 0 ? times[lo - 1] : null;
+}
+
 /**
- * Which parts of the timeline can be stream-copied from the source and which
- * must be re-encoded. Copy needs: no grade, no transform, no title or
- * watermark drawn over it, the same codec as the export, and smart copy on.
- * (Copying also has to start on a keyframe; the engine snaps to the previous
- * keyframe and encodes the few frames in between.)
+ * A copy span cut to whole keyframe groups. Copied packets must begin on a keyframe and end before one, so the
+ * stretch from a cut to the next keyframe, and from the last keyframe to the cut after it, is re-encoded instead
+ * (a bridge, the same frames one generation down). A cut within half a frame of a keyframe counts as on it; a
+ * span that holds no whole group is a bridge from end to end. Spans of other kinds pass through untouched.
+ */
+export function splitAtKeyframes(span: ExportSpan, times: number[] | undefined, fps?: number): ExportSpan[] {
+  if (span.kind !== "copy") return [span];
+  if (!times?.length) return [{ ...span, kind: "encode", reasons: [KEYFRAMES_PENDING] }];
+  const tol = keyTolerance(fps);
+  const a = span.sourceIn, b = span.sourceOut;
+  const at = (sIn: number, sOut: number, kind: SpanKind): ExportSpan => ({ ...span, kind, reasons: kind === "copy" ? [] : [BRIDGE_REASON], sourceIn: sIn, sourceOut: sOut, start: span.start + (sIn - a), end: span.start + (sOut - a), speed: 1 });
+  const k1 = keyAtOrAfter(times, a - tol), k2 = keyAtOrBefore(times, b + tol);
+  // Copying needs two keyframes in the span, one to start on and one to stop before.
+  if (k1 === null || k2 === null || k2 <= k1 + tol) return [at(a, b, "encode")];
+  const copyIn = k1 <= a + tol ? a : k1, copyOut = k2 >= b - tol ? b : k2;
+  const out: ExportSpan[] = [];
+  if (copyIn > a) out.push(at(a, copyIn, "encode"));
+  out.push(at(copyIn, copyOut, "copy"));
+  if (copyOut < b) out.push(at(copyOut, b, "encode"));
+  return out;
+}
+
+/** Neighbouring re-encoded spans of one clip, contiguous in the footage, as one span (a transition window and its bridges, say). */
+export function mergeAdjacentSpans(spans: ExportSpan[]): ExportSpan[] {
+  const out: ExportSpan[] = [];
+  for (const s of spans) {
+    const prev = out[out.length - 1];
+    if (prev && prev.kind === "encode" && s.kind === "encode" && prev.clipId === s.clipId && prev.speed === s.speed && Math.abs(prev.end - s.start) < 1e-6 && Math.abs(prev.sourceOut - s.sourceIn) < 1e-6) {
+      out[out.length - 1] = { ...prev, end: s.end, sourceOut: s.sourceOut, reasons: [...new Set([...prev.reasons, ...s.reasons])] };
+      continue;
+    }
+    out.push({ ...s });
+  }
+  return out;
+}
+
+/**
+ * Which parts of the timeline are copied from the recording as they are and which are re-encoded. Copying needs:
+ * smart copy on, no grade, no transform, no watermark, the recording's own size, frame rate and codec in the export,
+ * and the recording's keyframes read. Within such a clip, a title or a transition re-encodes only the frames it
+ * covers, and every copied stretch is then cut to whole keyframe groups (see `splitAtKeyframes`): the few frames
+ * between a cut and the keyframe beside it are re-encoded as a bridge. Neighbouring re-encoded spans merge.
  */
 export function planExport(p: Project): ExportSpan[] {
   const spans: ExportSpan[] = [];
   const placed = placeClips(p.clips);
   const windows = transitionWindows(placed, p.media);
+  const first = p.media[placed[0]?.media ?? ""];
   const sameCodec = (m: MediaRef | undefined) => !!m?.codec && m.codec.startsWith(p.export.codec);
   for (const c of placed) {
     const reasons: string[] = [];
+    const m = p.media[c.media];
     if (!p.export.smartCopy) reasons.push("smart copy off");
     if (!isNeutralGrade(c.grade)) reasons.push("colour grade");
     if (!isNeutralTransform(c.transform)) reasons.push("rotate / crop");
-    if (!sameCodec(p.media[c.media])) reasons.push(`source is ${p.media[c.media]?.codec ?? "unknown"}, export is ${p.export.codec}`);
+    if (!sameCodec(m)) reasons.push(`source is ${m?.codec ?? "unknown"}, export is ${p.export.codec}`);
     if (p.export.resolution !== "source") reasons.push("scaled output");
+    if (m && first && m !== first && (m.width !== first.width || m.height !== first.height || m.fps !== first.fps)) reasons.push("size or frame rate differs from the first recording");
+    if (m?.rotation) reasons.push("rotated recording");
     if (p.watermark.media) reasons.push("watermark");
     const speed = clipSpeed(c);
     if (speed !== 1) reasons.push(`speed ${speed}×`);
     if (c.introRole) reasons.push(c.introRole === "card" ? "intro title card" : "intro scene");
+    if (!reasons.length && m && !m.keyframeTimes?.length) reasons.push(m.keyframeNote ?? KEYFRAMES_PENDING);
     const overlays = p.titles.filter((t) => t.start < c.end && t.start + t.duration > c.start);
     if (reasons.length) {
       spans.push({ kind: "encode", clipId: c.id, sourceIn: c.in, sourceOut: c.out, start: c.start, end: c.end, reasons, speed });
@@ -1169,12 +1248,16 @@ export function planExport(p: Project): ExportSpan[] {
   }
   // A partial export keeps only what falls inside the range, trimming spans at its edges.
   const range = exportRange(p);
-  if (!range) return spans;
-  return spans.flatMap((s) => {
-    const s0 = Math.max(s.start, range.from), e0 = Math.min(s.end, range.to);
-    if (e0 - s0 <= 1e-6) return [];
-    return [{ ...s, sourceIn: s.sourceIn + (s0 - s.start) * s.speed, sourceOut: s.sourceOut - (s.end - e0) * s.speed, start: s0, end: e0 }];
-  });
+  const ranged = !range
+    ? spans
+    : spans.flatMap((s) => {
+        const s0 = Math.max(s.start, range.from), e0 = Math.min(s.end, range.to);
+        if (e0 - s0 <= 1e-6) return [];
+        return [{ ...s, sourceIn: s.sourceIn + (s0 - s.start) * s.speed, sourceOut: s.sourceOut - (s.end - e0) * s.speed, start: s0, end: e0 }];
+      });
+  // Copied stretches run keyframe to keyframe; what a cut leaves between is a bridge.
+  const media = (s: ExportSpan) => p.media[p.clips.find((c) => c.id === s.clipId)?.media ?? ""];
+  return mergeAdjacentSpans(ranged.flatMap((s) => splitAtKeyframes(s, media(s)?.keyframeTimes, media(s)?.fps)));
 }
 
 export interface ExportEstimate {
@@ -1209,8 +1292,12 @@ export function exportFingerprint(p: Project): string {
   const { updatedAt, ...rest } = p as Project & { updatedAt?: number };
   void updatedAt;
   // The doctor and review settings do not shape the file, and projects saved before they existed keep their fingerprints.
+  // A recording's keyframe list and rotation only decide what is copied and what is re-encoded, never the frames
+  // themselves, so filling them in later keeps an export's finished parts continuable.
   const text = JSON.stringify(rest, function (this: unknown, key: string, value: unknown) {
-    return (key === "check" || key === "review") && this === rest.export ? undefined : value;
+    if ((key === "check" || key === "review") && this === rest.export) return undefined;
+    if (key === "keyframeTimes" || key === "keyframeNote" || key === "rotation") return undefined;
+    return value;
   });
   let h = 0x811c9dc5;
   for (let i = 0; i < text.length; i++) {

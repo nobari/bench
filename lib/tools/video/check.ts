@@ -57,13 +57,26 @@ export interface TrackCheck {
   /** Whether the track delays its start through an empty edit (mediaTime -1 first). */
   emptyEdit: boolean;
   hasCtts: boolean;
-  /** Video with a version-1 ctts carrying negative offsets: frames placed before their predecessors. */
+  /** Video with a version-1 ctts carrying negative offsets (B-frames written with the decode time ahead of the picture time). */
   negativeCtts: boolean;
+  /**
+   * Presentation times that clash: two samples on one instant, or one before the start of the track, after the
+   * composition offsets are applied. Negative offsets by themselves are legal; this is what actually breaks a player.
+   */
+  ptsConflicts: number;
   /** Sum of stsz, bytes. */
   bytes: number;
   /** The stsd entry's fourcc, e.g. "hvc1", "avc1", "mp4a". */
   codec: string;
   entry: SampleEntryInfo;
+  /**
+   * Sample descriptions in the stsd: one for most files; two when the Video Editor copied the recording's own
+   * packets and re-encoded bridges around the cuts, each with its own codec parameters.
+   */
+  descriptions: number;
+  /** Where the samples switch from one description to another (seconds), and how many of those switches do not land on a keyframe. */
+  switchAt: number[];
+  switchesOffKey: number;
   /** Video only: timeline positions (seconds) of the irregular frames, up to 2,000 — where the cuts are. */
   irregularAt: number[];
   /** Video with an stss: the longest stretch between keyframes (or from the last one to the end), seconds; null without an stss. */
@@ -215,6 +228,28 @@ function readDeltas(b: Uint8Array, stts: Box): Uint32Array {
     k += c;
   }
   return deltas;
+}
+/** Every sample's composition offset (ticks), expanded; all zero without a ctts. */
+function readOffsets(b: Uint8Array, ctts: Box | undefined, samples: number): Int32Array {
+  const out = new Int32Array(samples);
+  if (!ctts) return out;
+  const v = fullBoxVersion(b, ctts), n = u32(b, ctts.start + 4);
+  let k = 0;
+  for (let i = 0; i < n && k < samples; i++) {
+    const c = u32(b, ctts.start + 8 + i * 8), d = v === 1 ? i32(b, ctts.start + 12 + i * 8) : u32(b, ctts.start + 12 + i * 8);
+    out.fill(d, k, Math.min(samples, k + c));
+    k += c;
+  }
+  return out;
+}
+/** Each sample's presentation time in seconds: decode time plus composition offset. */
+function presentationTimes(deltas: Uint32Array, offsets: Int32Array, timescale: number): Float64Array {
+  const times = new Float64Array(deltas.length);
+  for (let i = 0, acc = 0; i < deltas.length; i++) {
+    times[i] = (acc + offsets[i]) / (timescale || 1);
+    acc += deltas[i];
+  }
+  return times;
 }
 function readTags(b: Uint8Array, moov: Box[]): Record<string, string> {
   const tags: Record<string, string> = {};
@@ -417,8 +452,32 @@ function readTrack(b: Uint8Array, trak: Box): TrackInfo | null {
     const cn = u32(b, ctts.start + 4);
     for (let i = 0; i < cn && !negativeCtts; i++) if (i32(b, ctts.start + 12 + i * 8) < 0) negativeCtts = true;
   }
+  // Where the picture times actually clash: the same instant twice, or before the track's start.
+  let ptsConflicts = 0;
+  if (ctts && kind === "video") {
+    const pts = presentationTimes(deltas, readOffsets(b, ctts, deltas.length), 1);
+    const sorted = Float64Array.from(pts).sort();
+    for (let i = 0; i < sorted.length; i++) if (sorted[i] < 0 || (i > 0 && sorted[i] === sorted[i - 1])) ptsConflicts++;
+  }
   const stco = find(stbl.kids, "stco"), co64 = find(stbl.kids, "co64");
   const firstChunk = co64 && u32(b, co64.start + 4) > 0 ? u64(b, co64.start + 8) : stco && u32(b, stco.start + 4) > 0 ? u32(b, stco.start + 8) : 0;
+  // Which description each sample uses: the stsc runs say so chunk by chunk; a switch must sit on a keyframe.
+  const descriptions = stsd && stsd.start + 8 <= stsd.end ? u32(b, stsd.start + 4) : 0;
+  const switchAt: number[] = [];
+  let switchesOffKey = 0;
+  if (descriptions > 1) {
+    const stsc = find(stbl.kids, "stsc");
+    const chunkCount = co64 ? u32(b, co64.start + 4) : stco ? u32(b, stco.start + 4) : 0;
+    const keys = new Set<number>();
+    if (stss) for (let i = 0, n = u32(b, stss.start + 4); i < n; i++) keys.add(u32(b, stss.start + 8 + i * 4) - 1);
+    const times = presentationTimes(deltas, readOffsets(b, ctts, deltas.length), timescale);
+    for (const sw of descriptionSwitches(b, stsc, chunkCount)) {
+      if (sw.sample >= deltas.length) break;
+      if (sw.sample === 0) continue;
+      if (switchAt.length < 2000) switchAt.push(times[sw.sample]);
+      if (stss && !keys.has(sw.sample)) switchesOffKey++;
+    }
+  }
   const elstBox = find(find(trak.kids, "edts")?.kids, "elst");
   const elst = elstBox ? readElst(b, elstBox) : null;
   const tv = fullBoxVersion(b, tkhd);
@@ -444,13 +503,284 @@ function readTrack(b: Uint8Array, trak: Box): TrackInfo | null {
       emptyEdit: !!elst && elst.length > 0 && elst[0].mediaTime === -1,
       hasCtts: !!ctts,
       negativeCtts,
+      ptsConflicts,
       bytes,
       codec,
       entry: readSampleEntry(b, stsd, kind),
       irregularAt,
       maxKeyGapS: kind === "video" && stss ? readKeyGap(b, stss, deltas, timescale) : null,
+      descriptions,
+      switchAt,
+      switchesOffKey,
     },
   };
+}
+
+/* ------------------------------------------------------ sample descriptions */
+
+/** The chunk runs of an stsc, expanded: each chunk's first sample, its sample count and its description (1-based). */
+function chunkRuns(b: Uint8Array, stsc: Box | undefined, chunkCount: number): { first: number; count: number; desc: number }[] {
+  const out: { first: number; count: number; desc: number }[] = [];
+  if (!stsc) return out;
+  const n = u32(b, stsc.start + 4);
+  const runs: { firstChunk: number; per: number; desc: number }[] = [];
+  for (let i = 0; i < n; i++) runs.push({ firstChunk: u32(b, stsc.start + 8 + i * 12) - 1, per: u32(b, stsc.start + 12 + i * 12), desc: u32(b, stsc.start + 16 + i * 12) });
+  let sample = 0;
+  for (let r = 0; r < runs.length; r++) {
+    const end = r + 1 < runs.length ? runs[r + 1].firstChunk : chunkCount;
+    for (let c = runs[r].firstChunk; c < end; c++) {
+      out.push({ first: sample, count: runs[r].per, desc: runs[r].desc });
+      sample += runs[r].per;
+    }
+  }
+  return out;
+}
+
+/** The samples at which the description index changes (0-based sample, 0-based entry), from the stsc runs. */
+function descriptionSwitches(b: Uint8Array, stsc: Box | undefined, chunkCount: number): { sample: number; entry: number }[] {
+  const out: { sample: number; entry: number }[] = [];
+  let last = -1;
+  for (const chunk of chunkRuns(b, stsc, chunkCount)) {
+    if (chunk.desc !== last) out.push({ sample: chunk.first, entry: chunk.desc - 1 });
+    last = chunk.desc;
+  }
+  return out;
+}
+
+/** One entry of a video stsd: the whole box, its codec configuration record (hvcC / avcC payload) and the WebCodecs codec string built from it. */
+export interface VideoDescription {
+  box: Uint8Array<ArrayBuffer>;
+  fourcc: string;
+  width: number;
+  height: number;
+  /** The decoder configuration record WebCodecs takes as `description`; null when the entry has none. */
+  description: Uint8Array<ArrayBuffer> | null;
+  codecString: string | null;
+}
+
+/** Every entry of a video stsd box. */
+function readVideoEntries(b: Uint8Array<ArrayBuffer>, stsd: Box): VideoDescription[] {
+  const out: VideoDescription[] = [];
+  const n = u32(b, stsd.start + 4);
+  let p = stsd.start + 8;
+  for (let i = 0; i < n && p + 8 <= stsd.end; i++) {
+    const size = u32(b, p), end = Math.min(stsd.end, p + Math.max(8, size));
+    const fourcc = latin1(b, p + 4, p + 8), start = p + 8;
+    const entry: VideoDescription = { box: b.slice(p, end), fourcc, width: start + 28 <= end ? u16(b, start + 24) : 0, height: start + 28 <= end ? u16(b, start + 26) : 0, description: null, codecString: null };
+    if (start + 78 <= end) {
+      for (const box of parseBoxes(b, start + 78, end, "stsd")) {
+        if (box.type === "hvcC") {
+          entry.description = b.slice(box.start, box.end);
+          entry.codecString = hevcCodecString(entry.description, fourcc);
+        } else if (box.type === "avcC") {
+          entry.description = b.slice(box.start, box.end);
+          entry.codecString = avcCodecString(entry.description, fourcc);
+        }
+      }
+    }
+    out.push(entry);
+    p = end;
+  }
+  return out;
+}
+
+/** The WebCodecs codec string an hvcC record describes (ISO 14496-15 Annex E): profile, compatibility flags, tier and level, constraint bytes. */
+export function hevcCodecString(hvcC: Uint8Array, fourcc = "hvc1"): string | null {
+  if (hvcC.length < 23) return null;
+  const space = (hvcC[1] >> 6) & 3, tier = hvcC[1] & 0x20 ? "H" : "L", profile = hvcC[1] & 0x1f;
+  const flags = u32(hvcC, 2);
+  let reversed = 0;
+  for (let i = 0; i < 32; i++) if (flags & (1 << i)) reversed |= 1 << (31 - i);
+  const constraints: string[] = [];
+  for (let i = 6; i < 12; i++) constraints.push(hvcC[i].toString(16).toUpperCase());
+  while (constraints.length && constraints[constraints.length - 1] === "0") constraints.pop();
+  const parts = [`${["", "A", "B", "C"][space]}${profile}`, (reversed >>> 0).toString(16).toUpperCase(), `${tier}${hvcC[12]}`, ...constraints];
+  return `${fourcc}.${parts.join(".")}`;
+}
+/** The WebCodecs codec string an avcC record describes: profile, constraint flags and level as two hex digits each. */
+export function avcCodecString(avcC: Uint8Array, fourcc = "avc1"): string | null {
+  if (avcC.length < 4) return null;
+  const hex = (v: number) => v.toString(16).padStart(2, "0").toUpperCase();
+  return `${fourcc}.${hex(avcC[1])}${hex(avcC[2])}${hex(avcC[3])}`;
+}
+
+export interface SampleDescriptions {
+  entries: VideoDescription[];
+  /** Where the description changes, in decode order: the first sample using each stretch's entry, and that keyframe's presentation time (seconds). */
+  switches: { sample: number; entry: number; time: number }[];
+  samples: number;
+}
+
+/**
+ * The video track's sample descriptions and where the samples switch between them. One entry for most files;
+ * the Video Editor writes two when it copies a recording's packets and re-encodes bridges around the cuts.
+ */
+export async function readSampleDescriptions(file: Blob): Promise<SampleDescriptions | null> {
+  const { bytes, tree } = await parseFile(file);
+  if (!bytes.length) return null;
+  for (const trak of findAll(tree, "trak")) {
+    const mdia = find(trak.kids, "mdia"), hdlr = find(mdia?.kids, "hdlr"), mdhd = find(mdia?.kids, "mdhd");
+    if (!hdlr || !mdhd || latin1(bytes, hdlr.start + 8, hdlr.start + 12) !== "vide") continue;
+    const stbl = find(find(mdia?.kids, "minf")?.kids, "stbl");
+    const stsd = find(stbl?.kids, "stsd"), stts = find(stbl?.kids, "stts"), stsc = find(stbl?.kids, "stsc"), ctts = find(stbl?.kids, "ctts");
+    const stco = find(stbl?.kids, "stco"), co64 = find(stbl?.kids, "co64");
+    if (!stsd || !stts) return null;
+    const entries = readVideoEntries(bytes, stsd);
+    const deltas = readDeltas(bytes, stts);
+    const { timescale } = timescaleAndDuration(bytes, mdhd);
+    const chunkCount = co64 ? u32(bytes, co64.start + 4) : stco ? u32(bytes, stco.start + 4) : 0;
+    // A switch's time is its keyframe's presentation time, which is what a packet reader reports for it.
+    const times = presentationTimes(deltas, readOffsets(bytes, ctts, deltas.length), timescale);
+    const switches = descriptionSwitches(bytes, stsc, chunkCount).filter((s) => s.sample < deltas.length).map((s) => ({ ...s, time: times[s.sample] }));
+    return { entries, switches, samples: deltas.length };
+  }
+  return null;
+}
+
+/**
+ * The moov of a file whose video samples came from more than one codec configuration, rewritten to say so: the
+ * stsd lists every entry, and the chunk table points each chunk at the entry its samples use, splitting a chunk
+ * where a switch falls inside one. The writer (mediabunny) knows one configuration per track, so a file that
+ * copies a recording's own packets and re-encodes bridges beside them gets its index corrected this way as it
+ * is written. `switches` are 0-based sample indices with the 0-based entry each stretch uses, in order; the
+ * media bytes are untouched.
+ */
+export function patchSampleDescriptions(moov: Uint8Array<ArrayBuffer>, entries: Uint8Array[], switches: { sample: number; entry: number }[]): Uint8Array<ArrayBuffer> {
+  const header = u32(moov, 0) === 1 ? 16 : 8;
+  const tree = parseBoxes(moov, header, moov.length, "");
+  const trak = findAll(tree, "trak").find((t) => {
+    const hdlr = find(find(t.kids, "mdia")?.kids, "hdlr");
+    return hdlr && latin1(moov, hdlr.start + 8, hdlr.start + 12) === "vide";
+  });
+  if (!trak) throw new Error("The index has no video track to rewrite.");
+  const stbl = find(find(find(trak.kids, "mdia")?.kids, "minf")?.kids, "stbl");
+  const stsd = find(stbl?.kids, "stsd"), stsc = find(stbl?.kids, "stsc"), stsz = find(stbl?.kids, "stsz");
+  const stco = find(stbl?.kids, "stco"), co64 = find(stbl?.kids, "co64");
+  if (!stbl || !stsd || !stsc || !stsz || (!stco && !co64)) throw new Error("The index lacks a sample table this rewrite needs.");
+  const fixed = u32(moov, stsz.start + 4), n = u32(moov, stsz.start + 8);
+  const sizeOf = (i: number) => (fixed ? fixed : u32(moov, stsz.start + 12 + i * 4));
+  const offsetsBox = co64 ?? stco!;
+  const chunkCount = u32(moov, offsetsBox.start + 4);
+  const offsets: number[] = [];
+  for (let i = 0; i < chunkCount; i++) offsets.push(co64 ? u64(moov, co64.start + 8 + i * 8) : u32(moov, stco!.start + 8 + i * 4));
+  const chunks = chunkRuns(moov, stsc, chunkCount).map((c, i) => ({ ...c, offset: offsets[i] ?? 0, desc: 1 }));
+  // Split chunks at the switches, then hand each chunk the entry of the last switch at or before its first sample.
+  const ordered = [...switches].filter((s) => s.sample > 0 && s.sample < n).sort((a, b) => a.sample - b.sample);
+  for (const sw of ordered) {
+    const i = chunks.findIndex((c) => sw.sample >= c.first && sw.sample < c.first + c.count);
+    if (i < 0 || chunks[i].first === sw.sample) continue;
+    const c = chunks[i];
+    let bytes = 0;
+    for (let s = c.first; s < sw.sample; s++) bytes += sizeOf(s);
+    const head = { ...c, count: sw.sample - c.first };
+    const tail = { ...c, first: sw.sample, count: c.first + c.count - sw.sample, offset: c.offset + bytes };
+    chunks.splice(i, 1, head, tail);
+  }
+  const all = [{ sample: 0, entry: 0 }, ...ordered];
+  for (const c of chunks) {
+    let entry = 0;
+    for (const sw of all) if (sw.sample <= c.first) entry = sw.entry;
+    c.desc = entry + 1;
+  }
+  // stsd: every entry.
+  const stsdSize = 16 + entries.reduce((a, e) => a + e.length, 0);
+  const newStsd = new Uint8Array(stsdSize);
+  putU32(newStsd, 0, stsdSize);
+  newStsd.set([0x73, 0x74, 0x73, 0x64], 4);
+  putU32(newStsd, 12, entries.length);
+  let p = 16;
+  for (const e of entries) {
+    newStsd.set(e, p);
+    p += e.length;
+  }
+  stsd.replaced = newStsd;
+  // stsc: runs of (samples per chunk, description).
+  const runs: { firstChunk: number; per: number; desc: number }[] = [];
+  chunks.forEach((c, i) => {
+    const last = runs[runs.length - 1];
+    if (!last || last.per !== c.count || last.desc !== c.desc) runs.push({ firstChunk: i + 1, per: c.count, desc: c.desc });
+  });
+  const newStsc = new Uint8Array(16 + runs.length * 12);
+  putU32(newStsc, 0, newStsc.length);
+  newStsc.set([0x73, 0x74, 0x73, 0x63], 4);
+  putU32(newStsc, 12, runs.length);
+  runs.forEach((r, i) => {
+    putU32(newStsc, 16 + i * 12, r.firstChunk);
+    putU32(newStsc, 20 + i * 12, r.per);
+    putU32(newStsc, 24 + i * 12, r.desc);
+  });
+  stsc.replaced = newStsc;
+  // Chunk offsets: 64-bit when the file needs them (or already had them).
+  const wide = !!co64 || chunks.some((c) => c.offset >= 0x1_0000_0000);
+  const newOffsets = new Uint8Array(16 + chunks.length * (wide ? 8 : 4));
+  putU32(newOffsets, 0, newOffsets.length);
+  newOffsets.set(wide ? [0x63, 0x6f, 0x36, 0x34] : [0x73, 0x74, 0x63, 0x6f], 4);
+  putU32(newOffsets, 12, chunks.length);
+  chunks.forEach((c, i) => (wide ? putU64(newOffsets, 16 + i * 8, c.offset) : putU32(newOffsets, 16 + i * 4, c.offset)));
+  offsetsBox.replaced = newOffsets;
+  const root: Box = { type: "moov", at: 0, end: moov.length, start: header, kids: tree };
+  return serialize(moov, root);
+}
+
+/** The video sample descriptions of a file's index, as written. */
+export async function readVideoDescriptions(file: Blob): Promise<VideoDescription[]> {
+  return (await readSampleDescriptions(file))?.entries ?? [];
+}
+
+/**
+ * The parameter sets a configuration record carries — VPS, SPS and PPS for HEVC, SPS and PPS for H.264 — as
+ * length-prefixed NAL units, ready to go in front of a keyframe's own. A file whose picture switches between
+ * configurations carries them in-band on every keyframe as well as in the sample entries: Chrome's player reads
+ * one sample entry for the whole track and reconfigures its decoder only from what the bitstream says, while
+ * ffmpeg, VLC and Apple's players take either. Empty when the record holds none.
+ */
+export function parameterSetNals(entry: Pick<VideoDescription, "fourcc" | "description">): Uint8Array<ArrayBuffer> {
+  const h = entry.description;
+  const none = new Uint8Array(0);
+  if (!h) return none;
+  const hevc = entry.fourcc === "hvc1" || entry.fourcc === "hev1";
+  const lengthSize = hevc ? (h.length > 21 ? (h[21] & 3) + 1 : 4) : h.length > 4 ? (h[4] & 3) + 1 : 4;
+  const nals: Uint8Array[] = [];
+  const push = (nal: Uint8Array) => {
+    const out = new Uint8Array(lengthSize + nal.length);
+    for (let i = 0; i < lengthSize; i++) out[i] = (nal.length >>> (8 * (lengthSize - 1 - i))) & 0xff;
+    out.set(nal, lengthSize);
+    nals.push(out);
+  };
+  if (hevc) {
+    if (h.length < 23) return none;
+    let p = 23;
+    for (let i = 0, arrays = h[22]; i < arrays && p + 3 <= h.length; i++) {
+      const type = h[p] & 0x3f, count = (h[p + 1] << 8) | h[p + 2];
+      p += 3;
+      for (let j = 0; j < count && p + 2 <= h.length; j++) {
+        const len = (h[p] << 8) | h[p + 1];
+        if (type >= 32 && type <= 34) push(h.subarray(p + 2, p + 2 + len));
+        p += 2 + len;
+      }
+    }
+  } else {
+    if (h.length < 7) return none;
+    let p = 5;
+    for (let i = 0, sps = h[p++] & 0x1f; i < sps && p + 2 <= h.length; i++) {
+      const len = (h[p] << 8) | h[p + 1];
+      push(h.subarray(p + 2, p + 2 + len));
+      p += 2 + len;
+    }
+    if (p >= h.length) return none;
+    for (let i = 0, pps = h[p++]; i < pps && p + 2 <= h.length; i++) {
+      const len = (h[p] << 8) | h[p + 1];
+      push(h.subarray(p + 2, p + 2 + len));
+      p += 2 + len;
+    }
+  }
+  const out = new Uint8Array(nals.reduce((a, n) => a + n.length, 0));
+  let p = 0;
+  for (const n of nals) {
+    out.set(n, p);
+    p += n.length;
+  }
+  return out;
 }
 
 /** Read the index of an MP4 and say what is wrong with it, and what is merely worth knowing. */
@@ -506,8 +836,8 @@ export async function checkMp4(file: Blob): Promise<Mp4Check> {
       const ms = movie.timescale ? (c.elst![0].segDur / movie.timescale) * 1000 : 0;
       problems.push(`The picture starts ${ms.toFixed(1)} ms late through an empty edit in its edit list`);
     } else if (c.elst && c.elst.length) notes.push(`The ${label} track has an edit list with ${c.elst.length} ${c.elst.length === 1 ? "entry" : "entries"}`);
-    if (t.negativeCtts) problems.push("The video has negative composition offsets: frames placed before their predecessors");
-    else if (c.hasCtts && c.kind === "video") notes.push("Composition offsets present (B-frames)");
+    if (c.kind === "video" && c.ptsConflicts) problems.push(`${fmtInt(c.ptsConflicts)} frame${c.ptsConflicts === 1 ? "" : "s"} placed on another frame's instant or before the start, once the composition offsets are applied`);
+    else if (c.hasCtts && c.kind === "video") notes.push(`Composition offsets present (B-frames)${t.negativeCtts ? ", some negative — legal in a version-1 table" : ""}`);
     const drift = c.durationS - durationS;
     if (Math.abs(drift) > 5) problems.push(`The ${label} track runs ${Math.abs(drift).toFixed(1)} s ${drift > 0 ? "longer" : "shorter"} than the movie`);
     else if (Math.abs(drift) > 1.5) notes.push(`The ${label} track runs ${Math.abs(drift).toFixed(1)} s ${drift > 0 ? "longer" : "shorter"} than the movie`);
@@ -515,6 +845,8 @@ export async function checkMp4(file: Blob): Promise<Mp4Check> {
       const fps = c.nominalDelta ? c.timescale / c.nominalDelta : 0;
       notes.push(`${fmtClock(c.durationS)}, ${fmtInt(c.samples)} frames${fps ? ` at ${fps.toFixed(fps % 1 ? 2 : 0)} fps` : ""}${c.codec ? ` (${c.codec})` : ""}`);
       if (c.keyframes !== null && c.keyframes > 0) notes.push(`${fmtInt(c.keyframes)} keyframe${c.keyframes === 1 ? "" : "s"}, one every ${(c.durationS / c.keyframes).toFixed(1)} s`);
+      if (c.descriptions > 1) notes.push(`${c.descriptions} codec configurations in the picture track, switching ${fmtInt(c.switchAt.length)} time${c.switchAt.length === 1 ? "" : "s"} — copied footage beside re-encoded bridges`);
+      if (c.switchesOffKey) problems.push(`${fmtInt(c.switchesOffKey)} switch${c.switchesOffKey === 1 ? "" : "es"} between codec configurations ${c.switchesOffKey === 1 ? "does" : "do"} not land on a keyframe: decoders cannot start the new configuration there`);
       if (c.irregular) notes.push(`${fmtInt(c.irregular)} frame${c.irregular === 1 ? "" : "s"} shorter or longer than a frame at cuts — legal`);
       if (c.shortFrames) notes.push(`${fmtInt(c.shortFrames)} of them under a fifth of a frame long`);
     } else if (c.kind === "audio") notes.push(`${fmtInt(c.samples)} audio frames at ${fmtInt(c.timescale)} Hz${c.codec ? ` (${c.codec})` : ""}`);

@@ -15,7 +15,7 @@
  */
 
 import { ALL_FORMATS, AudioSampleSink, BlobSource, EncodedPacketSink, Input, VideoSampleSink, type AudioSample } from "mediabunny";
-import { checkMp4, type Mp4Check, type TrackCheck } from "./check";
+import { checkMp4, readSampleDescriptions, type Mp4Check, type TrackCheck } from "./check";
 import { LoudnessMeter, YOUTUBE_LUFS, type Loudness } from "./loudness";
 
 export type DoctorTarget = "youtube" | "playback";
@@ -286,7 +286,8 @@ export function quickFindings(index: Mp4Check, facts: DoctorFacts, target: Docto
       const ms = t.elst![0].segDur > 0 && index.durationS > 0 ? (t.elst![0].segDur / (t.elst!.reduce((s, e) => s + e.segDur, 0) / index.durationS)) * 1000 : 0;
       push({ id: "empty-edit", severity: yt ? "error" : "warn", title: "The picture starts late through an empty edit", what: `The edit list delays the picture by ${ms.toFixed(1)} ms before the first frame shows.`, why: "An empty edit is legal, but it is one of the two differences between an export that stalled on YouTube and one that processed; some players ignore edit lists and start the picture early, others honour it and show black first. Detected from the elst box.", fix: repairFix });
     } else if (t.elst && t.elst.length > 1) push({ id: `elst-${t.kind}`, severity: "info", title: `The ${t.kind} track has an edit list with ${t.elst.length} entries`, what: "Several edits map the media onto the timeline.", why: "Edit lists are honoured by most players and by YouTube, but ignored by some; a file that needs none is safer. Detected from the elst box." });
-    if (t.kind === "video" && t.negativeCtts) push({ id: "negative-ctts", severity: "error", title: "Frames placed before their predecessors", what: "The composition offsets table carries negative values.", why: "A negative offset puts a frame earlier than the one decoded before it; ffmpeg reports backward timestamps and YouTube's processing stalled on a file like this (October 2026). Detected from a version-1 ctts box.", fix: REMUX_FIX });
+    if (t.kind === "video" && t.ptsConflicts) push({ id: "negative-ctts", severity: "error", title: "Frames placed on one another or before the start", what: `${plural(t.ptsConflicts, "frame")} land on another frame's instant or before the track begins once the composition offsets are applied.`, why: "ffmpeg reports backward or duplicate timestamps there and YouTube's processing stalled on a file like this (October 2026). Detected by applying the ctts offsets to the decode times.", fix: REMUX_FIX });
+    else if (t.kind === "video" && t.negativeCtts) push({ id: "negative-ctts-ok", severity: "info", title: "B-frames with negative composition offsets", what: "The composition offsets table (version 1) carries negative values: some frames are decoded ahead of their picture time, as B-frames are.", why: "Legal and read by ffmpeg, QuickTime and the browsers; every picture time is distinct and in order. A recording copied as is keeps its camera's B-frames, which is where these come from." });
     const drift = t.durationS - index.durationS;
     if (Math.abs(drift) > 5) push({ id: `drift-${t.kind}`, severity: "warn", title: `The ${t.kind} track runs ${Math.abs(drift).toFixed(1)} s ${drift > 0 ? "longer" : "shorter"} than the movie`, what: `Track ${fmtClock(t.durationS)}, movie ${fmtClock(index.durationS)}.`, why: "Picture and sound of different lengths end with one of them alone; a large gap usually means a track was cut short. Detected by comparing the track and movie headers." });
   }
@@ -295,6 +296,12 @@ export function quickFindings(index: Mp4Check, facts: DoctorFacts, target: Docto
   if (v && v.shortFrames) push({ id: "short-frames", severity: "info", title: `${plural(v.shortFrames, "frame")} under a fifth of a frame long`, what: `At cuts, the last frame of a clip is shown only until the next clip's first frame: ${plural(v.shortFrames, "such sliver")} in this file.`, why: "Legal and played correctly; a constant-rate re-encoder (ffmpeg's default output) collapses such a frame into its neighbour, which is harmless. Detected from the stts table." });
   if (index.layout !== "moov-last" && index.layout !== "moov-first") push({ id: "layout", severity: "warn", title: "The index sits in the middle of the file", what: "Neither at the front nor at the end.", why: "Unusual; most tools write it at one end. Players cope, but in-place tag and index edits cannot be done." });
   else if (!yt && index.layout === "moov-last") push({ id: "layout", severity: "info", title: "Index at the end of the file", what: "A player over a network has to fetch the end of the file before it can start.", why: "Local playback is unaffected; for streaming from a plain web server, a fast-start file (index first) begins immediately. YouTube does not mind either way." });
+
+  // --- codec configurations: a recording's own frames copied as they are, beside re-encoded bridges
+  if (v && v.descriptions > 1) {
+    push({ id: "descriptions", severity: "info", title: `${v.descriptions} codec configurations in the picture`, what: `The picture switches between codec configurations ${plural(v.switchAt.length, "time")}${v.switchAt.length ? ` (first at ${fmtClock(v.switchAt[0])})` : ""}: the recording's own frames, copied as they are, and re-encoded bridges around the cuts and transitions, each with its own parameter sets.`, why: "MP4 lets a track carry more than one sample description, with the index saying which frames use which, and the Video Editor writes the file this way so untouched footage is never re-encoded. ffmpeg-based processing (YouTube, VLC, Chrome) and QuickTime read such files; a player that honours only the first description would show the other stretches broken. Detected from the stsd and stsc tables." });
+    if (v.switchesOffKey) push({ id: "switch-off-key", severity: "error", title: `${plural(v.switchesOffKey, "codec switch")} not on a keyframe`, what: `The picture changes codec configuration at ${plural(v.switchesOffKey, "place")} where the frame is not a keyframe.`, why: "A decoder reconfigures at a switch and must start on a keyframe; anywhere else the picture breaks until the next keyframe. Detected by comparing the switches in the stsc table with the stss keyframe list.", at: v.switchAt, fix: REEXPORT_FIX });
+  }
 
   // --- codec parameters
   if (v && facts.video) {
@@ -371,8 +378,9 @@ export function probeSpots(v: TrackCheck | undefined, durationS: number): number
   if (!v || durationS <= 0) return [];
   const pixels = (v.entry.width ?? 0) * (v.entry.height ?? 0);
   const cap = pixels > 3840 * 2160 ? 120 : pixels > 1920 * 1080 ? 250 : 500;
-  const cuts = v.irregularAt.length <= cap ? v.irregularAt : Array.from({ length: cap }, (_, i) => v.irregularAt[Math.floor((i * v.irregularAt.length) / cap)]);
-  const spots = new Set<number>([0.5, Math.max(0.5, durationS - 0.5), ...cuts]);
+  const thin = (list: number[]) => (list.length <= cap ? list : Array.from({ length: cap }, (_, i) => list[Math.floor((i * list.length) / cap)]));
+  // Every switch between codec configurations is a spot too: that is where a decoder has to start afresh.
+  const spots = new Set<number>([0.5, Math.max(0.5, durationS - 0.5), ...thin(v.irregularAt), ...thin(v.switchAt)]);
   for (let t = 600; t < durationS - 30; t += 600) spots.add(t);
   return [...spots].filter((t) => t >= 0 && t <= durationS).sort((x, y) => x - y);
 }
@@ -403,7 +411,7 @@ async function fullScan(file: Blob, index: Mp4Check, facts: DoctorFacts, target:
       const frameDur = tc && tc.nominalDelta && tc.timescale ? tc.nominalDelta / tc.timescale : 1 / 30;
       const ordered = !!tc && !tc.hasCtts;
       let prev = -Infinity, n = 0, backward = 0, dup = 0, empty = 0;
-      const gaps: number[] = [], backAt: number[] = [];
+      const gaps: number[] = [], backAt: number[] = [], pts: number[] = [];
       try {
         for await (const p of sink.packets()) {
           if (signal?.aborted) throw abortError();
@@ -419,7 +427,7 @@ async function fullScan(file: Blob, index: Mp4Check, facts: DoctorFacts, target:
               if (backAt.length < 12) backAt.push(prev);
             }
           }
-          if (track.type === "video" && prev > -Infinity && p.timestamp - prev > frameDur * 2.5 && gaps.length < 12) gaps.push(prev);
+          if (track.type === "video") pts.push(p.timestamp);
           prev = p.timestamp;
           if ((n & 127) === 0) progress("Reading every packet", 0.05 + 0.5 * Math.min(1, readBytes / totalBytes));
         }
@@ -441,6 +449,11 @@ async function fullScan(file: Blob, index: Mp4Check, facts: DoctorFacts, target:
         const hasZero = !!tc?.zeroLength;
         packetProblems.push(`${track.type}: ${fmtInt(backward)} backward and ${fmtInt(dup)} repeated timestamps`);
         if (!hasZero) findings.push({ id: `order-${track.type}`, severity: "error", title: `${track.type === "video" ? "Frames" : "Samples"} out of order in the ${track.type} track`, what: `${backward ? `${fmtInt(backward)} timestamps step backwards` : ""}${backward && dup ? " and " : ""}${dup ? `${fmtInt(dup)} repeat the previous one` : ""}, first at ${listAt(backAt)}.`, why: "ffmpeg-based pipelines report a non-monotonic DTS and may abort or stall there; players drop or freeze. Detected by reading every packet in order.", at: backAt, fix: indexRepairable(index) ? REPAIR_FIX : REMUX_FIX });
+      }
+      if (track.type === "video") {
+        // In presentation order, so B-frames (decoded ahead of their picture time) do not read as gaps.
+        const sorted = Float64Array.from(pts).sort();
+        for (let i = 1; i < sorted.length && gaps.length < 12; i++) if (sorted[i] - sorted[i - 1] > frameDur * 2.5) gaps.push(sorted[i - 1]);
       }
       if (gaps.length) findings.push({ id: "gaps", severity: "warn", title: `${plural(gaps.length, "gap")} in the picture's timestamps`, what: `More than two and a half frames pass between one frame and the next, first at ${listAt(gaps)}.`, why: "A frozen picture for the length of the gap; harmless for an intentional hold, a sign of dropped frames otherwise. Detected by reading every packet.", at: gaps });
     }
@@ -484,22 +497,83 @@ async function fullScan(file: Blob, index: Mp4Check, facts: DoctorFacts, target:
       }
     } else checks.push({ id: "audio", title: "Soundtrack decoded", status: "skipped", detail: audioTrack ? "this browser has no decoder for the sound codec" : "no sound track" });
 
-    // 3. the picture decoded at the spots that matter
+    // 3. the picture decoded at the spots that matter — and, where the picture carries more than one codec
+    // configuration, through a decoder reconfigured at every switch, since mediabunny decodes with one only
     const videoTrack = await input.getPrimaryVideoTrack();
     if (videoTrack && (await videoTrack.canDecode())) {
       const spots = probeSpots(v, facts.durationS);
       const sink = new VideoSampleSink(videoTrack);
+      const descs = v && v.descriptions > 1 ? await readSampleDescriptions(file) : null;
+      const base = descs ? await videoTrack.getDecoderConfig() : null;
+      const frameS = facts.video?.fps ? 1 / facts.video.fps : 1 / 30;
+      /** Frames decoded in [from, to) from the keyframe before `from`, switching configuration at each switch's keyframe. */
+      const decodeSwitching = async (from: number, to: number): Promise<number> => {
+        const psink = new EncodedPacketSink(videoTrack);
+        const key = (await psink.getKeyPacket(from)) ?? (await psink.getFirstKeyPacket());
+        if (!key) return 0;
+        const entryAt = (t: number) => {
+          let e = 0;
+          for (const s of descs!.switches) if (s.time <= t + frameS / 2) e = s.entry;
+          return e;
+        };
+        const state = { frames: 0, failure: null as Error | null, entry: -1, decoder: null as VideoDecoder | null };
+        const open = (e: number) => {
+          const d = descs!.entries[e];
+          const decoder = new VideoDecoder({
+            output: (f) => {
+              state.frames++;
+              f.close();
+            },
+            error: (err) => {
+              state.failure ??= err;
+            },
+          });
+          decoder.configure({ codec: d.codecString ?? base?.codec ?? "", codedWidth: d.width || base?.codedWidth, codedHeight: d.height || base?.codedHeight, description: d.description ?? undefined, hardwareAcceleration: "prefer-hardware" });
+          state.decoder = decoder;
+          state.entry = e;
+        };
+        try {
+          for await (const packet of psink.packets(key)) {
+            if (signal?.aborted) throw abortError();
+            if (packet.type === "key" && packet !== key && packet.timestamp >= to) break;
+            // A switch sits on a keyframe: that packet, and every one after it, decodes with the next configuration.
+            if (packet.type === "key") {
+              const e = entryAt(packet.timestamp);
+              if (e !== state.entry) {
+                if (state.decoder) {
+                  await state.decoder.flush();
+                  state.decoder.close();
+                }
+                open(e);
+              }
+            } else if (!state.decoder) open(entryAt(packet.timestamp));
+            if (state.failure) throw state.failure;
+            state.decoder!.decode(packet.toEncodedVideoChunk());
+          }
+          if (state.decoder) await state.decoder.flush();
+          if (state.failure) throw state.failure;
+        } finally {
+          try {
+            state.decoder?.close();
+          } catch {
+            /* already closed */
+          }
+        }
+        return state.frames;
+      };
       const failures: { t: number; message: string }[] = [];
       let frames = 0, done = 0;
       for (const t of spots) {
         if (signal?.aborted) throw abortError();
         const from = Math.max(0, t - 0.6), to = Math.min(facts.durationS, from + 1.2);
         try {
-          for await (const s of sink.samples(from, to)) {
-            s.close();
-            frames++;
-            if (signal?.aborted) throw abortError();
-          }
+          if (descs) frames += await decodeSwitching(from, to);
+          else
+            for await (const s of sink.samples(from, to)) {
+              s.close();
+              frames++;
+              if (signal?.aborted) throw abortError();
+            }
         } catch (e) {
           if (isAbort(e)) throw e;
           if (failures.length < 12) failures.push({ t, message: e instanceof Error ? e.message : String(e) });
@@ -508,7 +582,7 @@ async function fullScan(file: Blob, index: Mp4Check, facts: DoctorFacts, target:
         progress(`Decoding the picture at ${spots.length} spots`, 0.75 + 0.25 * (done / spots.length));
       }
       if (failures.length) findings.push({ id: "video-decode", severity: "error", title: `The picture fails to decode at ${plural(failures.length, "spot")}`, what: failures.slice(0, 3).map((f) => `${fmtClock(f.t)}: ${f.message}`).join("; ") + (failures.length > 3 ? "; …" : ""), why: "Corrupt frame data or a broken reference chain; players show artefacts or freeze there, processing fails. Detected by decoding a second of picture at each spot with the browser's decoder.", at: failures.map((f) => f.t), fix: REEXPORT_FIX });
-      checks.push({ id: "video", title: `Picture decoded at ${spots.length} spots`, status: failures.length ? "problem" : "ok", detail: failures.length ? `${failures.length} of ${spots.length} spots failed` : `${fmtInt(frames)} frames decoded around every cut, at both ends and every ten minutes` });
+      checks.push({ id: "video", title: `Picture decoded at ${spots.length} spots`, status: failures.length ? "problem" : "ok", detail: failures.length ? `${failures.length} of ${spots.length} spots failed` : `${fmtInt(frames)} frames decoded around every cut${descs ? " and every switch of codec configuration, with the right configuration on each side" : ""}, at both ends and every ten minutes` });
     } else checks.push({ id: "video", title: "Picture decoded", status: "skipped", detail: videoTrack ? "this browser has no decoder for the picture (an 8K HEVC file needs a hardware decoder)" : "no picture track" });
   } catch (e) {
     if (!isAbort(e)) throw e;

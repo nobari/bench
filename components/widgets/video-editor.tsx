@@ -8,7 +8,7 @@ import { gainToReach, YOUTUBE_LUFS, type Loudness } from "@/lib/tools/video/loud
 import { drawTransition } from "@/lib/tools/video/transitions";
 import { LUT_OPTIONS, buildDlogLut, deriveLut, fetchOfficialLut, lutToCube, parseCube, type Lut3D } from "@/lib/tools/video/lut";
 import { fmtBytes, fmtDuration, fmtMs, type ExportProgress, type SpeedPriors, type StepProgress } from "@/lib/tools/video/progress";
-import { buildProxy, drawOverlays, encoderSupport, exportProject, fixLevel, Grader, MAX_AUDIBLE_SPEED, measureFile, measureLoudness, MIN_AUDIBLE_SPEED, probe, renderFrame, renderSceneThumbs, scanMoments, scanMotion, Steadier, type ExportFault, type ExportManifest, type PartStore } from "@/lib/tools/video/engine";
+import { buildProxy, drawOverlays, encoderSupport, exportProject, fixLevel, Grader, MAX_AUDIBLE_SPEED, measureFile, measureLoudness, MIN_AUDIBLE_SPEED, probe, probeKeyframes, renderFrame, renderSceneThumbs, scanMoments, scanMotion, Steadier, type ExportFault, type ExportManifest, type PartStore } from "@/lib/tools/video/engine";
 import { INTRO_STYLES, addSceneAt, buildIntro, describeIntro, drawIntroFx, hasIntro, introCandidates, introFrameAt, introLength, introRegion, introStyle, mainClips, moveScene, pickMoments, removeIntro, removeScene, restyleIntro, sceneSecondsFor, scoreMoments, setSceneSeconds, shiftAfterIntro, styledGrade, sceneFootage, minSceneSeconds, introBlendAt } from "@/lib/tools/video/intro";
 import { ProjectStore, hasFileSystemAccess, AUTOSAVE_FILE, FRAMES_DIR, PROJECT_FILE, PROXY_DIR } from "@/lib/tools/video/store";
 import { cn } from "@/lib/utils";
@@ -847,7 +847,7 @@ export function VideoEditorWidget() {
   const testLine = `${Math.min(previewOpts.height, firstMedia?.height ?? previewOpts.height)}p · ${previewScopeLabel}`;
   const checkLabel = { full: "Full scan after export", quick: "Quick check after export", off: "No check after export" }[project.export.check ?? "full"];
   const optionsLine = `${(project.export.review ?? "on") === "on" ? "Checklist before export" : "No checklist"} · ${checkLabel} · ${notify ? "notifications on" : "no notifications"} · test render ${testLine}`;
-  const summaryLines = [range ? `${fmtTime(range.to - range.from)} of ${fmtTime(duration)}` : fmtTime(duration), `${outW}×${outH} ${codecLabel} ${project.export.bitrateMbps} Mbps`, `AAC ${project.export.audioBitrateKbps} kbps · ${SOUND_LABELS[project.sound ?? "footage"]}`];
+  const summaryLines = [range ? `${fmtTime(range.to - range.from)} of ${fmtTime(duration)}` : fmtTime(duration), `${outW}×${outH} ${codecLabel} ${project.export.bitrateMbps} Mbps`, `AAC ${project.export.audioBitrateKbps} kbps · ${SOUND_LABELS[project.sound ?? "footage"]}`, ...(estimate.copySeconds > 0 ? [`${fmtTime(estimate.copySeconds)} copied as is · ${fmtTime(estimate.encodeSeconds)} re-encoded`] : [])];
   const onPreflightAction = (id: string) => {
     if (id === "pick-folder") void chooseFolder();
     else if (id === "locate") void relinkFiles();
@@ -1408,6 +1408,7 @@ export function VideoEditorWidget() {
       await loadProxies(loaded.project);
       await primeMusic(loaded.project);
       setProjectState(loaded.project);
+      void fillKeyframesRef.current(loaded.project);
       setRecovered(loaded.recovered);
       setPlayhead(0);
       setSeekToken((x) => x + 1);
@@ -1461,7 +1462,9 @@ export function VideoEditorWidget() {
           continue;
         }
         const where = (await store.whereIs(h)) ?? undefined;
-        refs.push({ id, name: f.name, size: f.size, duration: info.duration, width: info.width, height: info.height, fps: info.fps, codec: info.codec ?? undefined, hasAudio: info.hasAudio, sampleRate: info.sampleRate, ...(where ? { where } : {}) });
+        // Where its keyframes fall, so the export can copy whole groups of it as they are.
+        const keys = await probeKeyframes(f).catch((e: unknown) => ({ times: [] as number[], note: e instanceof Error ? e.message : "the keyframes could not be read" }));
+        refs.push({ id, name: f.name, size: f.size, duration: info.duration, width: info.width, height: info.height, fps: info.fps, codec: info.codec ?? undefined, hasAudio: info.hasAudio, sampleRate: info.sampleRate, rotation: info.rotation, ...(keys.times.length ? { keyframeTimes: keys.times } : { keyframeNote: keys.note ?? "no keyframes read" }), ...(where ? { where } : {}) });
       } catch (e) {
         setError(`${f.name}: ${e instanceof Error ? e.message : "couldn't read the file."}`);
       }
@@ -1479,6 +1482,36 @@ export function VideoEditorWidget() {
     // Proxies in the background, one at a time.
     if (store.hasFolder) for (const m of ordered) await makeProxy(m, files.find((f) => f.name === m.name)!, previewRef.current);
   };
+
+  /**
+   * Recordings added before the editor read keyframes, or whose index could not be read then, get their keyframe
+   * list and rotation filled in one at a time in the background, so the export can copy them as they are. No undo
+   * step: nothing the user did changes, only what is known about the file.
+   */
+  const keyframeFill = useRef<Set<string>>(new Set());
+  const fillKeyframes = async (p: Project) => {
+    const patchMedia = (id: string, patch: Partial<MediaRef>) =>
+      setProjectState((q) => {
+        if (!q.media[id]) return q;
+        const next = { ...q, media: { ...q.media, [id]: { ...q.media[id], ...patch } } };
+        store.autosave(next);
+        return next;
+      });
+    for (const m of Object.values(p.media)) {
+      if (!m.width || m.keyframeTimes?.length || m.keyframeNote || keyframeFill.current.has(m.id)) continue;
+      const f = await store.getFile(m.id);
+      if (!f) continue;
+      keyframeFill.current.add(m.id);
+      try {
+        const [info, keys] = await Promise.all([probe(f), probeKeyframes(f)]);
+        patchMedia(m.id, { rotation: info.rotation, ...(keys.times.length ? { keyframeTimes: keys.times } : { keyframeNote: keys.note ?? "no keyframes read" }) });
+      } catch (e) {
+        patchMedia(m.id, { keyframeNote: e instanceof Error ? e.message : "the keyframes could not be read" });
+      }
+    }
+  };
+  const fillKeyframesRef = useRef(fillKeyframes);
+  fillKeyframesRef.current = fillKeyframes;
 
   const makeProxy = async (m: MediaRef, file: File, height: ProxyHeight, force = false) => {
     if (!height) {
@@ -1537,6 +1570,7 @@ export function VideoEditorWidget() {
     if (placed_where.size) setProject((p) => ({ ...p, media: Object.fromEntries(Object.entries(p.media).map(([id, m]) => [id, placed_where.has(id) ? { ...m, where: placed_where.get(id) } : m])) }));
     await store.persistHandles(project.id);
     await resolveMedia(project, true);
+    void fillKeyframesRef.current(project);
     const uses = linked.size;
     setStatus(files ? `Linked ${files} file${files === 1 ? "" : "s"}${uses > files ? ` to ${uses} uses (the same file appears more than once)` : ""}` : "None of those matched a missing file by name or size");
     return uses;
@@ -2450,7 +2484,7 @@ export function VideoEditorWidget() {
       notifyDone("Export finished", `${name} — ${fmtBytes(result.bytesWritten)} in ${fmtDuration(result.activeMs)}`, lastProgress.current ?? undefined);
       stopWatch();
       savePriors(profile, result.measured);
-      setDone({ kind: "done", at: Date.now(), name, folder, seconds: result.seconds, bytes: result.bytesWritten, activeMs: result.activeMs, pausedMs: result.pausedMs, estimatedMs: estimate.wallSeconds * 1000, codec: output.codec, width: outW, height: outH, bitrateMbps: output.bitrateMbps, audioKbps: project.export.audioBitrateKbps, parts: result.parts, resumedFrom: result.resumedFrom, joinMode: result.join?.mode, skipped: result.skipped, checking: (project.export.check ?? "full") === "off" ? null : { stage: "Reading the index", fraction: 0 } });
+      setDone({ kind: "done", at: Date.now(), name, folder, seconds: result.seconds, bytes: result.bytesWritten, activeMs: result.activeMs, pausedMs: result.pausedMs, estimatedMs: estimate.wallSeconds * 1000, codec: output.codec, width: outW, height: outH, bitrateMbps: output.bitrateMbps, audioKbps: project.export.audioBitrateKbps, parts: result.parts, resumedFrom: result.resumedFrom, joinMode: result.join?.mode, skipped: result.skipped, copiedSeconds: result.copiedSeconds, descriptions: result.descriptions, checking: (project.export.check ?? "full") === "off" ? null : { stage: "Reading the index", fraction: 0 } });
       void checkWritten(name);
       setFilesVersion((v) => v + 1);
       const stepMs = (kind: StepProgress["kind"]) => result.steps.filter((s) => s.kind === kind).reduce((a, s) => a + s.elapsedMs, 0);
@@ -2461,7 +2495,7 @@ export function VideoEditorWidget() {
       const redone = covered > 0 && !result.resumedFrom ? `${fmtTime(Math.max(0, Math.round(exportSeconds - covered)))} exported again; ` : "";
       const howNote = result.resumedFrom ? ` (resumed from ${fmtTime(result.resumedFrom)}; ${result.parts} parts joined${joinNote})` : result.parts > 1 ? ` (${redone}${result.parts} parts joined${joinNote})` : "";
       setStatus(
-        `Exported ${name}${howNote} — ${fmtBytes(result.bytesWritten)} in ${fmtDuration(result.activeMs)}${result.pausedMs > 500 ? ` plus ${fmtDuration(result.pausedMs)} paused` : ""} (${(result.seconds / Math.max(0.001, result.activeMs / 1000)).toFixed(2)}× realtime) · prepare ${fmtDuration(stepMs("prepare"))} · video ${fmtDuration(stepMs("video"))} · audio ${fmtDuration(stepMs("audio"))} · finish ${fmtDuration(stepMs("finalize"))}${skippedNote}`,
+        `Exported ${name}${howNote} — ${fmtBytes(result.bytesWritten)} in ${fmtDuration(result.activeMs)}${result.copiedSeconds > 0 ? ` (${fmtTime(result.copiedSeconds)} copied as is)` : ""}${result.pausedMs > 500 ? ` plus ${fmtDuration(result.pausedMs)} paused` : ""} (${(result.seconds / Math.max(0.001, result.activeMs / 1000)).toFixed(2)}× realtime) · prepare ${fmtDuration(stepMs("prepare"))} · video ${fmtDuration(stepMs("video"))} · audio ${fmtDuration(stepMs("audio"))} · finish ${fmtDuration(stepMs("finalize"))}${skippedNote}`,
       );
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
@@ -4346,13 +4380,13 @@ export function VideoEditorWidget() {
                         </label>
                       </div>
                       <Slider label="Video bitrate" value={project.export.bitrateMbps} min={10} max={300} step={5} onChange={(v) => setProject((p) => ({ ...p, export: { ...p.export, bitrateMbps: v } }))} format={(v) => `${v} Mbps`} />
-                      <label className="flex items-center gap-1.5 text-muted" title="Stretches with no grade, crop, title or transition are copied from the recording as they are, at the recording's own quality, instead of being decoded and encoded again">
+                      <label className="flex items-center gap-1.5 text-muted" title="Stretches with no grade, crop or scaling are copied from the recording as they are — whole keyframe groups, at the recording's own quality, with no decoding or encoding. Only the frames from a cut to the next keyframe, and those under a transition or a title, are re-encoded">
                         <input type="checkbox" checked={project.export.smartCopy} onChange={(e) => setProject((p) => ({ ...p, export: { ...p.export, smartCopy: e.target.checked } }))} className="accent-[var(--accent)]" data-export-smart-copy />
-                        Smart copy — pass untouched footage through without re-encoding
+                        Smart copy — copy untouched footage as it is; re-encode only around cuts, transitions and titles
                       </label>
                       <p className="text-[12px] text-faint" data-export-reencode>
+                        {estimate.copySeconds > 0 ? `${fmtTime(estimate.copySeconds)} copied as is · ` : ""}
                         {fmtTime(estimate.encodeSeconds)} re-encoded{spans.some((sp) => sp.kind === "encode") ? ` (${[...new Set(spans.flatMap((sp) => sp.reasons))].join(", ") || "titles"})` : ""}
-                        {estimate.copySeconds > 0 ? ` · ${fmtTime(estimate.copySeconds)} copied` : ""}
                       </p>
                     </Section>
                     <Section id="sound" title="Sound" summary={soundLine} open={!!openSections.sound} onToggle={() => toggleSection("sound")} hook="export-sound">
