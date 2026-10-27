@@ -8,7 +8,7 @@ import { gainToReach, YOUTUBE_LUFS, type Loudness } from "@/lib/tools/video/loud
 import { drawTransition } from "@/lib/tools/video/transitions";
 import { LUT_OPTIONS, buildDlogLut, deriveLut, fetchOfficialLut, lutToCube, parseCube, type Lut3D } from "@/lib/tools/video/lut";
 import { fmtBytes, fmtDuration, fmtMs, type ExportProgress, type SpeedPriors, type StepProgress } from "@/lib/tools/video/progress";
-import { buildProxy, drawOverlays, encoderSupport, exportProject, fixLevel, Grader, MAX_AUDIBLE_SPEED, measureFile, measureLoudness, MIN_AUDIBLE_SPEED, probe, probeKeyframes, renderFrame, renderSceneThumbs, scanMoments, scanMotion, Steadier, type ExportFault, type ExportManifest, type PartStore } from "@/lib/tools/video/engine";
+import { buildProxy, drawOverlays, encoderSupport, exportProject, fixLevel, Grader, MAX_AUDIBLE_SPEED, measureFile, measureLoudness, MIN_AUDIBLE_SPEED, probe, probeKeyframes, renderFrame, renderSceneThumbs, scanMoments, scanMotion, Steadier, type ExportFault, type ExportManifest, type PartStore, type JoinInfo } from "@/lib/tools/video/engine";
 import { INTRO_STYLES, addSceneAt, buildIntro, describeIntro, drawIntroFx, hasIntro, introCandidates, introFrameAt, introLength, introRegion, introStyle, mainClips, moveScene, pickMoments, removeIntro, removeScene, restyleIntro, sceneSecondsFor, scoreMoments, setSceneSeconds, shiftAfterIntro, styledGrade, sceneFootage, minSceneSeconds, introBlendAt } from "@/lib/tools/video/intro";
 import { ProjectStore, hasFileSystemAccess, AUTOSAVE_FILE, FRAMES_DIR, PROJECT_FILE, PROXY_DIR } from "@/lib/tools/video/store";
 import { cn } from "@/lib/utils";
@@ -16,7 +16,9 @@ import { DEFAULT_STOPS, cutOutStops, stillRuns, stillThreshold, stopKey, stopsOn
 import { parseTemplateImport, videoTemplate } from "@/lib/tools/video/template";
 import { useUnsavedWork } from "@/lib/unsaved-work";
 import { useKeepAwake } from "@/lib/keep-awake";
-import { ENOUGH_SPACE, LOW_SPACE, estimateFree, isSpaceError, overrideFreeSpace } from "@/lib/tools/video/space";
+import { audioBytesFor, isSpaceError, joinMode, joinNeed, partNeed, roomAdvice, SpaceStop } from "@/lib/tools/video/space";
+import { describeBrowser, exportReport, reportFileName, type ReportInput } from "@/lib/tools/video/export-report";
+import pkg from "@/package.json";
 import { PART_SECONDS } from "@/lib/tools/video/engine";
 import { GHOST, INPUT, PRIMARY, RANGE, SEL } from "./video-styles";
 import { ExportDone, ExportFiles, ExportRun, ExportSummary, PHASE_LABEL, Preflight, PresetsRow, Section, type DoneResult, type ExportJobView, type FileEntry, type FixState, type ResumableView, type RunEvent, type Skip, ExportReview } from "./video-export";
@@ -223,22 +225,26 @@ const PREVIEW_SPEEDS = [0.25, 0.5, 1, 1.5, 2, 4, 8, 12, 16];
 /** Tests can watch every frame time the export hands to the encoder (see window.__benchVideo.traceFrames). */
 let frameTrace: ((timelineT: number) => void) | null = null;
 /** Tests can shorten the parts and make the drive refuse writes (window.__benchVideo.exportOptions). */
-const testExportOptions: { partSeconds?: number; joinMode?: "keep" | "remove"; failJoinAfter?: number; noParts?: boolean; refuseAfterBytes?: number } = {};
-/** Tests: a writable that refuses like a full disk once this many bytes have gone through a run's writables. */
-let testBytes = 0;
-const refusingAfter = (target: WritableStream<import("mediabunny").StreamTargetChunk>, limit: number): WritableStream<import("mediabunny").StreamTargetChunk> => {
+const testExportOptions: { partSeconds?: number; joinMode?: "keep" | "remove"; failJoinAfter?: number; noParts?: boolean; refuseAfterBytes?: number; refuseFinalAfterBytes?: number } = {};
+/** Tests: a writable that refuses like a full disk once this many bytes have gone through a run's writables (all of them, or the file alone). */
+const testBytes = { all: 0, final: 0 };
+const refusingAfter = (target: WritableStream<import("mediabunny").StreamTargetChunk>, limit: number, count: "all" | "final"): WritableStream<import("mediabunny").StreamTargetChunk> => {
   const writer = target.getWriter();
   return new WritableStream<import("mediabunny").StreamTargetChunk>({
     write: async (chunk) => {
-      testBytes += chunk.data.byteLength;
-      if (testBytes > limit) throw new DOMException("Test: the disk is full", "QuotaExceededError");
+      testBytes.all += chunk.data.byteLength;
+      if (count === "final") testBytes.final += chunk.data.byteLength;
+      if (testBytes[count] > limit) throw new DOMException("Test: the disk is full", "QuotaExceededError");
       await writer.write(chunk);
     },
     close: () => writer.close(),
     abort: (reason) => writer.abort(reason),
   });
 };
-const testWritable = (w: WritableStream<import("mediabunny").StreamTargetChunk>) => (testExportOptions.refuseAfterBytes === undefined ? w : refusingAfter(w, testExportOptions.refuseAfterBytes));
+const testWritable = (w: WritableStream<import("mediabunny").StreamTargetChunk>, final = false) => {
+  if (final && testExportOptions.refuseFinalAfterBytes !== undefined) return refusingAfter(w, testExportOptions.refuseFinalAfterBytes, "final");
+  return testExportOptions.refuseAfterBytes === undefined ? w : refusingAfter(w, testExportOptions.refuseAfterBytes, "all");
+};
 
 /** YouTube wants 1280×720 thumbnails under 2 MB; the frame is scaled to this height (never upscaled). */
 const THUMB_HEIGHT = 720;
@@ -302,11 +308,14 @@ export function VideoEditorWidget() {
   /** How the last export ended, shown as a card until dismissed; the run's log; stretches skipped; the live frame. */
   const [done, setDone] = useState<DoneResult | null>(null);
   const [events, setEvents] = useState<RunEvent[]>([]);
+  const eventsRef = useRef<RunEvent[]>([]);
+  useEffect(() => {
+    eventsRef.current = events;
+  }, [events]);
   const [skipped, setSkipped] = useState<Skip[]>([]);
   const liveRef = useRef<HTMLCanvasElement | null>(null);
   const [liveAt, setLiveAt] = useState<number | null>(null);
-  /** What the pre-flight needs from the machine: free space, power, learned speeds. */
-  const [freeBytes, setFreeBytes] = useState<number | null>(null);
+  /** What the pre-flight needs from the machine: power, learned speeds. */
   const [onBattery, setOnBattery] = useState<boolean | null>(null);
   const [priors, setPriors] = useState<SpeedPriors | undefined>(undefined);
   /** Videos in the project folder besides the recordings, for the Files view. */
@@ -735,11 +744,7 @@ export function VideoEditorWidget() {
     }
   };
   // A stopped export's finished parts, found in the project folder: what the Export tab offers to resume.
-  const [resumable, setResumable] = useState<{ manifest: ExportManifest; folder: string; bytes: number } | null>(null);
-  const resumableRef = useRef(resumable);
-  useEffect(() => {
-    resumableRef.current = resumable;
-  }, [resumable]);
+  const [resumable, setResumable] = useState<{ manifest: ExportManifest; folder: string; bytes: number; largest: number } | null>(null);
   const loadResumable = useCallback(async () => {
     if (!store.hasFolder) return setResumable(null);
     for (const folder of await store.subFolders()) {
@@ -749,9 +754,14 @@ export function VideoEditorWidget() {
       try {
         const manifest = JSON.parse(text) as ExportManifest;
         if (manifest.version !== 1 || !Array.isArray(manifest.parts)) continue;
-        let bytes = 0;
-        for (const part of manifest.parts) if (!part.consumed) bytes += (await store.fileIn(part.file, folder))?.size ?? 0;
-        setResumable({ manifest, folder, bytes });
+        let bytes = 0, largest = 0;
+        for (const part of manifest.parts) {
+          if (part.consumed) continue;
+          const size = (await store.fileIn(part.file, folder))?.size ?? 0;
+          bytes += size;
+          largest = Math.max(largest, size);
+        }
+        setResumable({ manifest, folder, bytes, largest });
         return;
       } catch {
         /* not a manifest */
@@ -771,7 +781,6 @@ export function VideoEditorWidget() {
   }, [folder, loadResumable]);
   const discardParts = async () => {
     if (!resumable) return;
-    disarmSpaceResume();
     if (!window.confirm(`Remove the ${resumable.manifest.parts.length} kept part${resumable.manifest.parts.length === 1 ? "" : "s"} (${fmtBytes(resumable.bytes)})? A later export starts from the beginning.`)) return;
     await store.remove(null, resumable.folder);
     setResumable(null);
@@ -804,18 +813,6 @@ export function VideoEditorWidget() {
       active = false;
     };
   }, [speedProfile, outH, project.export.codec, done]);
-  // Free space, looked up while the Export tab shows and refreshed every so often.
-  useEffect(() => {
-    if (tab !== "export") return;
-    let active = true;
-    const look = () => void estimateFree().then((free) => active && setFreeBytes(free));
-    look();
-    const id = setInterval(look, 15000);
-    return () => {
-      active = false;
-      clearInterval(id);
-    };
-  }, [tab, done, job]);
   const fps = firstMedia?.fps || 30;
   const guess = defaultSpeeds((firstMedia?.width ?? outW) * (firstMedia?.height ?? outH), outW * outH);
   const estimate = useMemo(() => estimateExport(project, spans, (priors?.encode ?? guess.encode) * fps, 0.4, priors?.closeBytesPerS ?? guess.closeBytesPerS), [project, spans, priors, fps, guess.encode, guess.closeBytesPerS]);
@@ -827,17 +824,74 @@ export function VideoEditorWidget() {
         return { name: resumable.manifest.name, parts: live.length, bytes: resumable.bytes, endAt: live.length ? Math.max(...live.map((p) => p.end)) : 0, total: resumable.manifest.total, matches: resumable.manifest.fingerprint === fingerprint, folder: resumable.folder, consumedParts: consumed.length, consumedSeconds: consumed.reduce((a, p) => a + (p.end - p.start), 0), skipped: resumable.manifest.skipped.length };
       })()
     : null;
+  // Room the export wants on the drive holding the project folder: the parts, then the join on top of them. The
+  // browser cannot read a drive's free space (Chrome tells every site the same figure), so it is stated, not compared.
+  const roomPlan = useMemo(() => {
+    if (!project.clips.length) return null;
+    const seconds = range ? range.to - range.from : duration;
+    const audio = audioBytesFor(project.export.audioBitrateKbps, seconds);
+    const onePart = Math.min(estimate.bytes, partNeed(project.export.bitrateMbps, PART_SECONDS));
+    if (resumable) {
+      const live = resumable.manifest.parts.filter((p) => !p.consumed);
+      const covered = live.reduce((a, p) => a + (p.end - p.start), 0);
+      const rest = estimate.bytes * Math.max(0, 1 - covered / Math.max(1e-6, resumable.manifest.total));
+      const all = resumable.bytes + rest;
+      const mode = joinMode(all);
+      return { parts: rest, join: joinNeed(mode === "remove" ? [Math.max(resumable.largest, onePart)] : [all], audio, mode, all), mode, resumable: true };
+    }
+    const mode = joinMode(estimate.bytes);
+    return { parts: estimate.bytes, join: joinNeed(mode === "remove" ? [onePart] : [estimate.bytes], audio, mode, estimate.bytes), mode, resumable: false };
+  }, [project.clips.length, project.export.audioBitrateKbps, project.export.bitrateMbps, estimate.bytes, range, duration, resumable]);
   const checks = preflight(project, estimate, outH, {
     fileSystem: hasFileSystemAccess(),
     folderName: folder,
     missing: missingMedia.length,
-    freeBytes,
+    room: roomPlan,
     support: outSupport && outSupport.w === outW && outSupport.h === outH ? outSupport : null,
     loudness: loudness ? { integrated: loudness.result.integrated, peakDb: loudness.result.peakDb, stale: loudness.fingerprint !== audioKey, predicted: !!loudness.predicted, matchGain: Math.round(matchGain * 10) / 10 } : null,
     resumable: resumableView,
     onBattery,
   });
   const blockers = preflightBlocks(checks).map((i) => i.title);
+  /** The account of the last export, for the result card: what happened, step by step. */
+  const account = useMemo(() => {
+    if (!done) return null;
+    const d = done;
+    const looks = [...new Set(project.clips.map((c) => c.grade.lut))].filter((l) => l !== "none");
+    const input: ReportInput = {
+      version: pkg.version,
+      at: d.at,
+      browser: describeBrowser(navigator.userAgent),
+      result: { kind: d.kind, name: d.name, folder: d.folder, seconds: d.seconds, bytes: d.bytes, activeMs: d.activeMs, pausedMs: d.pausedMs, estimatedMs: d.estimatedMs, codec: d.codec, width: d.width, height: d.height, bitrateMbps: d.bitrateMbps, audioKbps: d.audioKbps, parts: d.parts, resumedFrom: d.resumedFrom, joinMode: d.joinMode, skipped: d.skipped, message: d.message, keptAt: d.keptAt, keptParts: d.keptParts, space: d.space },
+      steps: d.steps ?? [],
+      join: d.join,
+      events: d.events ?? [],
+      check: d.kind !== "done" ? null : d.checking ? undefined : d.report === undefined ? (d.checkError ? { ok: false, summary: d.checkError, findings: [] } : undefined) : d.report === null ? null : { ok: d.report.ok, summary: d.report.verdict, findings: d.report.findings.map((f) => f.title) },
+      settings: {
+        preset: project.export.preset,
+        codec: project.export.codec,
+        resolution: String(project.export.resolution),
+        bitrateMbps: project.export.bitrateMbps,
+        audioBitrateKbps: project.export.audioBitrateKbps,
+        clips: project.clips.length,
+        titles: project.titles.length,
+        music: project.music.length,
+        looks,
+        watermark: !!project.watermark.media,
+        sound: project.sound ?? "footage",
+        tags: Object.fromEntries(Object.entries(project.export.tags ?? {}).filter(([, v]) => typeof v === "string")) as Record<string, string>,
+        range: project.export.range,
+      },
+    };
+    return exportReport(input);
+  }, [done, project]);
+  const saveReport = async () => {
+    if (!done || !account) return "Nothing to save";
+    const name = reportFileName(done.name);
+    await store.writeText(name, account);
+    setFilesVersion((v) => v + 1);
+    return `Saved ${name} in the project folder`;
+  };
   const codecLabel = project.export.codec === "hevc" ? "HEVC" : "H.264";
   const presetLabel = { quality: "quality", balanced: "balanced", fast: "fast" }[project.export.preset];
   const pictureLine = `${codecLabel} · ${outW}×${outH} · ${project.export.bitrateMbps} Mbps · ${presetLabel} encoder · smart copy ${project.export.smartCopy ? "on" : "off"}${project.export.steadyLights && project.export.steadyLights !== "off" ? " · steady lights" : ""}`;
@@ -2204,7 +2258,6 @@ export function VideoEditorWidget() {
       addMusic,
       linkFiles,
       rememberFolder,
-      overrideFreeSpace,
       missing: () => store.missing(Object.keys(project.media)),
       getProject: () => project,
       getPlayhead: () => playhead,
@@ -2226,7 +2279,8 @@ export function VideoEditorWidget() {
       },
       exportOptions: (o: Partial<typeof testExportOptions>) => {
         Object.assign(testExportOptions, o);
-        testBytes = 0;
+        testBytes.all = 0;
+        testBytes.final = 0;
       },
       getJob: () => job,
       getResumable: () => resumable,
@@ -2251,88 +2305,18 @@ export function VideoEditorWidget() {
     if (pauseRef.current.paused !== paused) logEvent(paused ? "pause" : "resume", paused ? "Paused" : "Resumed");
     pauseRef.current.paused = paused;
     if (!paused) {
-      lowSpaceRef.current = false;
       for (const w of pauseRef.current.waiters) w();
       pauseRef.current.waiters = [];
     }
-    setJob((j) => (j ? { ...j, paused, ...(paused ? {} : { lowSpace: false }) } : j));
-  };
-  const lowSpaceRef = useRef(false);
-  /** Pause for lack of space and wait until the user resumes or the watchdog sees room again. */
-  const pauseForSpace = (free: number | null, why: string) => {
-    if (lowSpaceRef.current) return;
-    lowSpaceRef.current = true;
-    pauseRef.current.paused = true;
-    setJob((j) => (j ? { ...j, paused: true, lowSpace: true, freeBytes: free } : j));
-    logEvent("space", `Paused: the disk is almost full — ${why}`);
-    alertUser("Disk almost full — export paused", `${why} Free some space and it continues on its own.`);
+    setJob((j) => (j ? { ...j, paused } : j));
   };
   /**
-   * While a job writes, watch the space the browser reports: under 2 GB it pauses the job and asks for attention;
-   * once 3 GB are free again it resumes by itself. Returns a stop function.
+   * The drive refused a write: a writable that has refused once refuses for good, so the engine stops at the last
+   * finished part once this returns (the kept parts carry the export on); this tells the user at once.
    */
-  const watchSpace = () => {
-    const tick = async () => {
-      const free = await estimateFree();
-      if (free === null) return;
-      setJob((j) => (j ? { ...j, freeBytes: free } : j));
-      if (free < LOW_SPACE && !pauseRef.current.paused) pauseForSpace(free, `Only ${fmtBytes(free)} left as the browser reports it.`);
-      else if (lowSpaceRef.current && free >= ENOUGH_SPACE) {
-        setExportPaused(false);
-        document.title = pageTitleRef.current;
-        setStatus(`Space is back (${fmtBytes(free)} free) — continuing`);
-      }
-    };
-    void tick();
-    const id = setInterval(() => void tick(), 3000);
-    return () => clearInterval(id);
-  };
-  /**
-   * The drive refused a write: the output being written is lost (a writable that has refused once refuses for good),
-   * so the engine stops at the last finished part once this returns; the kept parts carry the export on.
-   */
-  const onWriteBlocked = async (error: unknown) => {
-    const free = await estimateFree();
-    const why = error instanceof Error && error.message ? error.message : "no room";
-    logEvent("space", `The drive refused a write (${why}) — stopping at the last finished part${free !== null ? `; the browser reports ${fmtBytes(free)} free on its own disk` : ""}`);
-    alertUser("Drive full — export stopped at the last finished part", "Free some room on the drive holding the project folder; the export carries on from the kept parts.");
-  };
-  // After a stop for space: once the browser reports room again, the export carries on from the kept parts by
-  // itself. Only when the browser's own disk was the short one — room there while a write was refused means the
-  // full drive is another one, and trying again would only fail again.
-  const spaceResumeRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const runExportRef = useRef<((resume: { manifest: ExportManifest; folder: string } | null) => Promise<void>) | null>(null);
-  const disarmSpaceResume = () => {
-    if (spaceResumeRef.current) clearInterval(spaceResumeRef.current);
-    spaceResumeRef.current = null;
-  };
-  const armSpaceResume = () => {
-    disarmSpaceResume();
-    spaceResumeRef.current = setInterval(() => {
-      void estimateFree().then((free) => {
-        if (free === null || free < ENOUGH_SPACE) {
-          setDone((d) => (d && d.space ? { ...d, freeBytes: free } : d));
-          return;
-        }
-        disarmSpaceResume();
-        const r = resumableRef.current;
-        if (!r) return;
-        setStatus(`Space is back (${fmtBytes(free)} free) — resuming from the kept parts`);
-        void runExportRef.current?.(r);
-      });
-    }, 3000);
-  };
-  useEffect(() => () => disarmSpaceResume(), []);
-  /** Before an export: warn when the browser reports less room than the file needs; the choice stays with the user. */
-  const spaceWarning = async (expectedBytes: number): Promise<boolean> => {
-    const free = await estimateFree();
-    if (free === null || expectedBytes <= free) return true;
-    try {
-      if ("Notification" in window && Notification.permission === "default") void Notification.requestPermission();
-    } catch {
-      /* ignore */
-    }
-    return window.confirm(`The file is expected to be about ${fmtBytes(expectedBytes)}, but the browser reports only ${fmtBytes(free)} free (it keeps a reserve, so the real figure may be a little higher).\n\nStart anyway? The export pauses itself when less than ${fmtBytes(LOW_SPACE)} remain and continues once you free space.`);
+  const onWriteBlocked = async (stop: SpaceStop) => {
+    logEvent("space", `${stop.message} Stopping at the last finished part.`);
+    alertUser("Drive full — export stopped", `${roomAdvice(stop.where, stop.need, stop.join)} Then press Resume.`);
   };
   /**
    * Export to the project folder. The video is written in parts (one every few minutes, plus whatever was done the
@@ -2420,15 +2404,11 @@ export function VideoEditorWidget() {
     const live = manifest.parts.filter((p) => !p.consumed);
     const covered = live.reduce((a, p) => a + (p.end - p.start), 0);
     const resumedFrom = live.length ? Math.max(...live.map((p) => p.end)) : 0;
-    // What this run still has to encode; the join at the end frees each part as it goes in when room is short.
-    if (!(await spaceWarning(estimate.bytes * (1 - covered / Math.max(1e-6, exportSeconds)) + estimate.bytes * (PART_SECONDS / Math.max(PART_SECONDS, exportSeconds))))) return;
     notifyAt.current = 0;
-    disarmSpaceResume();
     const abort = new AbortController();
     pauseRef.current = { paused: false, waiters: [] };
-    lowSpaceRef.current = false;
     autoSkipRef.current = false;
-    const stopWatch = watchSpace();
+    let joinSeen: JoinInfo | undefined;
     const output = { name, codec: project.export.codec.toUpperCase(), width: outW, height: outH, bitrateMbps: project.export.bitrateMbps, preset: project.export.preset, estimatedBytes: estimate.bytes };
     const profile = speedProfile;
     const partStore: PartStore = {
@@ -2451,7 +2431,7 @@ export function VideoEditorWidget() {
         project,
         getFile: (id) => store.getFile(id),
         logo,
-        writable: testWritable(writable as unknown as WritableStream<import("mediabunny").StreamTargetChunk>),
+        writable: testWritable(writable as unknown as WritableStream<import("mediabunny").StreamTargetChunk>, true),
         signal: abort.signal,
         priors: loadPriors(profile, `${outH}p ${project.export.codec.toUpperCase()}`),
         whilePaused: () => (pauseRef.current.paused ? new Promise<void>((r) => pauseRef.current.waiters.push(r)) : undefined),
@@ -2465,15 +2445,17 @@ export function VideoEditorWidget() {
               store: partStore,
               manifest,
               seconds: testExportOptions.partSeconds,
-              freeSpace: estimateFree,
-              onJoin: (join) => setJob((j) => (j ? { ...j, join } : j)),
+              onJoin: (join) => {
+                joinSeen = join;
+                setJob((j) => (j ? { ...j, join } : j));
+              },
               testJoinMode: testExportOptions.joinMode,
               testFailJoinAfter: testExportOptions.failJoinAfter,
             },
         onFault: askAboutFault,
         onProgress: (progress) => {
           setJob((j) => (j ? { ...j, fraction: progress.fraction, progress } : j));
-          if (!lowSpaceRef.current) document.title = `${(progress.fraction * 100).toFixed(1)}% · ${progress.paused ? "Paused" : "Exporting"} · Bench`;
+          document.title = `${(progress.fraction * 100).toFixed(1)}% · ${progress.paused ? "Paused" : "Exporting"} · Bench`;
           lastProgress.current = progress;
           maybeNotify(`Exporting ${name}`, progress);
         },
@@ -2482,9 +2464,8 @@ export function VideoEditorWidget() {
       await store.remove(null, partsFolder);
       setResumable(null);
       notifyDone("Export finished", `${name} — ${fmtBytes(result.bytesWritten)} in ${fmtDuration(result.activeMs)}`, lastProgress.current ?? undefined);
-      stopWatch();
       savePriors(profile, result.measured);
-      setDone({ kind: "done", at: Date.now(), name, folder, seconds: result.seconds, bytes: result.bytesWritten, activeMs: result.activeMs, pausedMs: result.pausedMs, estimatedMs: estimate.wallSeconds * 1000, codec: output.codec, width: outW, height: outH, bitrateMbps: output.bitrateMbps, audioKbps: project.export.audioBitrateKbps, parts: result.parts, resumedFrom: result.resumedFrom, joinMode: result.join?.mode, skipped: result.skipped, copiedSeconds: result.copiedSeconds, descriptions: result.descriptions, checking: (project.export.check ?? "full") === "off" ? null : { stage: "Reading the index", fraction: 0 } });
+      setDone({ kind: "done", at: Date.now(), name, folder, seconds: result.seconds, bytes: result.bytesWritten, activeMs: result.activeMs, pausedMs: result.pausedMs, estimatedMs: estimate.wallSeconds * 1000, codec: output.codec, width: outW, height: outH, bitrateMbps: output.bitrateMbps, audioKbps: project.export.audioBitrateKbps, parts: result.parts, resumedFrom: result.resumedFrom, joinMode: result.join?.mode, join: result.join, steps: lastProgress.current?.steps ?? [], events: [...eventsRef.current], skipped: result.skipped, copiedSeconds: result.copiedSeconds, descriptions: result.descriptions, checking: (project.export.check ?? "full") === "off" ? null : { stage: "Reading the index", fraction: 0 } });
       void checkWritten(name);
       setFilesVersion((v) => v + 1);
       const stepMs = (kind: StepProgress["kind"]) => result.steps.filter((s) => s.kind === kind).reduce((a, s) => a + s.elapsedMs, 0);
@@ -2504,19 +2485,24 @@ export function VideoEditorWidget() {
       const consumed = manifest.parts.length - keptParts.length;
       const parts = `${keptParts.length} part${keptParts.length === 1 ? "" : "s"}${consumed ? `; ${consumed} already joined into the unfinished file will be exported again` : ""}`;
       const aborted = (e as DOMException).name === "AbortError";
-      const space = !aborted && isSpaceError(e);
-      const freeNow = space ? await estimateFree() : null;
-      // Room on the browser's own disk while a write was refused: the full drive is the project folder's.
-      const elsewhere = freeNow !== null && freeNow >= ENOUGH_SPACE;
+      // The drive refused a write: the engine says where (a part, the join, the file) and what room that step wants.
+      const stop = e instanceof SpaceStop ? e : !aborted && isSpaceError(e) ? new SpaceStop(testExportOptions.noParts ? "file" : "part", null, e) : null;
+      const space = stop ? { where: stop.where, need: stop.need ?? (stop.where === "file" ? estimate.bytes : stop.where === "part" ? partNeed(project.export.bitrateMbps, testExportOptions.partSeconds ?? PART_SECONDS) : null), mode: stop.join?.mode, consumed } : undefined;
       if (!aborted || kept > 0) {
         const p = lastProgress.current;
-        setDone({ kind: aborted || (space && kept > 0) ? "stopped" : "failed", at: Date.now(), name, folder, seconds: exportSeconds, bytes: p?.bytesWritten ?? 0, activeMs: p?.elapsedMs ?? 0, pausedMs: p?.pausedMs ?? 0, estimatedMs: estimate.wallSeconds * 1000, codec: output.codec, width: outW, height: outH, bitrateMbps: output.bitrateMbps, audioKbps: project.export.audioBitrateKbps, parts: keptParts.length, resumedFrom, skipped: manifest.skipped, message: aborted ? "Stopped on request." : message, keptAt: kept, keptParts: keptParts.length, space, freeBytes: freeNow });
+        setDone({ kind: aborted || (stop && kept > 0) ? "stopped" : "failed", at: Date.now(), name, folder, seconds: exportSeconds, bytes: p?.bytesWritten ?? 0, activeMs: p?.elapsedMs ?? 0, pausedMs: p?.pausedMs ?? 0, estimatedMs: estimate.wallSeconds * 1000, codec: output.codec, width: outW, height: outH, bitrateMbps: output.bitrateMbps, audioKbps: project.export.audioBitrateKbps, parts: keptParts.length, resumedFrom, joinMode: joinSeen?.mode, join: joinSeen, steps: p?.steps ?? [], events: [...eventsRef.current], skipped: manifest.skipped, message: aborted ? "Stopped on request." : message, keptAt: kept, keptParts: keptParts.length, space });
       }
-      if (space) {
-        const where = elsewhere ? `The browser reports ${fmtBytes(freeNow)} free on its own disk, so the full drive is the one holding the project folder — free room there, then press Resume.` : "It continues on its own once 3 GB are free, or press Resume.";
-        setStatus(kept > 0 ? `Export stopped at ${fmtTime(kept)} of ${fmtTime(exportSeconds)}: the drive refused a write. ${parts} kept. ${where}` : `Export failed: the drive refused a write and nothing was finished yet. Free some room, then export again.`);
-        notifyDone("Drive full — export stopped", kept > 0 ? `Finished parts are kept — it resumes from ${fmtTime(kept)}.` : "Nothing was finished yet.", lastProgress.current ?? undefined);
-        if (kept > 0 && !elsewhere) armSpaceResume();
+      if (stop && space) {
+        const advice = roomAdvice(space.where, space.need, stop.join);
+        const again = consumed ? ` (the ${consumed} part${consumed === 1 ? "" : "s"} already in the unfinished file ${consumed === 1 ? "is" : "are"} exported again)` : "";
+        setStatus(
+          stop.where === "join"
+            ? `Export encoded to the end, but joining the ${manifest.parts.length} parts into the file failed: the drive refused a write. ${advice} Then press Resume — the join starts over and nothing else is encoded again${again}.`
+            : kept > 0
+              ? `Export stopped at ${fmtTime(kept)} of ${fmtTime(exportSeconds)}: the drive refused a write. ${parts} kept. ${advice} Then press Resume.`
+              : `Export failed: the drive refused a write and nothing was finished yet. ${advice} Then export again.`,
+        );
+        notifyDone(kept > 0 ? "Drive full — export stopped" : "Drive full — export failed", advice, lastProgress.current ?? undefined);
       } else if (aborted) {
         setStatus(kept > 0 ? `Export stopped at ${fmtTime(kept)} of ${fmtTime(exportSeconds)} — ${parts} kept. Resume continues from there; Discard removes them.` : "Export cancelled.");
       } else {
@@ -2525,14 +2511,10 @@ export function VideoEditorWidget() {
       }
       await loadResumable();
     } finally {
-      stopWatch();
       document.title = pageTitleRef.current;
       setJob(null);
     }
   };
-  useEffect(() => {
-    runExportRef.current = runExport;
-  });
   /** Once the user says "skip any that fail", the rest of this export skips without asking. */
   const autoSkipRef = useRef(false);
   const askAboutFault = (fault: ExportFault): Promise<"skip" | "stop"> => {
@@ -2584,9 +2566,6 @@ export function VideoEditorWidget() {
     const outW = firstMedia?.width && firstMedia.height ? Math.round((firstMedia.width * (outH / firstMedia.height)) / 2) * 2 : Math.round((outH * 16) / 9);
     const bitrateMbps = Math.max(1, Math.round(outH / 90));
     const seconds = scope ? scope.to - scope.from : duration;
-    if (!(await spaceWarning((bitrateMbps * 1e6 * seconds) / 8))) return;
-    lowSpaceRef.current = false;
-    const stopWatch = watchSpace();
     const preview: Project = { ...project, export: { ...project.export, resolution: outH, codec: "avc", bitrateMbps, preset: "fast", smartCopy: false, range: scope } };
     const name = `preview-${outH}p.mp4`;
     setJob({ kind: "export", label: "Test render", fraction: 0, abort, output: { name, codec: "AVC", width: outW, height: outH, bitrateMbps, preset: "fast", estimatedBytes: (bitrateMbps * 1e6 * seconds) / 8 }, paused: false });
@@ -2611,12 +2590,11 @@ export function VideoEditorWidget() {
         onPreview: drawLive,
         onProgress: (progress) => {
           setJob((j) => (j ? { ...j, fraction: progress.fraction, progress } : j));
-          if (!lowSpaceRef.current) document.title = `${(progress.fraction * 100).toFixed(1)}% · Test render · Bench`;
+          document.title = `${(progress.fraction * 100).toFixed(1)}% · Test render · Bench`;
           lastProgress.current = progress;
           maybeNotify("Rendering preview", progress);
         },
       });
-      stopWatch();
       notifyDone("Rendered preview ready", `${outW}×${outH}, ${fmtTime(scope?.from ?? 0)}–${fmtTime(scope?.to ?? duration)} — playing in the editor`, lastProgress.current ?? undefined);
       const file = await fh.getFile();
       const url = URL.createObjectURL(file), ms = result.activeMs;
@@ -2628,7 +2606,6 @@ export function VideoEditorWidget() {
     } catch (e) {
       if ((e as DOMException).name !== "AbortError") setError(e instanceof Error ? e.message : String(e));
     } finally {
-      stopWatch();
       document.title = pageTitleRef.current;
       setJob(null);
     }
@@ -3105,10 +3082,9 @@ export function VideoEditorWidget() {
         <ExportDone
           done={done}
           busy={!!job}
-          onDismiss={() => {
-            disarmSpaceResume();
-            setDone(null);
-          }}
+          account={account}
+          onSaveReport={saveReport}
+          onDismiss={() => setDone(null)}
           onAgain={() => {
             setDone(null);
             setTab("export");

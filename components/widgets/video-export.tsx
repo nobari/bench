@@ -8,8 +8,9 @@
 
 import { useState, type ReactNode, type RefObject } from "react";
 import Link from "next/link";
-import { AlertTriangle, Check, ChevronDown, ChevronRight, Circle, Download, Eye, FlaskConical, FolderOpen, Gauge, Info, Loader, Pause, Play, RotateCcw, Square, Trash2, X, XCircle } from "lucide-react";
-import { ENOUGH_SPACE } from "@/lib/tools/video/space";
+import { AlertTriangle, Check, ChevronDown, ChevronRight, Circle, Copy, Download, Eye, FileText, FlaskConical, FolderOpen, Gauge, Info, Loader, Pause, Play, RotateCcw, Save, Square, Trash2, X, XCircle } from "lucide-react";
+import { roomAdvice, type JoinMode, type SpaceWhere } from "@/lib/tools/video/space";
+import { reportFileName } from "@/lib/tools/video/export-report";
 import { cn } from "@/lib/utils";
 import { GHOST, PRIMARY, SEL } from "./video-styles";
 import { fmtBytes, fmtDelta, fmtDuration, fmtMs, type EstimateSource, type ExportProgress, type StepProgress } from "@/lib/tools/video/progress";
@@ -31,8 +32,6 @@ export interface ExportJobView {
   progress?: ExportProgress;
   output?: { name: string; codec: string; width: number; height: number; bitrateMbps: number; preset: string; estimatedBytes: number };
   paused?: boolean;
-  lowSpace?: boolean;
-  freeBytes?: number | null;
   fault?: { fault: ExportFault; resolve: (answer: "skip" | "stop", all?: boolean) => void };
   partsMode?: boolean;
   resumedFrom?: number;
@@ -80,9 +79,12 @@ export interface DoneResult {
   message?: string;
   keptAt?: number;
   keptParts?: number;
-  /** Stopped because the drive refused a write; the free space the browser reports for its own disk at that moment. */
-  space?: boolean;
-  freeBytes?: number | null;
+  /** Stopped because the drive refused a write: where, the room that step wants, the join's mode and the parts already consumed. */
+  space?: { where: SpaceWhere; need: number | null; mode?: JoinMode; consumed: number };
+  /** For the report: the steps and the log as they stood at the end, and the join when there was one. */
+  steps?: StepProgress[];
+  events?: RunEvent[];
+  join?: JoinInfo;
   /** The doctor's report on the written file (done exports only); null when the check is off. */
   report?: DoctorReport | null;
   /** While the doctor runs: its stage and fraction. */
@@ -294,8 +296,9 @@ export function ExportRun({ job, events, skipped, liveRef, liveAt, onPause, onRe
   const out = job.output;
   const steps = p?.steps ?? [];
   const running = steps.find((s) => s.status === "running");
-  const state: "running" | "paused" | "space" | "fault" = job.fault ? "fault" : job.lowSpace ? "space" : job.paused ? "paused" : "running";
-  const stateLabel = { running: "Running", paused: "Paused", space: "Waiting for disk space", fault: "A frame failed — waiting for you" }[state];
+  const state: "running" | "paused" | "fault" = job.fault ? "fault" : job.paused ? "paused" : "running";
+  const stateLabel = { running: "Running", paused: "Paused", fault: "A frame failed — waiting for you" }[state];
+  const ladder = groupSteps(steps, job);
   const pct = Math.min(100, (p?.fraction ?? 0) * 100);
   const finishAt = p && p.etaMs > 0 ? clock(p.startedAt + p.elapsedMs + p.pausedMs + p.etaMs) : null;
   const phaseLine = !p ? "Starting…" : p.phase === "video" && p.span?.kind === "copy" ? "Copying video" : PHASE_LABEL[p.phase] + (running?.stage ? ` — ${running.stage}` : "");
@@ -304,16 +307,7 @@ export function ExportRun({ job, events, skipped, liveRef, liveAt, onPause, onRe
   const groups = (["prepare", "video", "audio", "finalize"] as StepProgress["kind"][]).map((kind) => ({ kind, ms: steps.filter((s) => s.kind === kind).reduce((a, s) => a + s.estimateMs, 0) })).filter((g) => g.ms > 0);
   const total = p?.total ?? 0;
   return (
-    <div className={cn("panel space-y-3 border-2 p-4", state === "space" ? "border-danger" : state === "fault" ? "border-warn" : state === "paused" ? "border-warn" : "border-accent")} data-export-panel data-run-state={state} aria-live="polite">
-      {job.lowSpace && (
-        <div className="flex flex-wrap items-center gap-2 rounded-[var(--radius-sm)] border border-danger/50 bg-danger/10 px-3 py-2 text-[13px]" role="alert" data-low-space>
-          <AlertTriangle size={15} className="shrink-0 text-danger" />
-          <span>
-            <span className="font-medium text-ink">Paused: the disk is almost full</span>
-            {job.freeBytes != null ? ` — ${fmtBytes(job.freeBytes)} free as the browser reports it for its own disk; the drive holding the project folder may differ.` : "."} Free some space and it continues on its own, or press Resume to try now. Nothing written so far is lost.
-          </span>
-        </div>
-      )}
+    <div className={cn("panel space-y-3 border-2 p-4", state === "running" ? "border-accent" : "border-warn")} data-export-panel data-run-state={state} aria-live="polite">
       {job.fault && (
         <div className="flex flex-wrap items-center gap-2 rounded-[var(--radius-sm)] border border-warn/50 bg-warn/10 px-3 py-2 text-[13px]" role="alertdialog" aria-live="assertive" data-export-fault>
           <AlertTriangle size={15} className="shrink-0 text-warn" />
@@ -336,13 +330,13 @@ export function ExportRun({ job, events, skipped, liveRef, liveAt, onPause, onRe
       )}
 
       <div className="flex flex-wrap items-center gap-3">
-        {state === "running" ? <Loader size={18} className="animate-spin text-accent" /> : <Pause size={18} className={state === "space" ? "text-danger" : "text-warn"} />}
+        {state === "running" ? <Loader size={18} className="animate-spin text-accent" /> : <Pause size={18} className="text-warn" />}
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2 text-[15px] font-semibold text-ink">
             <span>
               {job.label} · {out?.name}
             </span>
-            <span className={cn("rounded-full border px-2 py-0.5 text-[11px] font-medium", state === "running" ? "border-accent/40 text-accent" : state === "space" ? "border-danger/50 text-danger" : "border-warn/50 text-warn")} data-run-chip>
+            <span className={cn("rounded-full border px-2 py-0.5 text-[11px] font-medium", state === "running" ? "border-accent/40 text-accent" : "border-warn/50 text-warn")} data-run-chip>
               {stateLabel}
             </span>
           </div>
@@ -350,7 +344,7 @@ export function ExportRun({ job, events, skipped, liveRef, liveAt, onPause, onRe
             {phaseLine}
             {p?.span && p.phase === "video" ? ` · span ${p.spanIndex} of ${p.spanCount} · ${fmtMs(p.span.start)} → ${fmtMs(p.span.end)}` : ""}
             {job.resumedFrom ? ` · resumed from ${fmtTime(job.resumedFrom)}` : ""}
-            {job.join ? ` · joining ${job.join.parts} parts (${fmtBytes(job.join.bytes)})${job.join.mode === "remove" ? ", each removed as it goes in" : ""}` : ""}
+            {job.join ? (job.join.done ? ` · ${job.join.parts} parts joined` : ` · joining part ${Math.max(1, job.join.at)} of ${job.join.parts} (${fmtBytes(job.join.copied)} of ${fmtBytes(job.join.bytes)})${job.join.mode === "remove" ? ", each removed as it goes in" : ""}`) : ""}
           </div>
         </div>
         {job.paused ? (
@@ -428,13 +422,18 @@ export function ExportRun({ job, events, skipped, liveRef, liveAt, onPause, onRe
               </div>
             </div>
           )}
+          {ladder.length > 0 && (
+            <div className="text-[12.5px] text-muted" data-run-steps data-steps-done={ladder.filter((g) => g.status === "done").length} data-steps-total={ladder.length}>
+              {summaryLine(ladder)}
+            </div>
+          )}
           <div className="grid grid-cols-2 gap-x-4 gap-y-2 sm:grid-cols-3 xl:grid-cols-6">
             <Stat label="Written" value={p ? `${fmtBytes(p.bytesWritten)}${out ? ` of ~${fmtBytes(out.estimatedBytes)}` : ""}` : "0 kB"} />
             <Stat label="Frames" value={p ? `${p.frames.toLocaleString()} / ${p.framesTotal.toLocaleString()}` : "—"} />
             <Stat label="Elapsed" value={p ? `${fmtDuration(p.elapsedMs)}${p.pausedMs > 500 ? ` +${fmtDuration(p.pausedMs)} paused` : ""}` : "0:00:00"} />
             <Stat label="Started" value={p ? clock(p.startedAt) : "—"} />
             <Stat label="Output" value={out ? `${out.codec} ${out.height}p · ${out.bitrateMbps} Mbps` : "—"} />
-            {job.freeBytes != null ? <Stat label="Free on disk" value={fmtBytes(job.freeBytes)} title="As the browser reports it; it keeps a reserve" /> : <Stat label="Estimate rests on" value={p ? SOURCE_LABEL[p.etaSource] : "—"} />}
+            <Stat label="Estimate rests on" value={p ? SOURCE_LABEL[p.etaSource] : "—"} />
           </div>
         </div>
       </div>
@@ -443,9 +442,6 @@ export function ExportRun({ job, events, skipped, liveRef, liveAt, onPause, onRe
         <button type="button" onClick={() => setDetails((v) => !v)} aria-expanded={details} className="text-accent hover:underline" data-export-details>
           {details ? "Hide details" : "Details"}
         </button>
-        <span>
-          {steps.filter((s) => s.status === "done").length} of {steps.length || "—"} steps done
-        </span>
         {p && <span>estimates rest on {SOURCE_LABEL[p.etaSource]}</span>}
         {job.partsMode && !job.join && <span>written in parts: a stop keeps what is finished</span>}
         <span className="ml-auto">keep this tab open; the title shows the progress</span>
@@ -460,11 +456,7 @@ export function ExportRun({ job, events, skipped, liveRef, liveAt, onPause, onRe
             <Stat label="Preset" value={out ? `${out.preset} · ${out.width}×${out.height}` : "—"} />
             <Stat label="Video · sound" value={`${Math.min(100, (p.timelineT / Math.max(1e-6, p.total)) * 100).toFixed(2)}% · ${Math.min(100, (p.audioT / Math.max(1e-6, p.total)) * 100).toFixed(2)}%`} />
           </div>
-          <ol className="divide-y divide-line rounded-[var(--radius-sm)] border border-line" data-export-steps>
-            {steps.map((s, i) => (
-              <StepRow key={s.id} step={s} index={i} paused={!!job.paused} />
-            ))}
-          </ol>
+          <StepLadder groups={ladder} paused={!!job.paused} />
         </div>
       )}
       {events.length > 0 && (
@@ -489,6 +481,204 @@ export function ExportRun({ job, events, skipped, liveRef, liveAt, onPause, onRe
 }
 
 /** One export step: what it does, how far it is, what it was expected to take and what it actually took. */
+/* ------------------------------------------------------------------ the steps, folded */
+
+type GroupId = "prepare" | "video" | "audio" | "join" | "finalize";
+interface StepGroup {
+  id: GroupId;
+  title: string;
+  status: StepStatus;
+  /** One line: what was done, what is happening, or what is expected. */
+  fact: string;
+  /** The running stage, when the step has one. */
+  stage?: string;
+  steps: StepProgress[];
+  join?: JoinInfo;
+}
+type StepStatus = StepProgress["status"];
+const GROUP_TITLE: Record<GroupId, string> = { prepare: "Prepare", video: "Video", audio: "Sound", join: "Join parts", finalize: "Finish" };
+
+const groupStatus = (steps: StepProgress[]): StepStatus => (steps.length && steps.every((s) => s.status === "done") ? "done" : steps.some((s) => s.status === "running") || (steps.some((s) => s.status === "done") && steps.some((s) => s.status === "pending")) ? "running" : "pending");
+const sum = (steps: StepProgress[], f: (s: StepProgress) => number) => steps.reduce((a, s) => a + f(s), 0);
+const expectedNote = (steps: StepProgress[]) => {
+  const promised = sum(steps, (s) => s.promisedMs ?? 0);
+  return promised > 0 ? ` · expected ${fmtDuration(promised)} (${fmtDelta(sum(steps, (s) => s.elapsedMs), promised)})` : "";
+};
+/** One fact line for a group of steps: done → took vs expected; running → position, remaining and the estimate's basis; pending → the estimate. */
+function groupFact(steps: StepProgress[], status: StepStatus): string {
+  if (!steps.length) return "";
+  const running = steps.find((s) => s.status === "running");
+  if (status === "done") return `took ${fmtDuration(sum(steps, (s) => s.elapsedMs))}${expectedNote(steps)}`;
+  if (status === "running") {
+    const remaining = sum(steps, (s) => (s.status === "done" ? 0 : s.remainingMs));
+    const basis = running?.basis ?? steps.find((s) => s.status === "pending")?.basis ?? "";
+    return `${fmtDuration(sum(steps, (s) => s.elapsedMs))} so far · ≈ ${fmtDuration(remaining)} left${basis ? ` · ${basis}` : ""}`;
+  }
+  return `≈ ${fmtDuration(sum(steps, (s) => s.estimateMs))}${steps[0].basis ? ` · ${steps[0].basis}` : ""}`;
+}
+
+/** The export's steps folded into five rows at most: Prepare, Video (every span), Sound, Join parts (parts exports only), Finish. */
+export function groupSteps(steps: StepProgress[], job: ExportJobView): StepGroup[] {
+  if (!steps.length) return [];
+  const by = (kind: StepProgress["kind"]) => steps.filter((s) => s.kind === kind);
+  const groups: StepGroup[] = [];
+  const prepare = by("prepare"), video = by("video"), audio = by("audio"), finalize = by("finalize");
+  if (prepare.length) groups.push({ id: "prepare", title: GROUP_TITLE.prepare, status: groupStatus(prepare), fact: groupFact(prepare, groupStatus(prepare)), stage: prepare.find((s) => s.status === "running")?.stage, steps: prepare });
+  if (video.length) {
+    const status = groupStatus(video);
+    const running = video.find((s) => s.status === "running");
+    const done = video.filter((s) => s.status === "done").length;
+    const where = status === "running" ? `span ${running ? running.spanIndex ?? done + 1 : done + 1} of ${video.length} · ${fmtMs(sum(video, (s) => s.done))} of ${fmtMs(sum(video, (s) => s.units))} · ` : status === "pending" ? `${video.length} span${video.length === 1 ? "" : "s"} · ${fmtMs(sum(video, (s) => s.units))} of timeline · ` : `${video.length} span${video.length === 1 ? "" : "s"} · `;
+    groups.push({ id: "video", title: GROUP_TITLE.video, status, fact: where + groupFact(video, status), steps: video });
+  }
+  if (audio.length) groups.push({ id: "audio", title: GROUP_TITLE.audio, status: groupStatus(audio), fact: groupFact(audio, groupStatus(audio)), steps: audio });
+  // The join is part of the tracker's finish step; it gets its own row from what the engine reports as it goes.
+  const j = job.join;
+  const joinStatus: StepStatus = j ? (j.done ? "done" : "running") : "pending";
+  if (job.partsMode) {
+    const fact = !j ? "copies the finished parts into the file — no re-encoding" : j.done ? `${j.parts} parts, ${fmtBytes(j.bytes)} copied into the file${j.mode === "remove" ? ", each removed as it went in" : ""}` : `part ${Math.max(1, j.at)} of ${j.parts} · ${fmtBytes(j.copied)} of ${fmtBytes(j.bytes)}${j.mode === "remove" ? " · each removed as it goes in" : ""}`;
+    groups.push({ id: "join", title: GROUP_TITLE.join, status: joinStatus, fact, steps: [], join: j });
+  }
+  if (finalize.length) {
+    // While the join runs the finish step is already "running" for the tracker; here it waits its turn.
+    const status: StepStatus = j && !j.done ? "pending" : groupStatus(finalize);
+    groups.push({ id: "finalize", title: GROUP_TITLE.finalize, status, fact: groupFact(finalize, status), stage: status === "running" ? finalize.find((s) => s.status === "running")?.stage : undefined, steps: finalize });
+  }
+  return groups;
+}
+
+/** "2 of 5 steps done · Video running, span 14 of 91 · to go: Sound, Join parts, Finish" */
+export function summaryLine(groups: StepGroup[]): string {
+  const done = groups.filter((g) => g.status === "done").length;
+  const running = groups.find((g) => g.status === "running");
+  const toGo = groups.filter((g) => g.status === "pending").map((g) => g.title);
+  const runningNote = running ? `${running.title} running${running.id === "video" || running.id === "join" ? `, ${running.fact.split(" · ")[0]}` : ""}` : done === groups.length ? "all done" : "";
+  return [`${done} of ${groups.length} steps done`, runningNote, toGo.length ? `to go: ${toGo.join(", ")}` : ""].filter(Boolean).join(" · ");
+}
+
+function StatusMark({ status, paused, size = 15 }: { status: StepStatus; paused: boolean; size?: number }) {
+  if (status === "done") return <Check size={size} className="text-accent" aria-label="done" />;
+  if (status === "running") return paused ? <Pause size={size} className="text-warn" aria-label="paused" /> : <Loader size={size} className="animate-spin text-accent" aria-label="running" />;
+  return <Circle size={size - 2} className="mt-0.5 text-faint" aria-label="pending" />;
+}
+
+/** The five rows, each with a status mark, a fact line and a "more" that opens the row's own detail. */
+export function StepLadder({ groups, paused }: { groups: StepGroup[]; paused: boolean }) {
+  const [open, setOpen] = useState<Record<string, boolean>>({});
+  return (
+    <ol className="divide-y divide-line rounded-[var(--radius-sm)] border border-line" data-export-steps>
+      {groups.map((g, i) => {
+        const isOpen = !!open[g.id];
+        return (
+          <li key={g.id} className={cn("px-3 py-1.5", g.status === "running" && "bg-accent-soft/40")} data-step-group={g.id} data-status={g.status}>
+            <div className="grid grid-cols-[20px_1fr_auto] items-start gap-x-2">
+              <div className="pt-0.5">
+                <StatusMark status={g.status} paused={paused} />
+              </div>
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 text-[13px]">
+                  <span className={cn("font-medium", g.status === "pending" ? "text-muted" : "text-ink")}>
+                    {i + 1}. {g.title}
+                  </span>
+                  <span className="font-mono text-[12px] tabular text-muted" data-step-fact>
+                    {g.fact}
+                  </span>
+                </div>
+                {g.stage && g.status === "running" && (
+                  <div className="mt-0.5 text-[12px] text-ink" data-step-stage>
+                    now: {g.stage}
+                  </div>
+                )}
+              </div>
+              <button type="button" onClick={() => setOpen((o) => ({ ...o, [g.id]: !isOpen }))} aria-expanded={isOpen} className="flex items-center gap-0.5 text-[12px] text-accent hover:underline" data-step-more>
+                {isOpen ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+                {isOpen ? "less" : "more"}
+              </button>
+            </div>
+            {isOpen && (
+              <div className="mt-1.5 pl-7 text-[12px]" data-step-detail>
+                <GroupDetail group={g} paused={paused} />
+              </div>
+            )}
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
+
+/** What a row holds: Prepare its sub-tasks, Video its spans (done ones folded into a count), Sound its sources, Join the parts and room, Finish its two stages. */
+function GroupDetail({ group: g, paused }: { group: StepGroup; paused: boolean }) {
+  if (g.id === "join") {
+    const j = g.join;
+    return (
+      <div className="space-y-0.5 text-muted">
+        <div>The finished parts are copied into the file packet by packet, no re-encoding, then the audio goes in beside them.</div>
+        {j ? (
+          <div>
+            {j.parts} parts, {fmtBytes(j.bytes)} in all (largest {fmtBytes(j.largest)}); needs about <span className="text-ink">{fmtBytes(j.need)}</span> free on the drive holding the project folder — {j.mode === "remove" ? "the largest part plus the audio, since each part is removed as soon as it is in the file" : "room for the whole file beside the parts, which stay until it is finished"}.
+          </div>
+        ) : (
+          <div>Parts under 8 GB stay until the file is finished; above that each is removed as it goes in, so the join needs the room of one part at a time.</div>
+        )}
+      </div>
+    );
+  }
+  if (g.id === "video") {
+    const done = g.steps.filter((s) => s.status === "done");
+    const running = g.steps.find((s) => s.status === "running");
+    const pending = g.steps.filter((s) => s.status === "pending");
+    const next = pending.slice(0, 3), rest = pending.slice(3);
+    return (
+      <div className="space-y-1">
+        {done.length > 0 && (
+          <div className="text-muted" data-spans-done>
+            {done.length} span{done.length === 1 ? "" : "s"} done · {fmtMs(sum(done, (s) => s.units))} of video · took {fmtDuration(sum(done, (s) => s.elapsedMs))}
+            {expectedNote(done)}
+          </div>
+        )}
+        {running && (
+          <ol className="rounded-[var(--radius-sm)] border border-line">
+            <StepRow step={running} index={(running.spanIndex ?? 1) - 1} paused={paused} />
+          </ol>
+        )}
+        {next.map((s) => (
+          <div key={s.id} className="flex flex-wrap gap-x-2 text-muted" data-span-next>
+            <span className="text-ink">{s.title}</span>
+            <span>{s.span ? `${fmtMs(s.span.start)} → ${fmtMs(s.span.end)} (${fmtMs(s.units)})` : fmtMs(s.units)}</span>
+            <span className="font-mono tabular">≈ {fmtDuration(s.estimateMs)}</span>
+          </div>
+        ))}
+        {rest.length > 0 && (
+          <div className="text-faint">
+            and {rest.length} more span{rest.length === 1 ? "" : "s"} ({fmtMs(sum(rest, (s) => s.units))}, ≈ {fmtDuration(sum(rest, (s) => s.estimateMs))})
+          </div>
+        )}
+      </div>
+    );
+  }
+  if (g.id === "finalize") {
+    const s = g.steps[0];
+    return (
+      <div className="space-y-0.5 text-muted">
+        <div>1. Flush the encoders and write the MP4 index (moov).</div>
+        <div>2. Close the file: the browser reads the whole file back to check it, then moves it into place — this grows with the file size.</div>
+        {s && s.status === "done" && <div>took {fmtDuration(s.elapsedMs)}{expectedNote([s])}</div>}
+      </div>
+    );
+  }
+  return (
+    <div className="space-y-0.5 text-muted">
+      {g.steps.map((s) => (
+        <div key={s.id}>
+          {s.detail}
+          {s.status === "done" ? ` Took ${fmtDuration(s.elapsedMs)}${expectedNote([s])}.` : s.status === "running" ? ` ${fmtDuration(s.elapsedMs)} so far of ≈ ${fmtDuration(s.estimateMs)}.` : ` ≈ ${fmtDuration(s.estimateMs)} · ${s.basis}.`}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function StepRow({ step: s, index, paused }: { step: StepProgress; index: number; paused: boolean }) {
   const running = s.status === "running", done = s.status === "done";
   const timed = s.kind === "video" || s.kind === "audio";
@@ -528,6 +718,49 @@ function StepRow({ step: s, index, paused }: { step: StepProgress; index: number
 }
 
 /* ------------------------------------------------------------------ result card */
+
+/** The run's report behind a toggle: read it here, save it beside the file, download or copy it. */
+function ExportAccount({ text, name, onSave }: { text: string; name: string; onSave?: () => Promise<string> }) {
+  const [open, setOpen] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
+  const download = () => {
+    const url = URL.createObjectURL(new Blob([text], { type: "text/markdown" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = reportFileName(name);
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  };
+  const copy = () => void navigator.clipboard?.writeText(text).then(() => setNote("Copied"), () => setNote("Could not copy"));
+  const save = () => onSave?.().then(setNote, (e) => setNote(e instanceof Error ? e.message : String(e)));
+  return (
+    <div className="text-[12.5px]" data-done-report>
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+        <button type="button" onClick={() => setOpen((v) => !v)} aria-expanded={open} className="flex items-center gap-1 text-accent hover:underline" data-report-toggle>
+          <FileText size={13} /> {open ? "Hide report" : "Report"}
+        </button>
+        <span className="text-faint">what happened, step by step — kept with the file if you save it</span>
+        {open && (
+          <span className="ml-auto flex flex-wrap items-center gap-1.5">
+            {onSave && (
+              <button type="button" onClick={save} className={cn(GHOST, "h-7 px-2 text-[12px]")} data-report-save>
+                <Save size={12} /> Save beside the file
+              </button>
+            )}
+            <button type="button" onClick={download} className={cn(GHOST, "h-7 px-2 text-[12px]")} data-report-download>
+              <Download size={12} /> Download
+            </button>
+            <button type="button" onClick={copy} className={cn(GHOST, "h-7 px-2 text-[12px]")} data-report-copy>
+              <Copy size={12} /> Copy
+            </button>
+            {note && <span className="text-muted" data-report-note>{note}</span>}
+          </span>
+        )}
+      </div>
+      {open && <pre className="mt-1.5 max-h-[50vh] overflow-auto whitespace-pre-wrap rounded-[var(--radius-sm)] border border-edge bg-raised/40 p-3 font-mono text-[11.5px] leading-relaxed text-ink" data-report-text>{text}</pre>}
+    </div>
+  );
+}
 
 /** The doctor's verdict on a file, with a line of what a repair did and a way to run it again. */
 export function FileVerdict({ report, checking, error, repaired, onCancel, onAgain, canFix, onFix, busy, hook, noFacts }: { report?: DoctorReport | null; checking?: DoctorProgress | null; error?: string; repaired?: string[]; onCancel?: () => void; onAgain?: (depth: DoctorDepth) => void; canFix: (kind: FixKind) => boolean; onFix: (finding: Finding) => void; busy: boolean; hook: string; noFacts?: boolean }) {
@@ -570,10 +803,8 @@ export function FileVerdict({ report, checking, error, repaired, onCancel, onAga
   );
 }
 
-export function ExportDone({ done, busy, onDismiss, onAgain, onFiles, onRecheck, onCancelCheck, canFix, onFixFinding, onResume, onDiscard, onFix }: { done: DoneResult; busy: boolean; onDismiss: () => void; onAgain: () => void; onFiles: () => void; onRecheck: (depth: DoctorDepth) => void; onCancelCheck: () => void; canFix: (kind: FixKind) => boolean; onFixFinding: (finding: Finding) => void; onResume: () => void; onDiscard: () => void; onFix: () => void }) {
+export function ExportDone({ done, busy, onDismiss, onAgain, onFiles, onRecheck, onCancelCheck, canFix, onFixFinding, onResume, onDiscard, onFix, account, onSaveReport }: { done: DoneResult; busy: boolean; onDismiss: () => void; onAgain: () => void; onFiles: () => void; onRecheck: (depth: DoctorDepth) => void; onCancelCheck: () => void; canFix: (kind: FixKind) => boolean; onFixFinding: (finding: Finding) => void; onResume: () => void; onDiscard: () => void; onFix: () => void; account?: string | null; onSaveReport?: () => Promise<string> }) {
   const ok = done.kind === "done";
-  // Room on the browser's own disk while a write was refused means the full drive is another one.
-  const elsewhere = done.freeBytes != null && done.freeBytes >= ENOUGH_SPACE;
   const ratio = done.estimatedMs > 0 ? done.activeMs / done.estimatedMs : 1;
   const pace = done.estimatedMs <= 0 ? "" : Math.abs(ratio - 1) < 0.05 ? "as estimated" : ratio > 1.5 ? `${ratio.toFixed(1)}× the estimate` : ratio < 0.67 ? `${(1 / ratio).toFixed(1)}× faster than estimated` : ratio > 1 ? `${Math.round((ratio - 1) * 100)}% slower than estimated` : `${Math.round((1 - ratio) * 100)}% faster than estimated`;
   const realtime = done.activeMs > 0 ? done.seconds / (done.activeMs / 1000) : 0;
@@ -583,7 +814,7 @@ export function ExportDone({ done, busy, onDismiss, onAgain, onFiles, onRecheck,
         {ok ? <Check size={20} className="mt-0.5 shrink-0 text-positive" /> : <AlertTriangle size={20} className="mt-0.5 shrink-0 text-warn" />}
         <div className="min-w-0 flex-1">
           <div className="text-[15px] font-semibold text-ink" data-done-title>
-            {ok ? `Exported ${done.name}` : done.kind === "stopped" ? `Export stopped${done.keptAt ? ` at ${fmtTime(done.keptAt)} of ${fmtTime(done.seconds)}` : ""}` : `Export failed${done.keptAt ? ` at ${fmtTime(done.keptAt)} of ${fmtTime(done.seconds)}` : ""}`}
+            {ok ? `Exported ${done.name}` : done.space?.where === "join" ? "Export encoded to the end — joining the parts failed" : done.kind === "stopped" ? `Export stopped${done.keptAt ? ` at ${fmtTime(done.keptAt)} of ${fmtTime(done.seconds)}` : ""}` : `Export failed${done.keptAt ? ` at ${fmtTime(done.keptAt)} of ${fmtTime(done.seconds)}` : ""}`}
           </div>
           <div className="text-[12.5px] text-muted" data-done-facts>
             {ok ? (
@@ -615,18 +846,19 @@ export function ExportDone({ done, busy, onDismiss, onAgain, onFiles, onRecheck,
         </button>
       </div>
       {done.space && (
-        <div className="flex flex-wrap items-center gap-2 rounded-[var(--radius-sm)] border border-danger/50 bg-danger/10 px-3 py-2 text-[13px]" role="alert" data-done-space data-elsewhere={elsewhere ? "true" : "false"}>
+        <div className="flex flex-wrap items-center gap-2 rounded-[var(--radius-sm)] border border-danger/50 bg-danger/10 px-3 py-2 text-[13px]" role="alert" data-done-space data-where={done.space.where}>
           <AlertTriangle size={15} className="shrink-0 text-danger" />
           <span>
-            <span className="font-medium text-ink">The drive refused a write.</span>
-            {done.freeBytes != null
-              ? ` The browser reports ${fmtBytes(done.freeBytes)} free on its own disk${elsewhere ? ", so the full drive is the one holding the project folder: free room there, then press Resume." : done.keptParts ? "; the export continues on its own once 3 GB are free, or press Resume."
-                : "."}`
-              : " Free some room on the drive holding the project folder, then press Resume."}
-            {done.keptParts ? " Nothing finished is lost." : " Nothing was finished yet, so the export starts again from the beginning."}
+            <span className="font-medium text-ink">{done.space.where === "join" ? "The drive refused a write while the parts were being joined." : done.space.where === "part" ? "The drive refused a write while a part was being written." : "The drive refused a write."}</span> {roomAdvice(done.space.where, done.space.need, done.space.mode ? { mode: done.space.mode } : undefined)}
+            {done.keptParts
+              ? done.space.where === "join"
+                ? ` Then press Resume: the join starts over and nothing else is encoded again${done.space.consumed ? `, but for the ${done.space.consumed} part${done.space.consumed === 1 ? "" : "s"} already in the unfinished file` : ""}.`
+                : " Then press Resume: the kept parts carry on from where they stopped."
+              : " Then export again: nothing was finished yet, so it starts from the beginning."}
           </span>
         </div>
       )}
+      {account && <ExportAccount text={account} name={done.name} onSave={onSaveReport} />}
       {ok && <FileVerdict report={done.report} checking={done.checking} error={done.checkError} repaired={done.repaired} onCancel={onCancelCheck} onAgain={onRecheck} canFix={canFix} onFix={onFixFinding} busy={busy} hook="done-check" />}
       <div className="flex flex-wrap items-center gap-1.5 text-[12.5px]">
         {!ok && done.keptParts ? (

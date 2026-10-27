@@ -84,15 +84,10 @@ import {
 } from "./progress";
 import pkg from "@/package.json";
 import type { MotionTrace } from "./stops";
-import { isSpaceError } from "./space";
+import { audioBytesFor, isSpaceError, joinMode, joinNeed, partNeed, SpaceStop, type SpaceWhere } from "./space";
 
-/** The drive refused a write: the export stops at the last finished part, and the editor can tell why. */
-const spaceStop = (cause: unknown) => {
-  // the stream's stored error comes back through every later write and close: already ours, pass it on as it is
-  if (cause instanceof DOMException && cause.name === "QuotaExceededError" && cause.message.startsWith("The drive holding")) return cause;
-  const why = (cause as { message?: string } | null)?.message || (cause as { name?: string } | null)?.name || "no room";
-  return new DOMException(`The drive holding the project folder refused a write (${why}): it is full.`, "QuotaExceededError");
-};
+/** The drive refused a write: the stream's stored error comes back through every later write and close, so one already ours passes on as it is. */
+const spaceStop = (cause: unknown, where: SpaceWhere, need: number | null, join?: SpaceStop["join"]) => (cause instanceof SpaceStop ? cause : new SpaceStop(where, need, cause, join));
 import { LoudnessMeter, softLimit, type Loudness } from "./loudness";
 import { patchKindType } from "./tags";
 import { parameterSetNals, patchSampleDescriptions, readSampleDescriptions, readVideoDescriptions } from "./check";
@@ -1049,7 +1044,7 @@ export interface ExportOptions {
   whilePaused?: () => Promise<void> | void;
   /** A write failed, most likely because the disk is full: resolve once the user has made room and the chunk is retried. */
   /** The drive refused a write for lack of room: the output being written is lost and the export stops at the last finished part once this returns. */
-  onWriteBlocked?: (error: unknown) => Promise<void>;
+  onWriteBlocked?: (stop: SpaceStop) => Promise<void>;
   /** Speeds from an earlier export on this machine, to estimate from before anything is measured. */
   priors?: SpeedPriors;
   signal?: AbortSignal;
@@ -1068,8 +1063,7 @@ export interface ExportOptions {
     store: PartStore;
     manifest: ExportManifest;
     seconds?: number;
-    /** Free space on the disk as the browser reports it; with less than the file needs, parts are removed as they go in. */
-    freeSpace?: () => Promise<number | null>;
+    /** The join beginning, then each part as it goes in, then done. */
     onJoin?: (info: JoinInfo) => void;
     /** Tests only: force the join mode, and fail the join after this many parts. */
     testJoinMode?: "keep" | "remove";
@@ -1111,12 +1105,17 @@ export interface ExportManifest {
 }
 
 export interface JoinInfo {
-  /** "remove": each part is removed as soon as it is in the file, so the file needs no extra room beyond one part. */
+  /** "remove": each part is removed as soon as it is in the file, so the file needs the room of one part at a time; "keep": the parts stay until the file is finished (under 8 GB). */
   mode: "keep" | "remove";
-  /** Bytes in the parts, and free space as reported, when the join began. */
+  /** Bytes in the parts and the largest of them, and the room the join wants on the drive. */
   bytes: number;
-  free: number | null;
+  largest: number;
+  need: number;
   parts: number;
+  /** The part going in (1-based) and the bytes of parts already in the file. */
+  at: number;
+  copied: number;
+  done?: boolean;
 }
 
 /** Where a resumable export keeps its parts and manifest. */
@@ -1378,6 +1377,9 @@ async function exportWithPulse(
   // Count what reaches a file: every chunk passes through here on its way to the folder. The tracker sees every
   // byte (parts included, for its rates); the result reports the file's own.
   let fileBytes = 0;
+  // Room a part wants while it is written, and the join under way once it begins, for a refused write to name.
+  const partRoom = parts ? partNeed(project.export.bitrateMbps, partSeconds) : null;
+  let joinInfo: JoinInfo | undefined;
   // While the file is being finalized its index goes out: the media-kind atom in it gets the integer type ffmpeg
   // writes, and a picture carrying more than one codec configuration gets an index that says which frames use which.
   const finalizing = { on: false };
@@ -1394,9 +1396,10 @@ async function exportWithPulse(
       } catch (e) {
         if (!isSpaceError(e)) throw e;
         // A writable that has refused a write rejects every later one with the same stored error, so there is no
-        // retrying it: say so, then stop the export at the last finished part (the parts are kept).
-        await opts.onWriteBlocked?.(e);
-        throw spaceStop(e);
+        // retrying it: say where it was and what room that step wants, then stop at the last finished part.
+        const stop = spaceStop(e, isFinal ? (parts ? "join" : "file") : "part", isFinal ? (joinInfo?.need ?? null) : partRoom, isFinal && joinInfo ? { mode: joinInfo.mode, parts: joinInfo.parts, bytes: joinInfo.bytes } : undefined);
+        await opts.onWriteBlocked?.(stop);
+        throw stop;
       }
     };
     return new WritableStream<StreamTargetChunk>({
@@ -1551,7 +1554,7 @@ async function exportWithPulse(
       await seg.output.finalize();
     } catch (e) {
       console.warn(`Part ${seg.file} could not be finished and is discarded:`, e);
-      if (isSpaceError(e)) closeFailure ??= spaceStop(e);
+      if (isSpaceError(e)) closeFailure ??= spaceStop(e, "part", partRoom);
       await discardSegment(seg);
       return false;
     }
@@ -1908,7 +1911,6 @@ async function exportWithPulse(
     return { timelineT: t, sourceT, clipName: c.clipName, message, count, stretch: Math.min(stretch, Math.max(c.frameDur, c.span.end - t)) };
   };
 
-  let joinInfo: JoinInfo | undefined;
   const isAbort = (e: unknown) => (e as DOMException)?.name === "AbortError";
   const isPartError = (e: unknown) => (e as Error)?.name === "PartError";
   let cursor = gaps[0]?.from ?? 0;
@@ -2017,15 +2019,18 @@ async function exportWithPulse(
         files.push(f);
         pos = Math.max(pos, part.end);
       }
-      // With less room than the file needs on top of the parts, each part goes as soon as it is in the file.
-      const partBytes = files.reduce((a, f) => a + f.size, 0);
-      const audioBytes = ((project.export.audioBitrateKbps * 1000) / 8) * total;
-      const free = parts.freeSpace ? await parts.freeSpace() : null;
-      const mode: JoinInfo["mode"] = parts.testJoinMode ?? (free !== null && free < partBytes + audioBytes + 1e9 ? "remove" : "keep");
-      joinInfo = { mode, bytes: partBytes, free, parts: ordered.length };
+      // Under 8 GB the parts stay until the file is finished (it needs their room once more, beside them); above
+      // that each goes as soon as it is in, so the file needs the room of one part at a time. The drive's free
+      // space cannot be read, so the need is stated and a refused write names it.
+      const sizes = files.map((f) => f.size);
+      const partBytes = sizes.reduce((a, b) => a + b, 0);
+      const audioBytes = audioBytesFor(project.export.audioBitrateKbps, total);
+      const mode: JoinInfo["mode"] = parts.testJoinMode ?? joinMode(partBytes);
+      joinInfo = { mode, bytes: partBytes, largest: sizes.reduce((a, b) => Math.max(a, b), 0), need: joinNeed(sizes, audioBytes, mode), parts: ordered.length, at: 0, copied: 0 };
       parts.onJoin?.(joinInfo);
-      opts.onEvent?.({ at: Date.now(), kind: "join", text: `Joining ${ordered.length} parts (${fmtBytes(partBytes)}) into the file${mode === "remove" ? ", removing each as it goes in to spare the disk" : ""}` });
+      opts.onEvent?.({ at: Date.now(), kind: "join", text: `Joining ${ordered.length} parts (${fmtBytes(partBytes)}) into the file${mode === "remove" ? ", removing each as it goes in" : ", kept beside it until it is finished"} — needs about ${fmtBytes(joinInfo.need)} free on the drive` });
       let first = true;
+      let copiedBytes = 0;
       // Each part's codec configuration: a copy part carries its recording's, an encode part the encoder's. Where
       // they differ, the file's index must say which samples use which (see DescriptionPatch), and every keyframe
       // also carries its configuration's parameter sets in-band, for players that read one sample entry only.
@@ -2051,6 +2056,10 @@ async function exportWithPulse(
       const switches: { sample: number; entry: number }[] = [];
       let sampleCount = 0;
       for (const [index, part] of ordered.entries()) {
+        joinInfo = { ...joinInfo, at: index + 1, copied: copiedBytes };
+        parts.onJoin?.(joinInfo);
+        tracker.setStage(`joining part ${index + 1} of ${ordered.length} into the file — ${fmtBytes(copiedBytes)} of ${fmtBytes(partBytes)} copied${mode === "remove" ? ", each removed as it goes in" : ""}`);
+        emit(true);
         const inp = new Input({ source: new BlobSource(files[index]), formats: ALL_FORMATS });
         const track = await inp.getPrimaryVideoTrack();
         if (!track) throw new Error(`Part ${part.file} holds no video. Discard the parts and export again.`);
@@ -2071,6 +2080,7 @@ async function exportWithPulse(
           first = false;
           sampleCount++;
         }
+        copiedBytes += files[index].size;
         if (mode === "remove") {
           // Its bytes are in the file now; should the file not get finished, this stretch is exported again.
           part.consumed = true;
@@ -2085,6 +2095,9 @@ async function exportWithPulse(
         descriptionPatch.set(entries, switches);
         opts.onEvent?.({ at: Date.now(), kind: "join", text: `The picture carries ${entries.length} codec configurations — the recording's own for the copied footage, the encoder's for the re-encoded stretches — switching ${switches.length - 1} times; the file's index says which frames use which, and every keyframe carries its parameter sets as well` });
       }
+      joinInfo = { ...joinInfo, at: ordered.length, copied: copiedBytes, done: true };
+      parts.onJoin?.(joinInfo);
+      tracker.setStage(null);
       copied.close();
       tracker.endStep();
       await audioInto(audioSource);

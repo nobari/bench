@@ -206,6 +206,8 @@ export class ProgressTracker {
   private readonly expectedBytes: number;
   /** Active ms when the file close began (the second stage of finishing), once it has. */
   private closeAt: number | null = null;
+  /** What the running step is doing, when the engine says (the join names the part going in); it replaces the finish step's own stage line. */
+  private stageText: string | null = null;
 
   constructor(now: () => number, steps: ExportStep[], total: number, framesTotal: number, priors: SpeedPriors = {}, defaults = defaultSpeeds(0, 0), startedAt = Date.now(), expectedBytes = 0) {
     this.now = now;
@@ -258,6 +260,9 @@ export class ProgressTracker {
     st.endActive = this.elapsedMs();
     st.endedAt = this.wall();
     this.current = null;
+  }
+  setStage(text: string | null) {
+    this.stageText = text;
   }
   get currentStep() {
     return this.current;
@@ -408,7 +413,7 @@ export class ProgressTracker {
         promisedMs: st.promisedMs,
         startedAt: st.startedAt,
         endedAt: st.endedAt,
-        stage: s.kind === "finalize" && st.status === "running" ? (this.closeAt === null ? "flushing the encoders and writing the MP4 index" : `closing the file: the browser reads all ${fmtBytes(this.bytes)} back to check it, then moves it into place`) : undefined,
+        stage: st.status !== "running" ? undefined : (this.stageText ?? (s.kind === "finalize" ? (this.closeAt === null ? "flushing the encoders and writing the MP4 index" : `closing the file: the browser reads all ${fmtBytes(this.bytes)} back to check it, then moves it into place`) : undefined)),
       };
     });
     const cur = steps.find((s) => s.status === "running") ?? null;

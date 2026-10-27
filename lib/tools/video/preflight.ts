@@ -31,7 +31,8 @@ export interface PreflightEnv {
   folderName: string | null;
   /** Recordings the project needs that are not at hand. */
   missing: number;
-  freeBytes: number | null;
+  /** Room the export wants on the drive holding the project folder: the parts, then the join on top of them. The browser cannot read a drive's free space, so this is stated, not compared. */
+  room: { parts: number; join: number; mode: "keep" | "remove"; resumable: boolean } | null;
   support: { hevc: boolean; avc: boolean } | null;
   /** The mix as last measured, if it was: stale when the sound changed since, predicted after a level change. */
   loudness: { integrated: number | null; peakDb: number; stale: boolean; predicted: boolean; matchGain: number } | null;
@@ -65,11 +66,14 @@ export function preflight(project: Project, estimate: ExportEstimate, outHeight:
     else items.push({ id: "encoder", state: "ok", title: `${want === "hevc" ? "HEVC" : "H.264"} encoder ready at ${outHeight}p` });
   } else items.push({ id: "encoder", state: "info", title: "Checking the encoders…" });
 
-  if (env.freeBytes !== null && clips) {
-    const need = estimate.bytes;
-    if (env.freeBytes < need) items.push({ id: "space", state: "warn", title: `${fmtGb(env.freeBytes)} free, about ${fmtGb(need)} needed`, detail: "The export is written in parts and pauses itself when the disk runs low, so it can still be finished after you free space — but it will stop on the way." });
-    else if (env.freeBytes < need * 1.2) items.push({ id: "space", state: "warn", title: `${fmtGb(env.freeBytes)} free for a file of about ${fmtGb(need)}`, detail: "Tight: the browser keeps a reserve and the join needs room for one part on top." });
-    else items.push({ id: "space", state: "ok", title: `${fmtGb(env.freeBytes)} free for a file of about ${fmtGb(need)}` });
+  if (env.room && clips) {
+    const r = env.room;
+    items.push({
+      id: "room",
+      state: "info",
+      title: `Room needed: about ${fmtGb(r.parts)} for the ${r.resumable ? "rest of the " : ""}parts, then about ${fmtGb(r.join)} more while they are joined`,
+      detail: `${r.mode === "remove" ? "Each part is removed as soon as it is in the file, so the join needs the room of the largest part plus the audio." : "Under 8 GB the parts stay until the file is finished, so the join needs their room once more, beside them."} The browser cannot read a drive's free space (Chrome tells every site the same figure whatever the disk holds), so check the drive holding the project folder yourself; a full drive stops the export at the last finished part, and Resume carries on once room is freed.`,
+    });
   }
 
   const r = project.export.range;
