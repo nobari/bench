@@ -18,6 +18,9 @@ import { fmtTime, type ExportEstimate } from "@/lib/tools/video/project";
 import { EXPORT_PRESETS } from "@/lib/tools/video/export-presets";
 import type { PreflightItem, PreflightState } from "@/lib/tools/video/preflight";
 import { DoctorReportView } from "./video-doctor-report";
+
+/** "2160p" for a landscape picture; a vertical or square frame is named in full, "1080×1920". */
+const pictureText = (width: number, height: number) => (width > height ? `${height}p` : `${width}×${height}`);
 import type { DoctorDepth, DoctorProgress, DoctorReport, Finding, FixKind } from "@/lib/tools/video/doctor";
 import { allTicked, tickedCount, type Review, type ReviewState } from "@/lib/tools/video/review";
 import type { ExportEvent, ExportFault, JoinInfo } from "@/lib/tools/video/engine";
@@ -432,7 +435,7 @@ export function ExportRun({ job, events, skipped, liveRef, liveAt, onPause, onRe
             <Stat label="Frames" value={p ? `${p.frames.toLocaleString()} / ${p.framesTotal.toLocaleString()}` : "—"} />
             <Stat label="Elapsed" value={p ? `${fmtDuration(p.elapsedMs)}${p.pausedMs > 500 ? ` +${fmtDuration(p.pausedMs)} paused` : ""}` : "0:00:00"} />
             <Stat label="Started" value={p ? clock(p.startedAt) : "—"} />
-            <Stat label="Output" value={out ? `${out.codec} ${out.height}p · ${out.bitrateMbps} Mbps` : "—"} />
+            <Stat label="Output" value={out ? `${out.codec} ${pictureText(out.width, out.height)} · ${out.bitrateMbps} Mbps` : "—"} />
             <Stat label="Estimate rests on" value={p ? SOURCE_LABEL[p.etaSource] : "—"} />
           </div>
         </div>
@@ -819,7 +822,7 @@ export function ExportDone({ done, busy, onDismiss, onAgain, onFiles, onRecheck,
           <div className="text-[12.5px] text-muted" data-done-facts>
             {ok ? (
               <>
-                {fmtBytes(done.bytes)} · {fmtTime(done.seconds)} · {done.codec} {done.height}p at {done.bitrateMbps} Mbps · AAC {done.audioKbps} kbps · took {fmtDuration(done.activeMs)}
+                {fmtBytes(done.bytes)} · {fmtTime(done.seconds)} · {done.codec} {pictureText(done.width, done.height)} at {done.bitrateMbps} Mbps · AAC {done.audioKbps} kbps · took {fmtDuration(done.activeMs)}
                 {done.copiedSeconds ? ` · ${fmtTime(done.copiedSeconds)} copied as is` : ""}
                 {done.pausedMs > 500 ? ` (+${fmtDuration(done.pausedMs)} paused)` : ""}
                 {realtime > 0 ? ` at ${realtime.toFixed(2)}× realtime` : ""}

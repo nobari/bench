@@ -3,12 +3,12 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { AlertTriangle, Camera, ChevronDown, ChevronRight, ChevronUp, Sparkles, Clapperboard, Crop, Download, FolderOpen, Gauge, Loader, Maximize2, Minimize2, Music, Pause, Play, Repeat, Save, Scissors, SkipBack, SkipForward, SlidersHorizontal, StepBack, StepForward, Trash2, Type, Upload, Volume2, VolumeX, Keyboard, Search, Shuffle, X } from "lucide-react";
-import { DEFAULT_EXPORT, NEUTRAL_GRADE, NEUTRAL_TRANSFORM, TITLE_ALIGNS, TITLE_FAMILIES, TITLE_FONTS, TITLE_POSITIONS, TITLE_SHADOWS, TITLE_WEIGHTS, TRANSITIONS, addTransitionAt, appendMusic, applyAudioTo, applyGradeTo, applyTransitionToAll, clipAt, crossfades, dbToGain, effectiveMusicEnd, estimateExport, exportRange, fmtTime, musicGainAt, musicLength, newId, newProject, newTitle, orderRecordings, placeClips, planExport, removeRange, reorderMusic, setTransition, splitClip, timelineDuration, titleLanes, transitionAt, transitionWindows, CLIP_SPEEDS, canMergeWithNext, clipLength, clipSpeed, groupOf, sourceTimeAt, mergeWithNext, moveClip, unjoin, updateClip, visibleCuts, type Clip, type MediaRef, type MusicTrack, type Project, type ProxyHeight, type Title, type TitleFont, isFileLutKind, FILE_LUT_KINDS, type FileLutKind, type LutKind, type MathLutKind, type TitleAlign, type TitlePosition, type TitleShadow, type Transition, type TransitionKind, type ExportTags, type IntroSettings, type IntroCard, DEFAULT_CARD, cardSettings, hasCard, reorderClip, parseTime, type SteadyLights, STEADY_FRAMES, clampMusicStart, musicUnused, shuffleFillMusic, describeWhere, nameSome, whereSummary, type MediaWhere, exportFingerprint, SOUND_MODES, SOUND_LABELS, soundLevels, applySoundLevels, soundState, type SoundMode, type SoundLevels } from "@/lib/tools/video/project";
+import { DEFAULT_EXPORT, NEUTRAL_GRADE, NEUTRAL_TRANSFORM, TITLE_ALIGNS, TITLE_FAMILIES, TITLE_FONTS, TITLE_POSITIONS, TITLE_SHADOWS, TITLE_WEIGHTS, TRANSITIONS, addTransitionAt, appendMusic, applyAudioTo, applyGradeTo, applyTransitionToAll, clipAt, crossfades, dbToGain, effectiveMusicEnd, estimateExport, exportRange, fmtTime, musicGainAt, musicLength, newId, newProject, newTitle, orderRecordings, placeClips, planExport, removeRange, reorderMusic, setTransition, splitClip, timelineDuration, titleLanes, transitionAt, transitionWindows, CLIP_SPEEDS, canMergeWithNext, clipLength, clipSpeed, groupOf, sourceTimeAt, mergeWithNext, moveClip, unjoin, updateClip, visibleCuts, type Clip, type MediaRef, type MusicTrack, type Project, type ProxyHeight, type Title, type TitleFont, isFileLutKind, FILE_LUT_KINDS, type FileLutKind, type LutKind, type MathLutKind, type TitleAlign, type TitlePosition, type TitleShadow, type Transition, type TransitionKind, type ExportTags, type IntroSettings, type IntroCard, DEFAULT_CARD, cardSettings, hasCard, reorderClip, parseTime, type SteadyLights, STEADY_FRAMES, clampMusicStart, musicUnused, shuffleFillMusic, describeWhere, nameSome, whereSummary, type MediaWhere, exportFingerprint, SOUND_MODES, SOUND_LABELS, soundLevels, applySoundLevels, soundState, type SoundMode, type SoundLevels, FRAMES, FRAME_LABELS, MAX_REFRAME_ZOOM, type Frame, type Layout, type ReframeKey } from "@/lib/tools/video/project";
 import { gainToReach, YOUTUBE_LUFS, type Loudness } from "@/lib/tools/video/loudness";
 import { drawTransition } from "@/lib/tools/video/transitions";
 import { LUT_OPTIONS, buildDlogLut, deriveLut, fetchOfficialLut, lutToCube, parseCube, type Lut3D } from "@/lib/tools/video/lut";
 import { fmtBytes, fmtDuration, fmtMs, type ExportProgress, type SpeedPriors, type StepProgress } from "@/lib/tools/video/progress";
-import { buildProxy, drawOverlays, encoderSupport, exportProject, fixLevel, Grader, MAX_AUDIBLE_SPEED, measureFile, measureLoudness, MIN_AUDIBLE_SPEED, probe, probeKeyframes, renderFrame, renderSceneThumbs, scanMoments, scanMotion, Steadier, type ExportFault, type ExportManifest, type PartStore, type JoinInfo } from "@/lib/tools/video/engine";
+import { buildProxy, drawOverlays, encoderSupport, exportProject, fixLevel, FrameComposer, MAX_AUDIBLE_SPEED, measureFile, measureLoudness, MIN_AUDIBLE_SPEED, probe, probeKeyframes, renderFrame, renderSceneThumbs, scanMoments, scanMotion, Steadier, type ExportFault, type ExportManifest, type PartStore, type JoinInfo } from "@/lib/tools/video/engine";
 import { INTRO_STYLES, addSceneAt, buildIntro, describeIntro, drawIntroFx, hasIntro, introCandidates, introFrameAt, introLength, introRegion, introStyle, mainClips, moveScene, pickMoments, removeIntro, removeScene, restyleIntro, sceneSecondsFor, scoreMoments, setSceneSeconds, shiftAfterIntro, styledGrade, sceneFootage, minSceneSeconds, introBlendAt } from "@/lib/tools/video/intro";
 import { ProjectStore, hasFileSystemAccess, AUTOSAVE_FILE, FRAMES_DIR, PROJECT_FILE, PROXY_DIR } from "@/lib/tools/video/store";
 import { cn } from "@/lib/utils";
@@ -23,6 +23,7 @@ import { PART_SECONDS } from "@/lib/tools/video/engine";
 import { GHOST, INPUT, PRIMARY, RANGE, SEL } from "./video-styles";
 import { ExportDone, ExportFiles, ExportRun, ExportSummary, PHASE_LABEL, Preflight, PresetsRow, Section, type DoneResult, type ExportJobView, type FileEntry, type FixState, type ResumableView, type RunEvent, type Skip, ExportReview } from "./video-export";
 import { applyPreset, matchPreset } from "@/lib/tools/video/export-presets";
+import { frameAspect, outputSize, sizeText } from "@/lib/tools/video/reframe";
 import { preflight, preflightBlocks } from "@/lib/tools/video/preflight";
 import { applyRepair, planRepair } from "@/lib/tools/video/check";
 import { diagnose, type DoctorDepth, type DoctorProgress, type DoctorReport, type Finding, type FixKind } from "@/lib/tools/video/doctor";
@@ -35,7 +36,16 @@ import { defaultSpeeds } from "@/lib/tools/video/progress";
 const Key = ({ k }: { k: string }) => <kbd className="ml-auto rounded border border-edge px-1 font-mono text-[10px] leading-4 text-faint max-sm:hidden">{k}</kbd>;
 const LANE_COLORS = ["#8a8f99", "#5ab3d6", "#d9a400"];
 const POSITION_NAMES: Record<TitlePosition, string> = { tl: "Top left", tc: "Top centre", tr: "Top right", ml: "Middle left", mc: "Centre", mr: "Middle right", bl: "Bottom left", bc: "Bottom centre", br: "Bottom right" };
-const KIND_LABELS: Record<Title["kind"], string> = { intro: "Intro", title: "Title", lowerThird: "Lower third" };
+const KIND_LABELS: Record<Title["kind"], string> = { intro: "Intro", title: "Title", lowerThird: "Lower third", hook: "Hook", caption: "Caption" };
+/** The Picture section's one layout control: which panes fill a vertical, square or portrait frame. */
+const LAYOUT_CHOICES: { id: string; label: string; layout: Layout | null }[] = [
+  { id: "fill", label: "The window fills the frame", layout: null },
+  { id: "fit-blur", label: "Whole picture over a blurred copy", layout: { kind: "fit", background: "blur" } },
+  { id: "fit-black", label: "Whole picture over black", layout: { kind: "fit", background: "black" } },
+  { id: "stack-top", label: "Whole picture above the window", layout: { kind: "stack", wideAt: "top" } },
+  { id: "stack-bottom", label: "Whole picture below the window", layout: { kind: "stack", wideAt: "bottom" } },
+];
+const layoutChoice = (l: Layout | null | undefined) => (!l || l.kind === "fill" ? "fill" : l.kind === "fit" ? (l.background === "blur" || !l.background ? "fit-blur" : "fit-black") : l.wideAt === "bottom" ? "stack-bottom" : "stack-top");
 const DEFAULT_PREVIEW_HEIGHT: ProxyHeight = 0;
 const fmtDb = (v: number) => (v <= -60 ? "off" : `${v > 0 ? "+" : ""}${v} dB`);
 const describeLoudness = (r: Loudness) => (r.integrated === null ? "silent" : `${r.integrated.toFixed(1)} LUFS · peaks ${r.peakDb.toFixed(1)} dBFS`);
@@ -334,7 +344,7 @@ export function VideoEditorWidget() {
   const [dragOver, setDragOver] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const graderRef = useRef<Grader | null>(null);
+  const graderRef = useRef<{ key: string; composer: FrameComposer } | null>(null);
   const steadyRef = useRef<Steadier | null>(null);
   const proxyUrls = useRef<Map<string, string>>(new Map());
   const fileInput = useRef<HTMLInputElement>(null);
@@ -789,9 +799,11 @@ export function VideoEditorWidget() {
   };
   /* ------------------------------------------------------------ export set-up: name, estimate, pre-flight, files */
   const firstMedia = project.media[project.clips[0]?.media ?? ""];
-  const outH = project.export.resolution === "source" ? (firstMedia?.height ?? 4320) : project.export.resolution;
-  const outW = firstMedia?.width && firstMedia.height ? Math.round((firstMedia.width * (outH / firstMedia.height)) / 2) * 2 : Math.round((outH * 16) / 9);
-  const sizeLabel = outH >= 4320 ? "8K" : outH >= 2160 ? "4K" : `${outH}p`;
+  const { width: outW, height: outH } = outputSize(firstMedia?.width || 7680, firstMedia?.height || 4320, project.export);
+  const frameChosen = project.export.frame ?? "source";
+  const sizeLabel = frameChosen !== "source" ? `${outW}x${outH}` : outH >= 4320 ? "8K" : outH >= 2160 ? "4K" : `${outH}p`;
+  /** "1080×1920" for a resolution choice in the chosen frame, for the Picture section's options. */
+  const sizeFor = (resolution: "source" | number) => (firstMedia?.width && firstMedia.height ? sizeText(outputSize(firstMedia.width, firstMedia.height, { resolution, frame: project.export.frame })) : null);
   const autoName = `${project.name.replace(/[^\w-]+/g, "-")}-${sizeLabel}${range ? `-${Math.round(range.from)}s-${Math.round(range.to)}s` : ""}.mp4`;
   const fileName = exportName === null ? autoName : /\.mp4$/i.test(exportName) ? exportName : `${exportName}.mp4`;
   const speedProfile = `${firstMedia?.height ?? 0}>${outH}:${project.export.codec}:${project.export.preset}`;
@@ -844,7 +856,7 @@ export function VideoEditorWidget() {
     const mode = joinMode(estimate.bytes);
     return { parts: estimate.bytes, join: joinNeed(mode === "remove" ? [onePart] : [estimate.bytes], audio, mode, estimate.bytes), mode, resumable: false };
   }, [project.clips.length, project.export.audioBitrateKbps, project.export.bitrateMbps, estimate.bytes, range, duration, resumable]);
-  const checks = preflight(project, estimate, outH, {
+  const checks = preflight(project, estimate, { width: outW, height: outH }, {
     fileSystem: hasFileSystemAccess(),
     folderName: folder,
     missing: missingMedia.length,
@@ -898,7 +910,7 @@ export function VideoEditorWidget() {
   };
   const codecLabel = project.export.codec === "hevc" ? "HEVC" : "H.264";
   const presetLabel = { quality: "quality", balanced: "balanced", fast: "fast" }[project.export.preset];
-  const pictureLine = `${codecLabel} · ${outW}×${outH} · ${project.export.bitrateMbps} Mbps · ${presetLabel} encoder · smart copy ${project.export.smartCopy ? "on" : "off"}${project.export.steadyLights && project.export.steadyLights !== "off" ? " · steady lights" : ""}`;
+  const pictureLine = `${frameChosen !== "source" ? `${FRAME_LABELS[frameChosen]} · ` : ""}${codecLabel} · ${outW}×${outH} · ${project.export.bitrateMbps} Mbps · ${presetLabel} encoder · smart copy ${project.export.smartCopy ? "on" : "off"}${project.export.steadyLights && project.export.steadyLights !== "off" ? " · steady lights" : ""}`;
   const soundLine = `${SOUND_LABELS[project.sound ?? "footage"]} · camera ${fmtDb(levels.camera)} · music ${fmtDb(levels.music)} · AAC ${project.export.audioBitrateKbps} kbps`;
   const tagsLine = project.export.tags.title.trim() ? `${project.export.tags.kind === "music-video" ? "Music video" : "Video"} · “${project.export.tags.title}”${project.export.tags.artist ? ` · ${project.export.tags.artist}` : ""}${project.export.tags.album ? ` · ${project.export.tags.album}` : ""}` : `${project.export.tags.kind === "music-video" ? "Music video" : "Video"} · no title yet (the project name is used)`;
   const previewScopeLabel = { around: "30 s around the playhead", intro: "the intro", range: "the export range", all: "the whole timeline" }[previewOpts.scope];
@@ -1912,8 +1924,10 @@ export function VideoEditorWidget() {
       if (v && c && under && v.readyState >= 2) {
         const w = c.width, h = c.height;
         try {
-          if (!graderRef.current || graderRef.current.canvas.width !== w) graderRef.current = new Grader(w, h);
-          const grader = graderRef.current;
+          // The composer is the export's: the frame's shape, the layout and each clip's window, from the proxy or the file.
+          const frameKey = `${w}x${h}:${project.export.frame ?? "source"}:${layoutChoice(project.layout)}`;
+          if (!graderRef.current || graderRef.current.key !== frameKey) graderRef.current = { key: frameKey, composer: new FrameComposer(w, h, project.export.frame, project.layout) };
+          const grader = graderRef.current.composer;
           grader.setCustomLut(customLut);
           if (fileLuts) for (const [k, l] of Object.entries(fileLuts)) if (l) grader.provideLut(k as LutKind, l);
           const ctx = c.getContext("2d")!;
@@ -1944,10 +1958,8 @@ export function VideoEditorWidget() {
               if (alt.readyState >= 2) {
                 if (!scratchRef.current || scratchRef.current.w !== w || scratchRef.current.h !== h) scratchRef.current = { a: new OffscreenCanvas(w, h), b: new OffscreenCanvas(w, h), s: new OffscreenCanvas(w, h), w, h };
                 const sc = scratchRef.current;
-                grader.draw(v, gradeFor(under.clip), under.clip.transform, v.videoWidth, v.videoHeight);
-                sc.a.getContext("2d")!.drawImage(grader.canvas, 0, 0);
-                grader.draw(alt, gradeFor(other), other.transform, alt.videoWidth, alt.videoHeight);
-                sc.b.getContext("2d")!.drawImage(grader.canvas, 0, 0);
+                sc.a.getContext("2d")!.drawImage(grader.compose(v, gradeFor(under.clip), under.clip, under.sourceTime, v.videoWidth, v.videoHeight), 0, 0);
+                sc.b.getContext("2d")!.drawImage(grader.compose(alt, gradeFor(other), other, want, alt.videoWidth, alt.videoHeight), 0, 0);
                 drawTransition(ctx, outgoingIsUnder ? sc.a : sc.b, outgoingIsUnder ? sc.b : sc.a, w, h, tr.window.kind, tr.progress, sc.s);
                 composed = true;
               }
@@ -1965,10 +1977,7 @@ export function VideoEditorWidget() {
               }
             }
           }
-          if (!composed) {
-            grader.draw(v, gradeFor(under.clip), under.clip.transform, v.videoWidth, v.videoHeight);
-            ctx.drawImage(grader.canvas, 0, 0);
-          }
+          if (!composed) ctx.drawImage(grader.compose(v, gradeFor(under.clip), under.clip, under.sourceTime, v.videoWidth, v.videoHeight), 0, 0);
           if (intro) {
             if (!fxScratchRef.current || fxScratchRef.current.w !== w || fxScratchRef.current.h !== h) fxScratchRef.current = { a: new OffscreenCanvas(w, h), b: new OffscreenCanvas(w, h), w, h };
             drawIntroFx(ctx, w, h, intro, project, fxScratchRef.current, introBlendAt(project, placed, tr, playhead));
@@ -2051,7 +2060,7 @@ export function VideoEditorWidget() {
     }
   };
   const addTitle = (kind: Title["kind"]) => {
-    const t = newTitle(kind, kind === "intro" ? 0 : playhead, kind === "intro" ? project.name : kind === "lowerThird" ? "Location" : "Title", kind === "intro" ? new Date().toLocaleDateString() : "");
+    const t = newTitle(kind, kind === "intro" ? 0 : playhead, kind === "intro" ? project.name : kind === "lowerThird" ? "Location" : kind === "hook" ? "Wait for it" : kind === "caption" ? "Caption" : "Title", kind === "intro" ? new Date().toLocaleDateString() : "");
     setProject((p) => ({ ...p, titles: [...p.titles, t] }));
     focusTitle(t);
   };
@@ -2306,6 +2315,7 @@ export function VideoEditorWidget() {
       pendingHandles: () => store.pendingHandles(project.id),
       missing: () => store.missing(Object.keys(project.media)),
       getProject: () => project,
+      frameAt: (t: number, height?: number) => renderFrame({ project, getFile: (id) => store.getFile(id), logo, t, height, type: "image/png" }).then((f) => f.blob),
       getPlayhead: () => playhead,
       getDone: () => done,
       getFiles: () => files,
@@ -2854,9 +2864,11 @@ export function VideoEditorWidget() {
     setSelected(d.id);
   };
   const first = project.media[project.clips[0]?.media ?? ""];
-  const previewAspect = first?.width && first.height ? first.width / first.height : 16 / 9;
+  const sourceAspect = first?.width && first.height ? first.width / first.height : 16 / 9;
+  // The preview takes the export frame's shape, so a vertical cut is seen as it will come out.
+  const previewAspect = frameAspect(project.export.frame, first?.width || 16, first?.height || 9);
   const thumbH = Math.min(THUMB_HEIGHT, first?.height ?? THUMB_HEIGHT);
-  const thumbSize = `${Math.round((previewAspect * thumbH) / 2) * 2}×${thumbH}`;
+  const thumbSize = `${Math.round((sourceAspect * thumbH) / 2) * 2}×${thumbH}`;
 
   // The timeline panel, rendered under the row or alone while an export runs.
   // The lanes share the panel's height by flex: the video lane three parts, each title row and music lane one, with
@@ -3209,7 +3221,7 @@ export function VideoEditorWidget() {
           >
             <video ref={videoRef} playsInline className="absolute inset-0 h-full w-full object-contain opacity-0" />
             <video ref={altRef} muted playsInline className="pointer-events-none absolute inset-0 h-full w-full object-contain opacity-0" />
-            <canvas ref={canvasRef} width={1280} height={Math.round(1280 / previewAspect)} className="absolute inset-0 h-full w-full object-contain" />
+            <canvas ref={canvasRef} width={previewAspect >= 1 ? 1280 : Math.round(1280 * previewAspect)} height={previewAspect >= 1 ? Math.round(1280 / previewAspect) : 1280} className="absolute inset-0 h-full w-full object-contain" data-preview-canvas />
             {project.clips.length > 0 && (
               <button type="button" onClick={toggleFullscreen} aria-label={fullscreen ? "Exit full screen" : "Full screen"} title={fullscreen ? "Exit full screen (Esc)" : "Full screen (double-click the preview)"} className="absolute top-2 right-2 rounded-[var(--radius-sm)] bg-black/50 p-1.5 text-white/90 opacity-0 transition-opacity group-hover:opacity-100 focus:opacity-100 hover:bg-black/70">
                 {fullscreen ? <Minimize2 size={15} /> : <Maximize2 size={15} />}
@@ -3891,6 +3903,32 @@ export function VideoEditorWidget() {
                     <Slider key={k} label={{ x: "Crop left", y: "Crop top", w: "Crop width", h: "Crop height" }[k]} value={current.transform.crop[k]} min={k === "w" || k === "h" ? 0.1 : 0} max={1} step={0.005} onChange={(v) => update(current.id, { transform: { ...current.transform, crop: { ...current.transform.crop, [k]: v } } })} format={(v) => `${Math.round(v * 100)}%`} />
                   ))}
                 </div>
+                {(frameChosen !== "source" || current.reframe) &&
+                  (() => {
+                    const keys = current.reframe?.keys ?? [];
+                    const key: ReframeKey = keys[0] ?? { t: 0, cx: 0.5, cy: 0.5, zoom: 1 };
+                    const setKey = (patch: Partial<ReframeKey>) => update(current.id, { reframe: { keys: [{ ...key, ...patch }] } });
+                    return (
+                      <div className="space-y-2 rounded-[var(--radius-sm)] border border-edge p-2" data-reframe>
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <span className="text-[12.5px] text-ink" title="A frame narrower than the recording shows a window of it; the window is as tall as the picture allows at zoom 1 and moves across it">
+                            Window — where the {FRAME_LABELS[frameChosen]} frame looks
+                          </span>
+                          {keys.length > 1 ? <span className="text-[12px] text-faint">moves over the clip ({keys.length} keys)</span> : null}
+                          <button type="button" onClick={() => update(current.id, { reframe: undefined })} className={cn(GHOST, "h-6 px-2 text-[12px]")} data-reframe-reset>
+                            Centre
+                          </button>
+                        </div>
+                        {keys.length <= 1 && (
+                          <div className="grid grid-cols-3 gap-2">
+                            <Slider label="Across" value={key.cx} min={0} max={1} step={0.005} onChange={(v) => setKey({ cx: v })} format={(v) => `${v === 0.5 ? "centre" : `${Math.round((v - 0.5) * 200)}%`}`} />
+                            <Slider label="Up / down" value={key.cy} min={0} max={1} step={0.005} onChange={(v) => setKey({ cy: v })} format={(v) => `${v === 0.5 ? "centre" : `${Math.round((v - 0.5) * 200)}%`}`} />
+                            <Slider label="Zoom" value={key.zoom} min={1} max={MAX_REFRAME_ZOOM} step={0.05} onChange={(v) => setKey({ zoom: v })} format={(v) => `${v.toFixed(2)}×`} />
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
                 <div className="flex gap-1.5">
                   <button type="button" onClick={() => update(current.id, { transform: { ...NEUTRAL_TRANSFORM, crop: { ...NEUTRAL_TRANSFORM.crop } } })} className={GHOST}>
                     Reset
@@ -4117,6 +4155,12 @@ export function VideoEditorWidget() {
                   </button>
                   <button type="button" onClick={() => addTitle("lowerThird")} className={GHOST}>
                     + Lower third
+                  </button>
+                  <button type="button" onClick={() => addTitle("hook")} className={GHOST} title="The big bold line that opens a short, in for its first beats" data-add-hook>
+                    + Hook
+                  </button>
+                  <button type="button" onClick={() => addTitle("caption")} className={GHOST} title="A bold caption on a dark pill, wrapped to the frame and kept inside the platform's safe area" data-add-caption>
+                    + Caption
                   </button>
                   <input ref={logoInput} type="file" accept="image/png,image/svg+xml,image/webp" hidden onChange={(e) => e.target.files?.[0] && void addLogo(e.target.files[0])} />
                   <button type="button" onClick={() => void pickLogo()} className={GHOST}>
@@ -4384,10 +4428,31 @@ export function VideoEditorWidget() {
                         <label className="text-[12.5px] text-muted">
                           Resolution
                           <select value={String(project.export.resolution)} onChange={(e) => setProject((p) => ({ ...p, export: { ...p.export, resolution: e.target.value === "source" ? "source" : Number(e.target.value) } }))} className={cn(SEL, "mt-1 w-full")} data-export-resolution>
-                            <option value="source">Source ({firstMedia?.width ?? "—"} × {firstMedia?.height ?? "—"})</option>
-                            <option value="2160">4K (2160p)</option>
-                            <option value="1440">1440p</option>
-                            <option value="1080">1080p</option>
+                            <option value="source">Source{sizeFor("source") ? ` (${sizeFor("source")})` : ""}</option>
+                            <option value="2160">4K{frameChosen === "source" ? " (2160p)" : sizeFor(2160) ? ` (${sizeFor(2160)})` : ""}</option>
+                            <option value="1440">1440p{frameChosen !== "source" && sizeFor(1440) ? ` (${sizeFor(1440)})` : ""}</option>
+                            <option value="1080">1080p{frameChosen !== "source" && sizeFor(1080) ? ` (${sizeFor(1080)})` : ""}</option>
+                          </select>
+                        </label>
+                        <label className="text-[12.5px] text-muted">
+                          Frame
+                          <select value={frameChosen} onChange={(e) => setProject((p) => ({ ...p, export: { ...p.export, frame: e.target.value as Frame } }))} className={cn(SEL, "mt-1 w-full")} data-export-frame title="A vertical, square or portrait frame shows a window of the picture — Shorts, Reels and TikTok take 9:16. Where the window sits is set per clip in Transform; the whole timeline is re-encoded">
+                            {FRAMES.map((f) => (
+                              <option key={f} value={f}>
+                                {FRAME_LABELS[f]}
+                                {f === "9:16" ? " — Shorts, Reels, TikTok" : f === "4:5" ? " — Instagram feed" : ""}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <label className="text-[12.5px] text-muted">
+                          Layout
+                          <select value={layoutChoice(project.layout)} disabled={frameChosen === "source"} onChange={(e) => setProject((p) => ({ ...p, layout: LAYOUT_CHOICES.find((c) => c.id === e.target.value)?.layout ?? null }))} className={cn(SEL, "mt-1 w-full")} data-export-layout title="How the frame is filled: the window alone, the whole picture fitted over a blurred copy of the window or over black, or the whole picture along one edge with the window in the rest">
+                            {LAYOUT_CHOICES.map((c) => (
+                              <option key={c.id} value={c.id}>
+                                {c.label}
+                              </option>
+                            ))}
                           </select>
                         </label>
                         <label className="text-[12.5px] text-muted">

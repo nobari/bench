@@ -52,16 +52,20 @@ import {
   transitionWindows,
   type Clip,
   type ExportSpan,
+  type Frame,
   type Grade,
+  type Layout,
   type LutKind,
   type MediaRef,
   type PlacedClip,
   type Project,
+  type SafeArea,
   type Title,
   type Transform,
   type TransitionWindow,
   STEADY_FRAMES,
 } from "./project";
+import { even, framed, framePanes, layoutBackdrop, outputSize, pictureAspect, transformAt } from "./reframe";
 import { drawTransition } from "./transitions";
 import {
   drawIntroFx,
@@ -498,6 +502,102 @@ void main() { vUv = aUv; vec3 p = uTransform * vec3(aPos, 1.0); gl_Position = ve
   }
 }
 
+/**
+ * Composes one clip's frame for the export frame: through a grader with the window crop for the frame's shape and,
+ * for a fit or stack layout, the whole picture graded into its own pane beside or over the window. With the
+ * recording's own frame and nothing reframed it is the grader alone, canvas and all, exactly as before frames existed.
+ */
+export class FrameComposer {
+  readonly canvas: OffscreenCanvas;
+  private readonly ctx: OffscreenCanvasRenderingContext2D;
+  private readonly graders = new Map<string, Grader>();
+  private custom: Lut3D | null = null;
+  private readonly luts: Partial<Record<LutKind, Lut3D>> = {};
+
+  constructor(
+    readonly width: number,
+    readonly height: number,
+    private readonly frame: Frame | undefined,
+    private readonly layout: Layout | null | undefined,
+  ) {
+    this.canvas = new OffscreenCanvas(width, height);
+    this.ctx = this.canvas.getContext("2d")!;
+    this.graderFor(width, height);
+  }
+
+  /** The grader for a pane of this size — the frame's own is made first and kept. */
+  private graderFor(w: number, h: number): Grader {
+    const key = `${w}x${h}`;
+    let g = this.graders.get(key);
+    if (!g) {
+      g = new Grader(w, h);
+      g.setCustomLut(this.custom);
+      for (const [k, l] of Object.entries(this.luts)) if (l) g.provideLut(k as LutKind, l);
+      this.graders.set(key, g);
+    }
+    return g;
+  }
+
+  setCustomLut(lut: Lut3D | null) {
+    this.custom = lut;
+    for (const g of this.graders.values()) g.setCustomLut(lut);
+  }
+
+  provideLut(kind: LutKind, lut: Lut3D) {
+    this.luts[kind] = lut;
+    for (const g of this.graders.values()) g.provideLut(kind, lut);
+  }
+
+  /**
+   * Draws the clip's frame at a source instant and returns the canvas holding it (the grader's own on the plain
+   * path), sized to the export frame.
+   */
+  compose(src: Parameters<Grader["draw"]>[0], grade: Grade, clip: Pick<Clip, "transform" | "reframe">, sourceT: number, srcW: number, srcH: number): OffscreenCanvas {
+    const { width: w, height: h } = this;
+    const panes = framed(this.frame) ? framePanes(this.layout, w, h, pictureAspect(clip.transform, srcW, srcH)) : null;
+    const main = this.graderFor(w, h);
+    if (!panes || (panes.length === 1 && panes[0].source === "window" && !panes[0].blur)) {
+      main.draw(src, grade, transformAt(clip, sourceT, this.frame, w / h, srcW, srcH), srcW, srcH);
+      return main.canvas;
+    }
+    const ctx = this.ctx;
+    ctx.save();
+    ctx.filter = "none";
+    ctx.globalAlpha = 1;
+    ctx.globalCompositeOperation = "source-over";
+    const backdrop = layoutBackdrop(this.layout);
+    if (backdrop) {
+      ctx.fillStyle = backdrop;
+      ctx.fillRect(0, 0, w, h);
+    } else ctx.clearRect(0, 0, w, h);
+    for (const pane of panes) {
+      const pw = even(pane.w), ph = even(pane.h);
+      if (pane.source === "window") {
+        const g = this.graderFor(pw, ph);
+        g.draw(src, grade, transformAt(clip, sourceT, this.frame, pane.w / pane.h, srcW, srcH), srcW, srcH);
+        if (pane.blur) {
+          // The blur reads past the edges as transparent; drawn a little larger, that fringe falls outside the frame.
+          const grow = pane.blur * 2;
+          ctx.filter = `blur(${pane.blur.toFixed(1)}px)`;
+          ctx.drawImage(g.canvas, pane.x - grow, pane.y - grow, pane.w + grow * 2, pane.h + grow * 2);
+          ctx.filter = "none";
+          if (pane.dim) {
+            ctx.fillStyle = `rgba(0,0,0,${pane.dim.toFixed(3)})`;
+            ctx.fillRect(pane.x, pane.y, pane.w, pane.h);
+          }
+        } else ctx.drawImage(g.canvas, pane.x, pane.y, pane.w, pane.h);
+      } else {
+        // The whole picture, as the clip's own transform leaves it, in a pane of its shape.
+        const g = this.graderFor(pw, ph);
+        g.draw(src, grade, clip.transform, srcW, srcH);
+        ctx.drawImage(g.canvas, pane.x, pane.y, pane.w, pane.h);
+      }
+    }
+    ctx.restore();
+    return this.canvas;
+  }
+}
+
 /* --------------------------------------------------------- steady lights */
 
 const STEADY_VS = `#version 300 es
@@ -651,49 +751,94 @@ export class Steadier {
 
 /* ------------------------------------------------------------- overlays */
 
-/** One title (text + optional subtitle) at its anchor, with its colour, font, size and optional backing box. */
+/** Greedy word wrap at `maxWidth` in the current font; a word wider than the line stands alone; line breaks are kept. */
+function wrapText(ctx: OffscreenCanvasRenderingContext2D, text: string, maxWidth: number): string[] {
+  const out: string[] = [];
+  for (const para of text.split(/\r?\n/)) {
+    const words = para.split(/\s+/).filter(Boolean);
+    if (!words.length) {
+      out.push("");
+      continue;
+    }
+    let line = words[0];
+    for (const word of words.slice(1)) {
+      const next = `${line} ${word}`;
+      if (ctx.measureText(next).width <= maxWidth) line = next;
+      else {
+        out.push(line);
+        line = word;
+      }
+    }
+    out.push(line);
+  }
+  return out;
+}
+
+/**
+ * One title (text + optional subtitle) at its anchor, with its colour, font, size and optional backing box, wrapped
+ * to the frame and placed inside the safe area when the project has one; `enter` is how far in its entrance is.
+ */
 function drawTitleBlock(
   ctx: OffscreenCanvasRenderingContext2D,
   w: number,
   h: number,
   title: Title,
+  safe?: SafeArea | null,
+  enter = 1,
 ) {
   const family = fontFamilyCss(title.font);
   const px = Math.max(8, Math.round(h * title.size));
   const pad = w * 0.04;
+  // The frame keeps its margin; inside the safe area (unless the title opts out) the platform's own clear is kept too.
+  const s = title.safe === false ? null : safe;
+  const inL = Math.max(pad, w * (s?.left ?? 0)),
+    inR = Math.max(pad, w * (s?.right ?? 0)),
+    inT = Math.max(pad, h * (s?.top ?? 0)),
+    inB = Math.max(pad, h * (s?.bottom ?? 0));
   const style = (size: number, weight: number) =>
     `${title.italic ? "italic " : ""}${weight} ${size}px ${family}`;
-  const lines = [
-    { text: title.text, size: px, weight: title.weight, alpha: 1 },
-  ];
-  if (title.subtitle)
-    lines.push({
-      text: title.subtitle,
-      size: Math.round(px * 0.5),
-      weight: Math.max(300, title.weight - 200),
-      alpha: 0.85,
-    });
-  const gap = px * 0.35;
   const c = ctx as OffscreenCanvasRenderingContext2D & {
     letterSpacing?: string;
   };
   if ("letterSpacing" in c) c.letterSpacing = `${title.letterSpacing}em`;
+  // The box: padding, corners and a border, drawn without any text shadow.
+  const bp = px * title.padding,
+    bw = px * title.borderWidth;
+  const maxW = Math.max(px, w - inL - inR - bp * 2);
+  const lines: { text: string; size: number; weight: number; alpha: number; gapBefore: number }[] = [];
+  ctx.font = style(px, title.weight);
+  for (const text of wrapText(ctx, title.text, maxW)) lines.push({ text, size: px, weight: title.weight, alpha: 1, gapBefore: lines.length ? px * 0.12 : 0 });
+  if (title.subtitle) {
+    const size = Math.round(px * 0.5),
+      weight = Math.max(300, title.weight - 200);
+    ctx.font = style(size, weight);
+    const first = lines.length;
+    for (const text of wrapText(ctx, title.subtitle, maxW)) lines.push({ text, size, weight, alpha: 0.85, gapBefore: lines.length === first ? px * 0.35 : size * 0.12 });
+  }
   const widths = lines.map((l) => {
     ctx.font = style(l.size, l.weight);
     return ctx.measureText(l.text).width;
   });
   const blockW = Math.max(...widths),
-    blockH = lines.reduce((a, l) => a + l.size, 0) + gap * (lines.length - 1);
+    blockH = lines.reduce((a, l) => a + l.size + l.gapBefore, 0);
   const row = title.position[0],
     col = title.position[1];
   const x =
-    col === "l" ? pad : col === "r" ? w - pad - blockW : (w - blockW) / 2;
+    col === "l" ? inL : col === "r" ? w - inR - blockW : inL + (w - inL - inR - blockW) / 2;
   const y =
-    row === "t" ? pad : row === "b" ? h - pad - blockH : (h - blockH) / 2;
+    row === "t" ? inT : row === "b" ? h - inB - blockH : inT + (h - inT - inB - blockH) / 2;
+  // The entrance: the block pops up from slightly smaller, or rises a little, as it fades in.
+  if (enter < 1 && title.enter && title.enter !== "fade") {
+    const cxB = x + blockW / 2,
+      cyB = y + blockH / 2;
+    if (title.enter === "pop") {
+      const k = 0.92 + 0.08 * enter;
+      ctx.translate(cxB, cyB);
+      ctx.scale(k, k);
+      ctx.translate(-cxB, -cyB);
+    } else ctx.translate(0, (1 - enter) * h * 0.02);
+  }
   const base = ctx.globalAlpha;
-  // The box: padding, corners and a border, drawn without any text shadow.
-  const bp = px * title.padding,
-    bw = px * title.borderWidth;
   if (title.background || bw > 0) {
     ctx.shadowColor = "transparent";
     ctx.beginPath();
@@ -743,6 +888,7 @@ function drawTitleBlock(
   ctx.lineJoin = "round";
   let cy = y;
   for (const l of lines) {
+    cy += l.gapBefore;
     ctx.font = style(l.size, l.weight);
     ctx.globalAlpha = base * l.alpha;
     if (title.shadow === "outline") {
@@ -752,7 +898,7 @@ function drawTitleBlock(
     }
     ctx.fillStyle = title.color;
     ctx.fillText(l.text, tx, cy);
-    cy += l.size + gap;
+    cy += l.size;
   }
   if ("letterSpacing" in c) c.letterSpacing = "0px";
   ctx.shadowColor = "transparent";
@@ -782,7 +928,7 @@ export function drawOverlays(
       ctx.fillRect(0, 0, w, h);
     }
     ctx.globalAlpha = alpha;
-    drawTitleBlock(ctx, w, h, title);
+    drawTitleBlock(ctx, w, h, title, project.safeArea, fadeIn);
     ctx.restore();
   }
   if (logo && project.watermark.media) {
@@ -1274,11 +1420,7 @@ async function exportWithPulse(
   const first = project.media[project.clips[0]?.media ?? ""];
   if (!first?.width || !first.height)
     throw new Error("Add at least one video clip.");
-  const outH =
-    project.export.resolution === "source"
-      ? first.height
-      : project.export.resolution;
-  const outW = Math.round((first.width * (outH / first.height)) / 2) * 2;
+  const { width: outW, height: outH } = outputSize(first.width, first.height, project.export);
   const fps = first.fps || 30;
   const codec: VideoCodec = project.export.codec;
   const bitrate = project.export.bitrateMbps * 1e6;
@@ -1434,7 +1576,7 @@ async function exportWithPulse(
   };
   const canvas = new OffscreenCanvas(outW, outH);
   const ctx2d = canvas.getContext("2d")!;
-  const grader = new Grader(outW, outH);
+  const grader = new FrameComposer(outW, outH, project.export.frame, project.layout);
   const steadyFrames = STEADY_FRAMES[project.export.steadyLights ?? "off"];
   const steady = steadyFrames ? new Steadier(outW, outH, steadyFrames) : null;
   if (project.customLut) {
@@ -1767,22 +1909,8 @@ async function exportWithPulse(
           tmpB ??= new OffscreenCanvas(outW, outH);
           scratch ??= new OffscreenCanvas(outW, outH);
           const om = project.media[other.media];
-          grader.draw(
-            sample.toCanvasImageSource(),
-            gradeFor(clip, timelineT),
-            clip.transform,
-            srcW,
-            srcH,
-          );
-          tmpA.getContext("2d")!.drawImage(grader.canvas, 0, 0, outW, outH);
-          grader.draw(
-            frame.toCanvasImageSource(),
-            gradeFor(other, timelineT),
-            other.transform,
-            om?.width ?? frame.displayWidth,
-            om?.height ?? frame.displayHeight,
-          );
-          tmpB.getContext("2d")!.drawImage(grader.canvas, 0, 0, outW, outH);
+          tmpA.getContext("2d")!.drawImage(grader.compose(sample.toCanvasImageSource(), gradeFor(clip, timelineT), clip, sample.timestamp, srcW, srcH), 0, 0, outW, outH);
+          tmpB.getContext("2d")!.drawImage(grader.compose(frame.toCanvasImageSource(), gradeFor(other, timelineT), other, sourceTimeAt(other, timelineT), om?.width ?? frame.displayWidth, om?.height ?? frame.displayHeight), 0, 0, outW, outH);
           drawTransition(
             ctx2d,
             outgoingIsThis ? tmpA : tmpB,
@@ -1797,14 +1925,7 @@ async function exportWithPulse(
         }
       }
       if (!composed && span.kind === "encode") {
-        grader.draw(
-          sample.toCanvasImageSource(),
-          gradeFor(clip, timelineT),
-          clip.transform,
-          srcW,
-          srcH,
-        );
-        ctx2d.drawImage(grader.canvas, 0, 0, outW, outH);
+        ctx2d.drawImage(grader.compose(sample.toCanvasImageSource(), gradeFor(clip, timelineT), clip, sample.timestamp, srcW, srcH), 0, 0, outW, outH);
       } else if (!composed) {
         ctx2d.drawImage(sample.toCanvasImageSource(), 0, 0, outW, outH);
       }
@@ -2177,11 +2298,8 @@ export async function renderFrame(opts: FrameOptions): Promise<RenderedFrame> {
     throw new Error("Add at least one video clip.");
   const under = clipAt(project.clips, t);
   if (!under) throw new Error("There is no clip under the playhead.");
-  const outH =
-    Math.round(
-      Math.min(first.height, Math.max(2, opts.height ?? first.height)) / 2,
-    ) * 2;
-  const outW = Math.round((first.width * (outH / first.height)) / 2) * 2;
+  // The frame's shape at the source's own pixels, capped at the height asked for.
+  const { width: outW, height: outH } = outputSize(first.width, first.height, { resolution: "source", frame: project.export.frame }, opts.height);
   const inputs = new Map<string, Input>();
   const openInput = async (mediaId: string) => {
     if (inputs.has(mediaId)) return inputs.get(mediaId)!;
@@ -2207,7 +2325,7 @@ export async function renderFrame(opts: FrameOptions): Promise<RenderedFrame> {
   };
   const canvas = new OffscreenCanvas(outW, outH);
   const ctx = canvas.getContext("2d")!;
-  const grader = new Grader(outW, outH);
+  const grader = new FrameComposer(outW, outH, project.export.frame, project.layout);
   if (project.customLut) {
     try {
       grader.setCustomLut(parseCube(project.customLut.cube));
@@ -2239,22 +2357,8 @@ export async function renderFrame(opts: FrameOptions): Promise<RenderedFrame> {
         b = new OffscreenCanvas(outW, outH),
         scratch = new OffscreenCanvas(outW, outH);
       const om = project.media[other.media];
-      grader.draw(
-        main.toCanvasImageSource(),
-        gradeFor(under.clip),
-        under.clip.transform,
-        srcW,
-        srcH,
-      );
-      a.getContext("2d")!.drawImage(grader.canvas, 0, 0, outW, outH);
-      grader.draw(
-        frame.toCanvasImageSource(),
-        gradeFor(other),
-        other.transform,
-        om?.width ?? frame.displayWidth,
-        om?.height ?? frame.displayHeight,
-      );
-      b.getContext("2d")!.drawImage(grader.canvas, 0, 0, outW, outH);
+      a.getContext("2d")!.drawImage(grader.compose(main.toCanvasImageSource(), gradeFor(under.clip), under.clip, under.sourceTime, srcW, srcH), 0, 0, outW, outH);
+      b.getContext("2d")!.drawImage(grader.compose(frame.toCanvasImageSource(), gradeFor(other), other, sourceTimeAt(other, t), om?.width ?? frame.displayWidth, om?.height ?? frame.displayHeight), 0, 0, outW, outH);
       drawTransition(
         ctx,
         outgoingIsThis ? a : b,
@@ -2269,16 +2373,7 @@ export async function renderFrame(opts: FrameOptions): Promise<RenderedFrame> {
       composed = true;
     }
   }
-  if (!composed) {
-    grader.draw(
-      main.toCanvasImageSource(),
-      gradeFor(under.clip),
-      under.clip.transform,
-      srcW,
-      srcH,
-    );
-    ctx.drawImage(grader.canvas, 0, 0, outW, outH);
-  }
+  if (!composed) ctx.drawImage(grader.compose(main.toCanvasImageSource(), gradeFor(under.clip), under.clip, under.sourceTime, srcW, srcH), 0, 0, outW, outH);
   if (intro)
     drawIntroFx(
       ctx,

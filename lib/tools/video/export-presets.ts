@@ -5,7 +5,7 @@
 
 import type { ExportSettings } from "./project";
 
-export type PresetSettings = Pick<ExportSettings, "codec" | "bitrateMbps" | "preset" | "audioBitrateKbps" | "resolution">;
+export type PresetSettings = Pick<ExportSettings, "codec" | "bitrateMbps" | "preset" | "audioBitrateKbps" | "resolution" | "frame">;
 
 export interface ExportPreset {
   id: string;
@@ -16,17 +16,20 @@ export interface ExportPreset {
 }
 
 export const EXPORT_PRESETS: ExportPreset[] = [
-  { id: "youtube-8k", name: "YouTube 8K", blurb: "HEVC at the source size, 100 Mbps — inside YouTube's 80–160 Mbps range for 8K — with 320 kbps sound", settings: { codec: "hevc", bitrateMbps: 100, preset: "balanced", audioBitrateKbps: 320, resolution: "source" } },
-  { id: "youtube-4k", name: "YouTube 4K", blurb: "HEVC at 2160p, 45 Mbps, 320 kbps sound — YouTube's range for 4K at 30 fps is 35–45 Mbps", settings: { codec: "hevc", bitrateMbps: 45, preset: "balanced", audioBitrateKbps: 320, resolution: 2160 } },
-  { id: "share-1080", name: "1080p share", blurb: "H.264 at 1080p, 12 Mbps, 192 kbps sound — plays on anything, a tenth of the size", settings: { codec: "avc", bitrateMbps: 12, preset: "balanced", audioBitrateKbps: 192, resolution: 1080 } },
-  { id: "archive", name: "Archive", blurb: "HEVC at the source size, 200 Mbps, the quality preset, 320 kbps sound — a master to cut from later", settings: { codec: "hevc", bitrateMbps: 200, preset: "quality", audioBitrateKbps: 320, resolution: "source" } },
+  { id: "youtube-8k", name: "YouTube 8K", blurb: "HEVC at the source size, 100 Mbps — inside YouTube's 80–160 Mbps range for 8K — with 320 kbps sound", settings: { codec: "hevc", bitrateMbps: 100, preset: "balanced", audioBitrateKbps: 320, resolution: "source", frame: "source" } },
+  { id: "youtube-4k", name: "YouTube 4K", blurb: "HEVC at 2160p, 45 Mbps, 320 kbps sound — YouTube's range for 4K at 30 fps is 35–45 Mbps", settings: { codec: "hevc", bitrateMbps: 45, preset: "balanced", audioBitrateKbps: 320, resolution: 2160, frame: "source" } },
+  { id: "share-1080", name: "1080p share", blurb: "H.264 at 1080p, 12 Mbps, 192 kbps sound — plays on anything, a tenth of the size", settings: { codec: "avc", bitrateMbps: 12, preset: "balanced", audioBitrateKbps: 192, resolution: 1080, frame: "source" } },
+  { id: "shorts-1080", name: "Shorts / Reels", blurb: "H.264 in a vertical 1080×1920 frame, 12 Mbps, 192 kbps sound — the one file YouTube Shorts, Instagram Reels and TikTok all take; a window of the picture, placed per clip in Transform", settings: { codec: "avc", bitrateMbps: 12, preset: "balanced", audioBitrateKbps: 192, resolution: 1080, frame: "9:16" } },
+  { id: "vertical-4k", name: "Vertical 4K", blurb: "HEVC in a vertical 2160×3840 frame, 45 Mbps, 256 kbps sound — a vertical master; the platforms re-encode it to 1080 wide", settings: { codec: "hevc", bitrateMbps: 45, preset: "balanced", audioBitrateKbps: 256, resolution: 2160, frame: "9:16" } },
+  { id: "archive", name: "Archive", blurb: "HEVC at the source size, 200 Mbps, the quality preset, 320 kbps sound — a master to cut from later", settings: { codec: "hevc", bitrateMbps: 200, preset: "quality", audioBitrateKbps: 320, resolution: "source", frame: "source" } },
 ];
 
-const KEYS: (keyof PresetSettings)[] = ["codec", "bitrateMbps", "preset", "audioBitrateKbps", "resolution"];
+const KEYS: (keyof PresetSettings)[] = ["codec", "bitrateMbps", "preset", "audioBitrateKbps", "resolution", "frame"];
 
 /** The preset these settings match exactly, or null for a custom combination. */
 export function matchPreset(s: ExportSettings): string | null {
-  return EXPORT_PRESETS.find((p) => KEYS.every((k) => p.settings[k] === s[k]))?.id ?? null;
+  const frame = s.frame ?? "source";
+  return EXPORT_PRESETS.find((p) => KEYS.every((k) => (k === "frame" ? p.settings.frame === frame : p.settings[k] === s[k])))?.id ?? null;
 }
 
 export function applyPreset(s: ExportSettings, id: string): ExportSettings {

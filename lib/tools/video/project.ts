@@ -42,6 +42,67 @@ export interface Transform {
 export const NEUTRAL_TRANSFORM: Transform = { rotate: 0, straighten: 0, crop: { x: 0, y: 0, w: 1, h: 1 } };
 
 /**
+ * The export frame's shape: the recording's own, or a vertical, square or portrait frame cut from it. A frame that is
+ * not the recording's shows a window of the (cropped) picture — see reframe.ts for where the window sits.
+ */
+export type Frame = "source" | "9:16" | "1:1" | "4:5";
+export const FRAMES: Frame[] = ["source", "9:16", "1:1", "4:5"];
+export const FRAME_ASPECT: Record<Exclude<Frame, "source">, number> = { "9:16": 9 / 16, "1:1": 1, "4:5": 4 / 5 };
+export const FRAME_LABELS: Record<Frame, string> = { source: "As recorded", "9:16": "Vertical 9:16", "1:1": "Square 1:1", "4:5": "Portrait 4:5" };
+
+/**
+ * Where the frame's window into the footage sits at one moment: its centre as fractions of the clip's picture and how
+ * far in it is (1 shows as much of the picture as the frame's shape allows, 2 half of that). Several keys make the
+ * window move over the clip: eased between them, held beyond the first and the last.
+ */
+export interface ReframeKey {
+  /** Source seconds. */
+  t: number;
+  cx: number;
+  cy: number;
+  zoom: number;
+}
+export interface Reframe {
+  keys: ReframeKey[];
+}
+export const MAX_REFRAME_ZOOM = 4;
+
+/**
+ * How a frame that is not the recording's shape is filled: the window alone (fill), the whole picture fitted into it
+ * over a blurred copy of the window or a plain colour (fit), or the whole picture along the top or bottom with the
+ * window filling the rest (stack).
+ */
+export type LayoutKind = "fill" | "fit" | "stack";
+export const LAYOUT_KINDS: LayoutKind[] = ["fill", "fit", "stack"];
+export type LayoutBackground = "blur" | "black" | "colour";
+export interface Layout {
+  kind: LayoutKind;
+  /** Behind a fitted picture: the window blurred and dimmed, black, or `colour`. */
+  background?: LayoutBackground;
+  colour?: string;
+  /** Fit: where the picture sits, 0 at the top, 1 at the bottom, 0.5 centred. */
+  position?: number;
+  /** Stack: which edge the whole picture runs along. */
+  wideAt?: "top" | "bottom";
+  /** Blur radius as a fraction of the frame width, and how dark the blurred copy goes, 0–0.9. */
+  blur?: number;
+  dim?: number;
+}
+export const DEFAULT_LAYOUT: Required<Layout> = { kind: "fill", background: "blur", colour: "#000000", position: 0.5, wideAt: "top", blur: 0.03, dim: 0.35 };
+export const layoutSettings = (l: Layout | null | undefined): Required<Layout> => ({ ...DEFAULT_LAYOUT, ...(l ?? {}) });
+
+/**
+ * The part of the frame a platform's own buttons and captions leave visible, as fractions of each edge: titles are
+ * placed inside it. Null or missing: the whole frame is safe, as for a YouTube upload.
+ */
+export interface SafeArea {
+  top: number;
+  bottom: number;
+  left: number;
+  right: number;
+}
+
+/**
  * Where a media file lives, as near to a path as the browser allows: a folder the editor holds a handle for — the
  * project folder, or one the user asked it to remember — and the file's path inside it.
  */
@@ -83,6 +144,8 @@ export interface Clip {
   in: number;
   out: number;
   transform: Transform;
+  /** Where the export frame's window sits in this clip when the frame is not the recording's shape (or to punch in); missing: centred, as much as fits. */
+  reframe?: Reframe;
   grade: Grade;
   /** Original audio gain in dB (−60 mutes) and mute flag. */
   gainDb: number;
@@ -188,7 +251,7 @@ export interface MusicTrack {
 
 export interface Title {
   id: string;
-  kind: "intro" | "title" | "lowerThird";
+  kind: TitleKind;
   text: string;
   subtitle?: string;
   /** Timeline start and duration, seconds. */
@@ -218,7 +281,16 @@ export interface Title {
   radius: number;
   borderWidth: number;
   borderColor: string;
+  /** How the title comes in over its fade: fading alone, popping up from slightly smaller, or rising a little. Missing: fade. */
+  enter?: TitleEnter;
+  /** false lets the title ignore the project's safe area (the frame's edges still keep their margin). */
+  safe?: boolean;
 }
+/** intro: a full-screen card on black. title: text over the picture. lowerThird: a small caption in a corner with a box. hook: the big line that opens a short. caption: a short's wrapped caption line, inside the platform's safe area. */
+export type TitleKind = "intro" | "title" | "lowerThird" | "hook" | "caption";
+export const TITLE_KINDS: TitleKind[] = ["intro", "title", "lowerThird", "hook", "caption"];
+export type TitleEnter = "fade" | "pop" | "rise";
+export const TITLE_ENTERS: TitleEnter[] = ["fade", "pop", "rise"];
 export type TitleShadow = "none" | "soft" | "hard" | "outline";
 export const TITLE_SHADOWS: TitleShadow[] = ["none", "soft", "hard", "outline"];
 export type TitleAlign = "auto" | "left" | "center" | "right";
@@ -243,18 +315,22 @@ export const TITLE_FONTS = {
 } as const;
 export type TitleFont = keyof typeof TITLE_FONTS;
 
-type TitleStyle = Pick<Title, "position" | "color" | "background" | "font" | "size" | "duration" | "weight" | "italic" | "letterSpacing" | "shadow" | "shadowColor" | "align" | "padding" | "radius" | "borderWidth" | "borderColor">;
-const STYLE_BASE = { font: "sans", weight: 600, italic: false, letterSpacing: 0, shadowColor: "rgba(0,0,0,0.6)", align: "auto" as TitleAlign, padding: 0.4, radius: 0.15, borderWidth: 0, borderColor: "#ffffff" };
-const TITLE_DEFAULTS: Record<Title["kind"], TitleStyle> = {
+type TitleStyle = Pick<Title, "position" | "color" | "background" | "font" | "size" | "duration" | "fade" | "weight" | "italic" | "letterSpacing" | "shadow" | "shadowColor" | "align" | "padding" | "radius" | "borderWidth" | "borderColor" | "enter">;
+const STYLE_BASE = { font: "sans", weight: 600, italic: false, letterSpacing: 0, shadowColor: "rgba(0,0,0,0.6)", align: "auto" as TitleAlign, padding: 0.4, radius: 0.15, borderWidth: 0, borderColor: "#ffffff", fade: 1, enter: "fade" as TitleEnter };
+const TITLE_DEFAULTS: Record<TitleKind, TitleStyle> = {
   intro: { ...STYLE_BASE, position: "mc", color: "#ffffff", background: "", size: 0.07, duration: 4, shadow: "soft" },
   title: { ...STYLE_BASE, position: "mc", color: "#ffffff", background: "", size: 0.06, duration: 5, shadow: "soft" },
   lowerThird: { ...STYLE_BASE, position: "bl", color: "#ffffff", background: "rgba(0,0,0,0.55)", size: 0.04, duration: 5, shadow: "none" },
+  // A short's opening line: big, bold, outlined so it reads over any footage, in for the first beats.
+  hook: { ...STYLE_BASE, position: "mc", color: "#ffffff", background: "", size: 0.055, duration: 2.5, fade: 0.25, weight: 800, letterSpacing: -0.01, shadow: "outline", shadowColor: "rgba(0,0,0,0.85)", enter: "pop" },
+  // A caption line: bold on a dark pill at the foot of the safe area, wrapped to the frame.
+  caption: { ...STYLE_BASE, position: "bc", color: "#ffffff", background: "rgba(0,0,0,0.6)", size: 0.038, duration: 3, fade: 0.2, weight: 700, padding: 0.5, radius: 0.6, shadow: "none", enter: "rise" },
 };
 
-export function newTitle(kind: Title["kind"], start: number, text: string, subtitle = ""): Title {
+export function newTitle(kind: TitleKind, start: number, text: string, subtitle = ""): Title {
   const d = TITLE_DEFAULTS[kind];
-  const { duration, ...style } = d;
-  return { id: newId(), kind, text, subtitle, start, duration, fade: 1, ...style };
+  const { duration, fade, ...style } = d;
+  return { id: newId(), kind, text, subtitle, start, duration, fade, ...style };
 }
 
 /** Fill in the fields older project files did not have. */
@@ -267,7 +343,7 @@ export function normalizeTitle(t: Partial<Title> & { kind: Title["kind"] }): Tit
     subtitle: t.subtitle ?? "",
     start: t.start ?? 0,
     duration: t.duration ?? d.duration,
-    fade: t.fade ?? 1,
+    fade: typeof t.fade === "number" && t.fade >= 0 ? t.fade : d.fade,
     position: TITLE_POSITIONS.includes(t.position as TitlePosition) ? (t.position as TitlePosition) : d.position,
     color: t.color ?? d.color,
     background: t.background ?? d.background,
@@ -283,6 +359,8 @@ export function normalizeTitle(t: Partial<Title> & { kind: Title["kind"] }): Tit
     radius: typeof t.radius === "number" ? Math.min(1, Math.max(0, t.radius)) : d.radius,
     borderWidth: typeof t.borderWidth === "number" ? Math.min(0.5, Math.max(0, t.borderWidth)) : d.borderWidth,
     borderColor: typeof t.borderColor === "string" && t.borderColor ? t.borderColor : d.borderColor,
+    enter: TITLE_ENTERS.includes(t.enter as TitleEnter) ? (t.enter as TitleEnter) : d.enter,
+    ...(t.safe === false ? { safe: false } : {}),
   };
 }
 
@@ -306,8 +384,8 @@ export function titlesTemplate(p: Project): Record<string, unknown> {
     format: "bench-video-titles/1",
     instructions: [
       "Fill the titles array with the on-screen text for this video, then save this file and import it in the Titles tab of the Bench video editor (Import JSON).",
-      "Each title has: kind — intro (a full-screen card on black, usually at 0 s), title (text over the picture), or lowerThird (a small caption such as a place name, usually in a corner with a dark box); text; subtitle (optional, smaller line under the text); start and duration in seconds; fade in seconds (fade in and out); position — tl tc tr ml mc mr bl bc br meaning top/middle/bottom × left/centre/right; color as #rrggbb; background — empty string for none, rgba(0,0,0,0.55) for a dark box, rgba(255,255,255,0.85) for a light box, or #rrggbb; font — sans, serif, mono, rounded, or any font family name installed on the editing machine (e.g. Avenir Next); size — text height as a fraction of the frame height, 0.02 to 0.16.",
-      "Styling, all optional: weight 300–800 (600 default); italic true/false; letterSpacing in em (0 default, up to 0.5); shadow — none, soft, hard or outline, with shadowColor (rgba or #rrggbb); align — auto (follows the position), left, center or right; padding, radius and borderWidth as multiples of the text size (0.4, 0.15 and 0 by default; a border draws even without a background) with borderColor.",
+      "Each title has: kind — intro (a full-screen card on black, usually at 0 s), title (text over the picture), lowerThird (a small caption such as a place name, usually in a corner with a dark box), hook (the big bold line that opens a vertical short, in for its first 2–3 s) or caption (a short's bold caption line on a dark pill, wrapped to the frame and kept inside the platform's safe area); text; subtitle (optional, smaller line under the text); start and duration in seconds; fade in seconds (fade in and out); position — tl tc tr ml mc mr bl bc br meaning top/middle/bottom × left/centre/right; color as #rrggbb; background — empty string for none, rgba(0,0,0,0.55) for a dark box, rgba(255,255,255,0.85) for a light box, or #rrggbb; font — sans, serif, mono, rounded, or any font family name installed on the editing machine (e.g. Avenir Next); size — text height as a fraction of the frame height, 0.02 to 0.16.",
+      "Styling, all optional: enter — fade, pop (comes up from slightly smaller) or rise (drifts up a little) over the fade; weight 300–800 (600 default); italic true/false; letterSpacing in em (0 default, up to 0.5); shadow — none, soft, hard or outline, with shadowColor (rgba or #rrggbb); align — auto (follows the position), left, center or right; padding, radius and borderWidth as multiples of the text size (0.4, 0.15 and 0 by default; a border draws even without a background) with borderColor.",
       "Keep every title inside 0 to durationSeconds, and inside the clip it belongs to where that matters (clips lists each recording with its start and end on the timeline). Titles may overlap in time only if they use different positions. Lower thirds for locations typically last 5 to 8 seconds at bl; an intro typically starts at 0 for 4 seconds.",
       "Leave project, options and instructions as they are. Missing fields get sensible defaults and unknown fields are ignored on import.",
     ],
@@ -318,7 +396,8 @@ export function titlesTemplate(p: Project): Record<string, unknown> {
       clips: placed.map((c) => ({ file: p.media[c.media]?.name ?? c.media, start: +c.start.toFixed(3), end: +c.end.toFixed(3) })),
     },
     options: {
-      kinds: ["intro", "title", "lowerThird"],
+      kinds: TITLE_KINDS,
+      enters: TITLE_ENTERS,
       positions: TITLE_POSITIONS,
       fonts: [...Object.keys(TITLE_FONTS), ...TITLE_FAMILIES, "<any installed family name>"],
       sizeRange: [0.02, 0.16],
@@ -360,8 +439,8 @@ export function parseTitlesImport(text: string, p: Project): { titles: Title[]; 
     const r = raw as Record<string, unknown>;
     const text = typeof r.text === "string" ? r.text.trim() : "";
     if (!text) return void warnings.push(`${tag}: no text, skipped`);
-    let kind: Title["kind"] = "title";
-    if (r.kind === "intro" || r.kind === "lowerThird" || r.kind === "title") kind = r.kind;
+    let kind: TitleKind = "title";
+    if (TITLE_KINDS.includes(r.kind as TitleKind)) kind = r.kind as TitleKind;
     else if (r.kind !== undefined) warnings.push(`${tag} "${text}": unknown kind "${String(r.kind)}", used title`);
     let start = Math.max(0, num(r.start) ?? 0);
     let duration = num(r.duration);
@@ -405,6 +484,8 @@ export function parseTitlesImport(text: string, p: Project): { titles: Title[]; 
         radius: num(r.radius),
         borderWidth: num(r.borderWidth),
         borderColor,
+        enter: typeof r.enter === "string" ? (r.enter as TitleEnter) : undefined,
+        safe: r.safe === false ? false : undefined,
       }),
     );
   });
@@ -467,8 +548,10 @@ export interface ExportSettings {
   /** Encoder quality/speed hint. */
   preset: "quality" | "balanced" | "fast";
   audioBitrateKbps: number;
-  /** "source" keeps the first clip's resolution; otherwise a height to scale to. */
+  /** "source" keeps the first clip's resolution; otherwise a height to scale to — the short side for a vertical or square frame (1080 is 1080×1920 at 9:16). */
   resolution: "source" | number;
+  /** The frame's shape; missing means the recording's own. */
+  frame?: Frame;
   /** Whether untouched spans may be stream-copied. */
   smartCopy: boolean;
   /** Export only this part of the timeline (seconds); null means all of it. */
@@ -651,8 +734,8 @@ export function canMergeWithNext(clips: Clip[], id: string): "merge" | "join" | 
 }
 
 /** The keys a joined run shares, so nothing changes at the hidden cut. */
-const SHARED_KEYS = ["grade", "transform", "gainDb", "muted", "speed"] as const;
-const shared = (from: Clip): Pick<Clip, (typeof SHARED_KEYS)[number]> => ({ grade: { ...from.grade }, transform: { ...from.transform, crop: { ...from.transform.crop } }, gainDb: from.gainDb, muted: from.muted, speed: clipSpeed(from) });
+const SHARED_KEYS = ["grade", "transform", "reframe", "gainDb", "muted", "speed"] as const;
+const shared = (from: Clip): Pick<Clip, (typeof SHARED_KEYS)[number]> => ({ grade: { ...from.grade }, transform: { ...from.transform, crop: { ...from.transform.crop } }, reframe: from.reframe ? { keys: from.reframe.keys.map((k) => ({ ...k })) } : undefined, gainDb: from.gainDb, muted: from.muted, speed: clipSpeed(from) });
 
 /**
  * Merge a clip with the one after it. Two halves of the same recording become
@@ -799,6 +882,10 @@ export interface Project {
   stops?: StopScan | null;
   /** Remembered folders outside the project folder, by key: their names, for the record. */
   folders?: Record<string, string>;
+  /** How a vertical, square or portrait frame is filled; null or missing: the window fills it. */
+  layout?: Layout | null;
+  /** The part of the frame a platform leaves visible, for placing titles; null or missing: all of it. */
+  safeArea?: SafeArea | null;
 }
 
 /** A readable location for a media file. */
@@ -831,7 +918,7 @@ export function whereSummary(p: Project, media: MediaRef[], max = 3): string | n
   return `in ${[...counts].map(([f, n]) => `${f} (${n})`).join(", ")}`;
 }
 
-export const DEFAULT_EXPORT: ExportSettings = { codec: "hevc", bitrateMbps: 100, preset: "balanced", audioBitrateKbps: 256, resolution: "source", smartCopy: true, range: null, tags: { ...DEFAULT_TAGS }, steadyLights: "off", check: "full", review: "on" };
+export const DEFAULT_EXPORT: ExportSettings = { codec: "hevc", bitrateMbps: 100, preset: "balanced", audioBitrateKbps: 256, resolution: "source", frame: "source", smartCopy: true, range: null, tags: { ...DEFAULT_TAGS }, steadyLights: "off", check: "full", review: "on" };
 
 /** The part of the timeline an export covers: the chosen range clamped to the timeline, or null for all of it (also when the range is empty or backwards). */
 export function exportRange(p: Project): { from: number; to: number } | null {
@@ -1220,6 +1307,8 @@ export function planExport(p: Project): ExportSpan[] {
     if (!isNeutralTransform(c.transform)) reasons.push("rotate / crop");
     if (!sameCodec(m)) reasons.push(`source is ${m?.codec ?? "unknown"}, export is ${p.export.codec}`);
     if (p.export.resolution !== "source") reasons.push("scaled output");
+    if (p.export.frame && p.export.frame !== "source") reasons.push(`${p.export.frame} frame`);
+    else if (c.reframe?.keys.length) reasons.push("reframed");
     if (m && first && m !== first && (m.width !== first.width || m.height !== first.height || m.fps !== first.fps)) reasons.push("size or frame rate differs from the first recording");
     if (m?.rotation) reasons.push("rotated recording");
     if (p.watermark.media) reasons.push("watermark");
@@ -1313,6 +1402,20 @@ export function serialize(p: Project): string {
   return JSON.stringify({ ...p, updatedAt: Date.now() });
 }
 
+/** A saved reframe with every key a number, in order; nothing when there is none worth keeping. */
+function normalizeReframe(r: unknown): { reframe: Reframe } | Record<string, never> {
+  const keys = (r as { keys?: unknown } | null)?.keys;
+  if (!Array.isArray(keys)) return {};
+  const num = (v: unknown, lo: number, hi: number, dflt: number) => (typeof v === "number" && Number.isFinite(v) ? Math.min(hi, Math.max(lo, v)) : dflt);
+  const clean = keys
+    .filter((k): k is Record<string, unknown> => !!k && typeof k === "object")
+    .map((k) => ({ t: num(k.t, 0, Infinity, 0), cx: num(k.cx, 0, 1, 0.5), cy: num(k.cy, 0, 1, 0.5), zoom: num(k.zoom, 1, MAX_REFRAME_ZOOM, 1) }))
+    .sort((a, b) => a.t - b.t);
+  return clean.length ? { reframe: { keys: clean } } : {};
+}
+
+const safeFrac = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? Math.min(0.45, Math.max(0, v)) : 0);
+
 export function deserialize(json: string): Project | null {
   try {
     const p = JSON.parse(json) as Project;
@@ -1326,16 +1429,21 @@ export function deserialize(json: string): Project | null {
     const perCutEra = !!p.export && "range" in p.export;
     const migrated = known && !perCutEra && !p.clips.some((c) => c.transitionIn) ? applyTransitionToAll(p.clips, transition) : p.clips;
     const clips = migrated.map((c) => {
-      const { introRole, introSeconds, ...rest } = c;
+      const { introRole, introSeconds, reframe, ...rest } = c;
       const base = LUT_KINDS.includes(rest.grade?.lut) ? rest : { ...rest, grade: { ...rest.grade, lut: "none" as LutKind } };
-      return { ...base, ...(rest.speed !== undefined ? { speed: clipSpeed(rest) } : {}), ...(introRole && INTRO_ROLES.includes(introRole) ? { introRole } : {}), ...(typeof introSeconds === "number" && introSeconds > 0 ? { introSeconds } : {}) };
+      return { ...base, ...(rest.speed !== undefined ? { speed: clipSpeed(rest) } : {}), ...(introRole && INTRO_ROLES.includes(introRole) ? { introRole } : {}), ...(typeof introSeconds === "number" && introSeconds > 0 ? { introSeconds } : {}), ...normalizeReframe(reframe) };
     });
+    const frame: Frame = FRAMES.includes(p.export?.frame as Frame) ? (p.export.frame as Frame) : "source";
+    const rawLayout = p.layout as Partial<Layout> | null | undefined;
+    const layout: Layout | null = rawLayout && typeof rawLayout === "object" && LAYOUT_KINDS.includes(rawLayout.kind as LayoutKind) ? { ...rawLayout, kind: rawLayout.kind as LayoutKind } : null;
+    const rawSafe = p.safeArea as Partial<SafeArea> | null | undefined;
+    const safeArea: SafeArea | null = rawSafe && typeof rawSafe === "object" ? { top: safeFrac(rawSafe.top), bottom: safeFrac(rawSafe.bottom), left: safeFrac(rawSafe.left), right: safeFrac(rawSafe.right) } : null;
     const intro: IntroSettings = { ...DEFAULT_INTRO, ...(p.intro ?? {}), card: { ...DEFAULT_INTRO.card, ...(p.intro?.card ?? {}) } };
     const stops: StopScan | null = p.stops && typeof p.stops === "object" && p.stops.runs && typeof p.stops.runs === "object" ? { ...p.stops, minSeconds: p.stops.minSeconds > 0 ? p.stops.minSeconds : 2, margin: p.stops.margin >= 0 ? p.stops.margin : 0.5 } : null;
     if (typeof intro.sceneSeconds !== "number" || !(intro.sceneSeconds > 0)) intro.sceneSeconds = null;
     if (!INTRO_OUTROS.includes(intro.outro as IntroOutro)) intro.outro = "look";
     const sound: SoundMode = SOUND_MODES.includes(p.sound as SoundMode) ? (p.sound as SoundMode) : "footage";
-    return { ...newProject(), ...p, clips, sound, export: { ...DEFAULT_EXPORT, ...p.export, tags: { ...DEFAULT_TAGS, ...(p.export?.tags ?? {}) } }, preview: { ...DEFAULT_PREVIEW, ...(p.preview ?? (Object.values(p.proxies ?? {}).some((x) => x?.ready) ? { proxyHeight: 1080 } : {})) }, transition, intro, stops, titles: (p.titles ?? []).map((t) => normalizeTitle(t)) };
+    return { ...newProject(), ...p, clips, sound, layout, safeArea, export: { ...DEFAULT_EXPORT, ...p.export, frame, tags: { ...DEFAULT_TAGS, ...(p.export?.tags ?? {}) } }, preview: { ...DEFAULT_PREVIEW, ...(p.preview ?? (Object.values(p.proxies ?? {}).some((x) => x?.ready) ? { proxyHeight: 1080 } : {})) }, transition, intro, stops, titles: (p.titles ?? []).map((t) => normalizeTitle(t)) };
   } catch {
     return null;
   }

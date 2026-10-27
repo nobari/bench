@@ -49,9 +49,12 @@ export interface PreflightEnv {
 
 const fmtGb = (n: number) => (n < 1e9 ? `${(n / 1e6).toFixed(n < 10e6 ? 1 : 0)} MB` : `${(n / 1e9).toFixed(n >= 100e9 ? 0 : 1)} GB`);
 
-export function preflight(project: Project, estimate: ExportEstimate, outHeight: number, env: PreflightEnv): PreflightItem[] {
+export function preflight(project: Project, estimate: ExportEstimate, out: { width: number; height: number }, env: PreflightEnv): PreflightItem[] {
   const items: PreflightItem[] = [];
   const clips = project.clips.length;
+  // YouTube's bands go by the picture's class: for a vertical or square frame that is its short side (1080×1920 is 1080p).
+  const outHeight = Math.min(out.width, out.height);
+  const sizeText = `${out.width}×${out.height}`;
 
   if (!env.fileSystem) items.push({ id: "browser", state: "block", title: "This browser cannot write to a folder", detail: "Exports need Chrome or Edge, which can open a project folder and write the file there." });
   else if (!env.folderName) items.push({ id: "folder", state: "block", title: "No project folder", detail: "The export is written next to your recordings; pick the folder first.", actions: [{ id: "pick-folder", label: "Pick a folder", hook: "preflight-pick-folder" }] });
@@ -68,7 +71,7 @@ export function preflight(project: Project, estimate: ExportEstimate, outHeight:
     const want = project.export.codec;
     if (want === "hevc" && !env.support.hevc) items.push({ id: "encoder", state: env.support.avc ? "block" : "block", title: "No HEVC encoder for this size", detail: env.support.avc ? "This machine's browser cannot encode HEVC at the output size; H.264 can." : "No hardware encoder for this size was found; pick a smaller resolution.", actions: env.support.avc ? [{ id: "use-avc", label: "Switch to H.264", hook: "preflight-use-avc" }] : [{ id: "lower-resolution", label: "Use 4K", hook: "preflight-lower-resolution" }] });
     else if (want === "avc" && !env.support.avc) items.push({ id: "encoder", state: "block", title: "No H.264 encoder for this size", detail: "Pick a smaller resolution, or HEVC if the machine has it.", actions: env.support.hevc ? [{ id: "use-hevc", label: "Switch to HEVC" }] : [{ id: "lower-resolution", label: "Use 4K" }] });
-    else items.push({ id: "encoder", state: "ok", title: `${want === "hevc" ? "HEVC" : "H.264"} encoder ready at ${outHeight}p` });
+    else items.push({ id: "encoder", state: "ok", title: `${want === "hevc" ? "HEVC" : "H.264"} encoder ready at ${sizeText}` });
   } else items.push({ id: "encoder", state: "info", title: "Checking the encoders…" });
 
   if (env.room && clips) {
