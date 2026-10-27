@@ -10,6 +10,7 @@ import { introRegion } from "./intro";
 import { stopsOnTimeline } from "./stops";
 import { SOUND_LABELS, TRANSITIONS, clipSpeed, crossfades, effectiveMusicEnd, exportRange, fmtTime, hasCard, placeClips, soundLevels, soundState, timelineDuration, visibleCuts, type Project, type Title } from "./project";
 import { YOUTUBE_LUFS } from "./loudness";
+import { YOUTUBE_AUDIO_KBPS, fmtGb, uploadLimits } from "./youtube";
 
 export type ReviewState = "ok" | "look" | "info";
 
@@ -43,6 +44,9 @@ export interface ReviewEnv {
   doctorDepth: "full" | "quick" | "off";
   outWidth: number;
   outHeight: number;
+  /** The expected file size and the export's length, for YouTube's limits. */
+  estimateBytes: number;
+  seconds: number;
 }
 export interface Chapters {
   lines: string[];
@@ -235,6 +239,23 @@ export function reviewProject(p: Project, env: ReviewEnv): Review {
   const chapters = youtubeChapters(p);
   youtube.push(item({ id: "chapters", state: chapters.ok ? "ok" : titles.length ? "look" : "info", title: chapters.ok ? `${plural(chapters.lines.length, "chapter")} for the description` : "Chapters", summary: chapters.ok ? "Paste these into the description and YouTube shows them on the seek bar." : chapters.problems.join(" "), lines: chapters.lines, action: titles.length ? undefined : { id: "tab:titles", label: "Add titles" } }));
   youtube.push(item({ id: "thumbnail", state: env.framesSaved === true ? "ok" : env.framesSaved === false ? "look" : "info", title: env.framesSaved === true ? "A thumbnail frame is saved" : "No thumbnail saved yet", summary: env.framesSaved === true ? "In the frames folder beside the export, 1280×720 JPEG, graded, with titles." : "Save frame (S) writes the frame under the playhead as a YouTube-ready 1280×720 JPEG; pick a bright, wide shot with little text on it.", action: { id: "save-frame", label: "Save this frame" } }));
+  const lim = uploadLimits(env.estimateBytes, env.seconds, p.export.audioBitrateKbps);
+  youtube.push(
+    item({
+      id: "limits",
+      state: lim.overSize || lim.overLength ? "look" : "ok",
+      title: lim.overSize ? `About ${fmtGb(env.estimateBytes)} — over YouTube's 256 GB` : lim.overLength ? `${fmtTime(env.seconds)} — over YouTube's 12 hours` : `Within YouTube's limits: about ${fmtGb(env.estimateBytes)}, ${fmtTime(env.seconds)}`,
+      summary: lim.overSize
+        ? `YouTube refuses files over 256 GB or 12 hours, whichever comes first. ${lim.fit > 0 ? `${lim.fit} Mbps would fit` : "No bitrate fits"}; or export in two ranges.`
+        : lim.overLength
+          ? "YouTube takes up to 12 hours; export in two ranges."
+          : lim.needsVerified
+            ? "Over 15 minutes: only a verified account can upload it (verifying by phone, once, lifts the limit to 256 GB or 12 hours)."
+            : "Any account can take it.",
+      action: lim.overSize ? { id: "section:picture", label: "Picture" } : lim.overLength ? { id: "section:range", label: "Range" } : undefined,
+    }),
+  );
+  youtube.push(item({ id: "audio-rate", state: p.export.audioBitrateKbps < YOUTUBE_AUDIO_KBPS ? "look" : "ok", title: p.export.audioBitrateKbps < YOUTUBE_AUDIO_KBPS ? `AAC ${p.export.audioBitrateKbps} kbps — YouTube recommends ${YOUTUBE_AUDIO_KBPS} kbps stereo` : `AAC ${p.export.audioBitrateKbps} kbps, at YouTube's recommendation`, summary: p.export.audioBitrateKbps < YOUTUBE_AUDIO_KBPS ? "YouTube re-encodes the sound from what you give it; its guide asks for 384 kbps stereo, which costs little next to the picture." : "YouTube's encoding guide asks for 384 kbps stereo.", action: { id: "section:picture", label: "Picture" } }));
   youtube.push(item({ id: "upload", state: "info", title: "On the upload page", summary: `Set the category to Music and add the song credits (that is what YouTube Music lists by); the title comes from the tags; ${env.outHeight >= 2160 ? `${env.outHeight >= 4320 ? "8K" : "4K"} processing can take hours to a day — the SD version appears first` : "processing takes minutes"}.` }));
 
   const groups: ReviewGroup[] = [

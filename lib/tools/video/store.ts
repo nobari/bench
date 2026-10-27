@@ -16,6 +16,7 @@ const DB_NAME = "bench-video", DB_STORE = "handles";
 
 export const hasFileSystemAccess = () => typeof window !== "undefined" && "showDirectoryPicker" in window;
 
+type Perm = { queryPermission(o: { mode: string }): Promise<string>; requestPermission(o: { mode: string }): Promise<string> };
 type Picker = { showDirectoryPicker(opts?: { id?: string; mode?: "read" | "readwrite"; startIn?: string }): Promise<FileSystemDirectoryHandle> };
 
 /** Open an IndexedDB store for remembering directory handles between sessions. */
@@ -124,11 +125,12 @@ export class ProjectStore {
     await w.close();
   }
 
-  /** Explicit save: the project file, and the autosave journal cleared to match. */
+  /** Explicit save: the project file, the autosave journal cleared to match, and every file handle remembered. */
   async save(project: Project): Promise<void> {
     const text = serialize(project);
     await this.write(PROJECT_FILE, text);
     await this.write(AUTOSAVE_FILE, text);
+    await this.persistHandles(project.id);
     this.onStatus?.("Saved");
   }
 
@@ -250,6 +252,25 @@ export class ProjectStore {
       }
     }
     return restored;
+  }
+
+  /**
+   * Remembered files and folders the browser will hand back only after a click (their permission reads "prompt"),
+   * not yet restored: what one Reconnect would bring back.
+   */
+  async pendingHandles(projectId: string): Promise<number> {
+    let n = 0;
+    const files = await dbGet<[string, FileSystemFileHandle][]>(`files:${projectId}`).catch(() => undefined);
+    for (const [id, handle] of files ?? []) {
+      if (this.files.has(id)) continue;
+      if ((await (handle as unknown as Perm).queryPermission({ mode: "read" }).catch(() => "denied")) === "prompt") n++;
+    }
+    const folders = await dbGet<[string, FileSystemDirectoryHandle][]>(`folders:${projectId}`).catch(() => undefined);
+    for (const [key, dir] of folders ?? []) {
+      if (this.extra.has(key)) continue;
+      if ((await (dir as unknown as Perm).queryPermission({ mode: "read" }).catch(() => "denied")) === "prompt") n++;
+    }
+    return n;
   }
 
   /** Where a handle lives relative to the project folder or a remembered folder, or null when it is in neither. */

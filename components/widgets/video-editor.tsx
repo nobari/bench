@@ -347,6 +347,8 @@ export function VideoEditorWidget() {
   // Bumped whenever files are (re)registered, so the preview tries again instead of staying blank.
   const [filesVersion, setFilesVersion] = useState(0);
   const [missingMedia, setMissingMedia] = useState<string[]>([]);
+  /** Remembered files the browser will hand back only after a click (after a restart, say). */
+  const [reconnectable, setReconnectable] = useState(0);
   // Preview transport: speed, looping (the export range when one is set), and a mute that silences clip audio and music.
   const [speed, setSpeed] = useState(1);
   // Holding Space doubles the speed for as long as it is held; a tap toggles play as before.
@@ -851,6 +853,8 @@ export function VideoEditorWidget() {
     loudness: loudness ? { integrated: loudness.result.integrated, peakDb: loudness.result.peakDb, stale: loudness.fingerprint !== audioKey, predicted: !!loudness.predicted, matchGain: Math.round(matchGain * 10) / 10 } : null,
     resumable: resumableView,
     onBattery,
+    seconds: range ? range.to - range.from : duration,
+    fps,
   });
   const blockers = preflightBlocks(checks).map((i) => i.title);
   /** The account of the last export, for the result card: what happened, step by step. */
@@ -913,6 +917,8 @@ export function VideoEditorWidget() {
     else if (id === "measure") void measureMix();
     else if (id === "match") matchLevel();
     else if (id.startsWith("set-bitrate:")) setProject((p) => ({ ...p, export: { ...p.export, bitrateMbps: Number(id.slice("set-bitrate:".length)) } }));
+    else if (id.startsWith("set-audio:")) setProject((p) => ({ ...p, export: { ...p.export, audioBitrateKbps: Number(id.slice("set-audio:".length)) } }));
+    else if (id === "open-range") setOpenSections((o) => ({ ...o, range: true }));
     else if (id === "open-tags") setOpenSections((o) => ({ ...o, tags: true }));
     else if (id === "resume") void runExport(resumable);
     else if (id === "discard") void discardParts();
@@ -1450,6 +1456,7 @@ export function VideoEditorWidget() {
       for (const m of Object.values(p.media)) if (!store.hasFile(m.id) && m.where) await store.locateByPath(m.id, m.where);
       for (const m of Object.values(p.media)) if (!store.hasFile(m.id)) await store.resolveByName(m.id, m.name);
       setMissingMedia(store.missing(Object.keys(p.media)));
+      setReconnectable(await store.pendingHandles(p.id));
       setFilesVersion((v) => v + 1);
     },
     [store],
@@ -1681,6 +1688,13 @@ export function VideoEditorWidget() {
     }
   };
 
+  /** Chrome hands back files outside the project folder only after a click: this click asks for all of them at once. */
+  const reconnectFiles = async () => {
+    await resolveMedia(project, true);
+    const left = store.missing(Object.keys(project.media)).length;
+    setStatus(left ? `${left} file${left === 1 ? " is" : "s are"} still missing — locate ${left === 1 ? "it" : "them"} by hand` : "Every file is back");
+  };
+
   /** Prefer the picker that hands back file handles (so files are remembered across reloads); fall back to the plain input. */
   const pickFiles = async (kind: "video" | "audio") => {
     const picker = (window as unknown as { showOpenFilePicker?: (o: unknown) => Promise<FileSystemFileHandle[]> }).showOpenFilePicker;
@@ -1719,14 +1733,43 @@ export function VideoEditorWidget() {
         setError(`${f.name}: ${e instanceof Error ? e.message : "couldn't read the file."}`);
       }
     }
+    // Remembered like recordings, so music outside the project folder comes back after a reload without asking.
+    void store.persistHandles(project.id);
   };
 
-  const addLogo = async (f: File) => {
+  // The logo comes back with the project: once its file is at hand again, the bitmap is made anew.
+  useEffect(() => {
+    const id = project.watermark.media;
+    if (!id || logo) return;
+    let active = true;
+    void store
+      .getFile(id)
+      .then((f) => f && createImageBitmap(f).then((bmp) => active && setLogo(bmp)))
+      .catch(() => undefined);
+    return () => {
+      active = false;
+    };
+  }, [project.watermark.media, logo, store, filesVersion]);
+  const addLogo = async (h: File | FileSystemFileHandle) => {
     const id = newId();
-    store.registerFile(id, f);
+    const f = h instanceof File ? h : await h.getFile();
+    store.registerFile(id, h);
     const bmp = await createImageBitmap(f);
     setLogo(bmp);
-    setProject((p) => ({ ...p, media: { ...p.media, [id]: { id, name: f.name, size: f.size, duration: 0 } }, watermark: { ...p.watermark, media: id } }));
+    const where = (await store.whereIs(h)) ?? undefined;
+    setProject((p) => ({ ...p, media: { ...p.media, [id]: { id, name: f.name, size: f.size, duration: 0, ...(where ? { where } : {}) } }, watermark: { ...p.watermark, media: id } }));
+    void store.persistHandles(project.id);
+  };
+  /** The picker that hands back a handle, so the logo is remembered across reloads; the plain input otherwise. */
+  const pickLogo = async () => {
+    const picker = (window as unknown as { showOpenFilePicker?: (o: unknown) => Promise<FileSystemFileHandle[]> }).showOpenFilePicker;
+    if (!picker) return void logoInput.current?.click();
+    try {
+      const [h] = await picker({ multiple: false, types: [{ description: "Logo", accept: { "image/*": [".png", ".svg", ".webp"] } }] });
+      if (h) await addLogo(h);
+    } catch (e) {
+      if ((e as DOMException).name !== "AbortError") setError(e instanceof Error ? e.message : String(e));
+    }
   };
 
   // Preview: proxy video element (or source file when no proxy) drawn through the grader.
@@ -2258,6 +2301,9 @@ export function VideoEditorWidget() {
       addMusic,
       linkFiles,
       rememberFolder,
+      save: () => store.save(project),
+      reconnect: reconnectFiles,
+      pendingHandles: () => store.pendingHandles(project.id),
       missing: () => store.missing(Object.keys(project.media)),
       getProject: () => project,
       getPlayhead: () => playhead,
@@ -2352,8 +2398,8 @@ export function VideoEditorWidget() {
     }
   };
   const review = useMemo(
-    () => reviewProject(project, { loudness: loudness ? { integrated: loudness.result.integrated, peakDb: loudness.result.peakDb, stale: !loudness.predicted && loudness.fingerprint !== audioKey, predicted: !!loudness.predicted } : null, folderName: folder, fileName, framesSaved, doctorDepth: project.export.check ?? "full", outWidth: outW, outHeight: outH }),
-    [project, loudness, audioKey, folder, fileName, framesSaved, outW, outH],
+    () => reviewProject(project, { loudness: loudness ? { integrated: loudness.result.integrated, peakDb: loudness.result.peakDb, stale: !loudness.predicted && loudness.fingerprint !== audioKey, predicted: !!loudness.predicted } : null, folderName: folder, fileName, framesSaved, doctorDepth: project.export.check ?? "full", outWidth: outW, outHeight: outH, estimateBytes: estimate.bytes, seconds: range ? range.to - range.from : duration }),
+    [project, loudness, audioKey, folder, fileName, framesSaved, outW, outH, estimate.bytes, range, duration],
   );
   const refreshFramesSaved = async () => {
     if (!store.hasFolder) return setFramesSaved(null);
@@ -3053,8 +3099,9 @@ export function VideoEditorWidget() {
       {missingMedia.length > 0 && (
         <div className="flex flex-wrap items-center gap-2 rounded-[var(--radius-sm)] border border-warn/40 bg-warn/10 px-3 py-2 text-[13px]">
           <AlertTriangle size={14} className="text-warn" />
-          <span className="min-w-0 flex-1">
-            {missingMedia.length === 1 ? "One recording can" : `${missingMedia.length} recordings can`}&apos;t be found right now: {nameSome(missingMedia.map((id) => project.media[id]?.name ?? id))}. The timeline is intact; pick the file{missingMedia.length === 1 ? "" : "s"} again to preview and export.
+          <span className="min-w-0 flex-1" data-missing-notice data-reconnectable={reconnectable}>
+            {missingMedia.length === 1 ? "One file can" : `${missingMedia.length} files can`}&apos;t be found right now: {nameSome(missingMedia.map((id) => project.media[id]?.name ?? id))}. The timeline is intact
+            {reconnectable > 0 ? "; the browser hands back files outside the project folder only after a click — press Reconnect, and tick “Allow on every visit” in its prompt to make this the last time." : `; pick the file${missingMedia.length === 1 ? "" : "s"} again to preview and export.`}
           </span>
           {whereSummary(project, missingMedia.map((id) => project.media[id]).filter(Boolean)) && (
             <span className="basis-full text-[12px] text-faint" data-missing-where>
@@ -3064,7 +3111,12 @@ export function VideoEditorWidget() {
           <button type="button" onClick={() => void rememberFolder()} disabled={!hasFileSystemAccess()} className={cn(GHOST, "ml-auto")} title="Point at the folder the files live in: their paths inside it are recorded, missing ones are found there by name, and next time they are located without asking" data-remember-folder>
             Remember a folder…
           </button>
-          <button type="button" onClick={() => void relinkFiles()} className={cn(GHOST, "border-accent text-accent")}>
+          {reconnectable > 0 && (
+            <button type="button" onClick={() => void reconnectFiles()} className={cn(GHOST, "border-accent text-accent")} data-reconnect>
+              Reconnect {reconnectable} file{reconnectable === 1 ? "" : "s"}
+            </button>
+          )}
+          <button type="button" onClick={() => void relinkFiles()} className={cn(GHOST, reconnectable > 0 ? "" : "border-accent text-accent")} data-locate>
             Locate files…
           </button>
         </div>
@@ -4067,7 +4119,7 @@ export function VideoEditorWidget() {
                     + Lower third
                   </button>
                   <input ref={logoInput} type="file" accept="image/png,image/svg+xml,image/webp" hidden onChange={(e) => e.target.files?.[0] && void addLogo(e.target.files[0])} />
-                  <button type="button" onClick={() => logoInput.current?.click()} className={GHOST}>
+                  <button type="button" onClick={() => void pickLogo()} className={GHOST}>
                     {logo ? "Replace logo" : "+ Logo watermark"}
                   </button>
                   <span className="ml-auto flex flex-wrap items-center gap-1.5">

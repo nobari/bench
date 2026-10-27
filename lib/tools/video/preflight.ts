@@ -5,7 +5,9 @@
  */
 
 import { YOUTUBE_LUFS } from "./loudness";
-import { youtubeBitrateRange } from "./export-presets";
+import { audioBytesFor } from "./space";
+import { YOUTUBE_AUDIO_KBPS, uploadLimits } from "./youtube";
+import { youtubeBitrateRange, youtubeBandText } from "./export-presets";
 import { fmtTime, soundLevels, soundState, type ExportEstimate, type Project } from "./project";
 
 export type PreflightState = "ok" | "warn" | "block" | "info";
@@ -40,6 +42,9 @@ export interface PreflightEnv {
   resumable: { name: string; parts: number; bytes: number; endAt: number; total: number; matches: boolean; consumedParts: number; consumedSeconds: number; skipped: number } | null;
   /** Running on battery, when the browser says. */
   onBattery: boolean | null;
+  /** Length of the export in timeline seconds, and the output frame rate, for YouTube's limits and bands. */
+  seconds: number;
+  fps: number;
 }
 
 const fmtGb = (n: number) => (n < 1e9 ? `${(n / 1e6).toFixed(n < 10e6 ? 1 : 0)} MB` : `${(n / 1e9).toFixed(n >= 100e9 ? 0 : 1)} GB`);
@@ -100,12 +105,34 @@ export function preflight(project: Project, estimate: ExportEstimate, outHeight:
     }
   }
 
-  const yt = youtubeBitrateRange(outHeight);
+  const yt = youtubeBitrateRange(outHeight, env.fps);
   const mbps = project.export.bitrateMbps;
   if (yt) {
-    if (mbps < yt.min) items.push({ id: "bitrate", state: "warn", title: `${mbps} Mbps is below YouTube's ${yt.min}–${yt.max} Mbps for ${yt.label}`, detail: "The upload is re-encoded by YouTube; starting it softer than that costs detail.", actions: [{ id: `set-bitrate:${yt.min}`, label: `Use ${yt.min} Mbps` }] });
-    else if (mbps > yt.max * 1.5) items.push({ id: "bitrate", state: "info", title: `${mbps} Mbps is well above YouTube's ${yt.min}–${yt.max} Mbps for ${yt.label}`, detail: "Fine for an archive; for an upload it only makes the file bigger.", actions: [{ id: `set-bitrate:${yt.max}`, label: `Use ${yt.max} Mbps` }] });
-    else items.push({ id: "bitrate", state: "ok", title: `${mbps} Mbps, ${mbps > yt.max ? "above" : "inside"} YouTube's ${yt.min}–${yt.max} Mbps for ${yt.label}` });
+    const band = youtubeBandText(yt);
+    if (mbps < yt.min) items.push({ id: "bitrate", state: "warn", title: `${mbps} Mbps is below YouTube's ${band} for ${yt.label}`, detail: "The upload is re-encoded by YouTube; starting it softer than that costs detail.", actions: [{ id: `set-bitrate:${yt.min}`, label: `Use ${yt.min} Mbps` }] });
+    else if (mbps > yt.max * 1.5) items.push({ id: "bitrate", state: "info", title: `${mbps} Mbps is well above YouTube's ${band} for ${yt.label}`, detail: "Fine for an archive; for an upload it only makes the file bigger.", actions: [{ id: `set-bitrate:${yt.max}`, label: `Use ${yt.max} Mbps` }] });
+    else items.push({ id: "bitrate", state: "ok", title: `${mbps} Mbps, ${mbps > yt.max ? "above" : yt.min === yt.max ? "at" : "inside"} YouTube's ${band} for ${yt.label}` });
+  }
+
+  // YouTube's limits, so a long export is not wasted: 256 GB or 12 hours, whichever comes first; 15 minutes unverified.
+  if (clips) {
+    const lim = uploadLimits(estimate.bytes, env.seconds, project.export.audioBitrateKbps);
+    const fitAction = lim.fit > 0 ? [{ id: `set-bitrate:${lim.fit}`, label: `Fit YouTube: use ${lim.fit} Mbps` }] : [];
+    const splitAction = [{ id: "open-range", label: "Export in two ranges" }];
+    if (lim.overSize)
+      items.push({
+        id: "limit",
+        state: "warn",
+        title: `About ${fmtGb(estimate.bytes)}: YouTube refuses files over 256 GB`,
+        detail: `YouTube takes up to 256 GB or 12 hours, whichever comes first. ${fmtTime(env.seconds)} at ${mbps} Mbps makes about ${fmtGb(estimate.bytes)}; ${lim.fit > 0 ? `${lim.fit} Mbps would fit${yt && lim.fit < yt.min ? `, below YouTube's ${yt.min} Mbps floor for ${yt.label} — export in two ranges, or at a lower resolution, instead` : ""}` : "no bitrate fits — export in two ranges"}.`,
+        actions: [...fitAction, ...splitAction],
+      });
+    else if (lim.overLength) items.push({ id: "limit", state: "warn", title: `${fmtTime(env.seconds)} is longer than YouTube's 12 hours`, detail: "YouTube takes up to 12 hours or 256 GB, whichever comes first; export in two ranges.", actions: splitAction });
+    else if (lim.needsVerified) items.push({ id: "limit", state: "info", title: `Within YouTube's limits (about ${fmtGb(estimate.bytes)}, ${fmtTime(env.seconds)}) — over 15 minutes needs a verified account`, detail: "Unverified accounts stop at 15 minutes; verifying the account by phone once lifts that to 256 GB or 12 hours." });
+    else items.push({ id: "limit", state: "ok", title: `Within YouTube's limits: about ${fmtGb(estimate.bytes)}, ${fmtTime(env.seconds)}` });
+    const kbps = project.export.audioBitrateKbps;
+    if (kbps < YOUTUBE_AUDIO_KBPS) items.push({ id: "audio", state: "info", title: `AAC ${kbps} kbps — YouTube recommends ${YOUTUBE_AUDIO_KBPS} kbps stereo`, detail: `Sound is cheap next to the picture: ${YOUTUBE_AUDIO_KBPS} kbps over ${fmtTime(env.seconds)} is ${fmtGb(audioBytesFor(YOUTUBE_AUDIO_KBPS, env.seconds))}.`, actions: [{ id: `set-audio:${YOUTUBE_AUDIO_KBPS}`, label: `Use ${YOUTUBE_AUDIO_KBPS} kbps` }] });
+    else items.push({ id: "audio", state: "ok", title: `AAC ${kbps} kbps, at YouTube's ${YOUTUBE_AUDIO_KBPS} kbps or above` });
   }
 
   const t = project.export.tags;
