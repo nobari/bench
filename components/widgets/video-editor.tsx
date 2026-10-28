@@ -1785,7 +1785,7 @@ export function VideoEditorWidget() {
   };
 
   // Preview: proxy video element (or source file when no proxy) drawn through the grader.
-  const under = useMemo(() => clipAt(project.clips, Math.min(playhead, Math.max(0, duration - 0.001))), [project.clips, playhead, duration]);
+  const under = useMemo(() => clipAt(project.clips, Math.max(0, Math.min(playhead, Math.max(0, duration - 0.001)))), [project.clips, playhead, duration]);
   const [previewSrc, setPreviewSrc] = useState<string | null>(null);
   useEffect(() => {
     let active = true;
@@ -1873,7 +1873,9 @@ export function VideoEditorWidget() {
     const tick = () => {
       const v = videoRef.current;
       if (v && under) {
-        const t = under.clip.start + (v.currentTime - under.clip.in) / clipSpeed(under.clip);
+        // Right after a seek Chrome's clock can sit a few ms before the in-point (audio-frame alignment on a real device); the
+        // clip's own span bounds the time, so the first clip never reads as negative and the player is never left without a clip.
+        const t = Math.min(under.clip.end, Math.max(under.clip.start, under.clip.start + (v.currentTime - under.clip.in) / clipSpeed(under.clip)));
         const loopTo = rangeRef.current ? rangeRef.current.from : 0, loopEnd = rangeRef.current ? rangeRef.current.to : duration;
         // Skimming: once a clip has shown its first seconds, jump to its last ones; the next clip then shows its own start.
         const k = skimRef.current, skipTo = under.clip.end - SKIM_S;

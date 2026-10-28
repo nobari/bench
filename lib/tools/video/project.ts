@@ -918,7 +918,7 @@ export function whereSummary(p: Project, media: MediaRef[], max = 3): string | n
   return `in ${[...counts].map(([f, n]) => `${f} (${n})`).join(", ")}`;
 }
 
-export const DEFAULT_EXPORT: ExportSettings = { codec: "hevc", bitrateMbps: 100, preset: "balanced", audioBitrateKbps: 256, resolution: "source", frame: "source", smartCopy: true, range: null, tags: { ...DEFAULT_TAGS }, steadyLights: "off", check: "full", review: "on" };
+export const DEFAULT_EXPORT: ExportSettings = { codec: "hevc", bitrateMbps: 120, preset: "balanced", audioBitrateKbps: 320, resolution: "source", frame: "source", smartCopy: true, range: null, tags: { ...DEFAULT_TAGS }, steadyLights: "off", check: "full", review: "on" };
 
 /** The part of the timeline an export covers: the chosen range clamped to the timeline, or null for all of it (also when the range is empty or backwards). */
 export function exportRange(p: Project): { from: number; to: number } | null {
@@ -1473,7 +1473,9 @@ export const parseTime = (text: string): number => {
   return parts.reduce((acc, n) => acc * 60 + Number(n), 0);
 };
 
-export const fmtTime = (s: number, frames?: number) => {
+export const fmtTime = (secs: number, frames?: number) => {
+  // Never a negative clock: a time a hair below zero (or not a number) reads as the start.
+  const s = secs > 0 ? secs : 0;
   const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = Math.floor(s % 60);
   const base = `${h ? h + ":" : ""}${String(m).padStart(h ? 2 : 1, "0")}:${String(sec).padStart(2, "0")}`;
   return frames ? `${base}.${String(Math.floor((s % 1) * frames)).padStart(2, "0")}` : base;

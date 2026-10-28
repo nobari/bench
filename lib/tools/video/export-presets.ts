@@ -16,7 +16,7 @@ export interface ExportPreset {
 }
 
 export const EXPORT_PRESETS: ExportPreset[] = [
-  { id: "youtube-8k", name: "YouTube 8K", blurb: "HEVC at the source size, 100 Mbps — inside YouTube's 80–160 Mbps range for 8K — with 320 kbps sound", settings: { codec: "hevc", bitrateMbps: 100, preset: "balanced", audioBitrateKbps: 320, resolution: "source", frame: "source" } },
+  { id: "youtube-8k", name: "YouTube 8K", blurb: "HEVC at the source size, 120 Mbps — inside YouTube's 8K range at 30 fps (80–160) and at 60 fps (120–240) — with 320 kbps sound; a new project starts here", settings: { codec: "hevc", bitrateMbps: 120, preset: "balanced", audioBitrateKbps: 320, resolution: "source", frame: "source" } },
   { id: "youtube-4k", name: "YouTube 4K", blurb: "HEVC at 2160p, 45 Mbps, 320 kbps sound — YouTube's range for 4K at 30 fps is 35–45 Mbps", settings: { codec: "hevc", bitrateMbps: 45, preset: "balanced", audioBitrateKbps: 320, resolution: 2160, frame: "source" } },
   { id: "share-1080", name: "1080p share", blurb: "H.264 at 1080p, 12 Mbps, 192 kbps sound — plays on anything, a tenth of the size", settings: { codec: "avc", bitrateMbps: 12, preset: "balanced", audioBitrateKbps: 192, resolution: 1080, frame: "source" } },
   { id: "shorts-1080", name: "Shorts / Reels", blurb: "H.264 in a vertical 1080×1920 frame, 12 Mbps, 192 kbps sound — the one file YouTube Shorts, Instagram Reels and TikTok all take; a window of the picture, placed per clip in Transform", settings: { codec: "avc", bitrateMbps: 12, preset: "balanced", audioBitrateKbps: 192, resolution: 1080, frame: "9:16" } },
