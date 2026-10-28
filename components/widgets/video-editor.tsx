@@ -2,7 +2,12 @@
 
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import Link from "next/link";
-import { AlertTriangle, Camera, ChevronDown, ChevronRight, ChevronUp, Sparkles, Clapperboard, Crop, Download, FolderOpen, Gauge, Loader, Maximize2, Minimize2, Music, Pause, Play, Repeat, Save, Scissors, SkipBack, SkipForward, SlidersHorizontal, StepBack, StepForward, Trash2, Type, Upload, Volume2, VolumeX, Keyboard, Search, Shuffle, X } from "lucide-react";
+import { AlertTriangle, Camera, ChevronDown, ChevronRight, ChevronUp, Sparkles, Clapperboard, Crop, Download, FolderOpen, Gauge, Loader, Maximize2, Minimize2, Music, Pause, Play, Repeat, Save, Scissors, SkipBack, SkipForward, SlidersHorizontal, Smartphone, StepBack, StepForward, Trash2, Type, Upload, Volume2, VolumeX, Keyboard, Search, Shuffle, X } from "lucide-react";
+import { newShort, timelineDuration as shortTimelineDuration, type EditorMode, type Short } from "@/lib/tools/video/project";
+import { DEFAULT_SHORT_SECONDS, MIN_SHORT_SECONDS, SHORTS_FOLDER, clampShort, seamCandidates, seamScore, shortBytes, shortChecks, shortFileName, shortPostText, shortProject, shortsFromMoments, suggestWindows, viewFor } from "@/lib/tools/video/short-mode";
+import { scoreMoments as scoreShortMoments } from "@/lib/tools/video/intro";
+import { ShortsPanel, type SeamState } from "@/components/widgets/short-mode-panel";
+import { SafeGhost } from "@/components/widgets/shorts-parts";
 import { DEFAULT_EXPORT, NEUTRAL_GRADE, NEUTRAL_TRANSFORM, TITLE_ALIGNS, TITLE_FAMILIES, TITLE_FONTS, TITLE_POSITIONS, TITLE_SHADOWS, TITLE_WEIGHTS, TRANSITIONS, addTransitionAt, appendMusic, applyAudioTo, applyGradeTo, applyTransitionToAll, clipAt, crossfades, dbToGain, effectiveMusicEnd, estimateExport, exportRange, fmtTime, musicGainAt, musicLength, newId, newProject, newTitle, orderRecordings, placeClips, planExport, removeRange, reorderMusic, setTransition, splitClip, timelineDuration, titleLanes, transitionAt, transitionWindows, CLIP_SPEEDS, canMergeWithNext, clipLength, clipSpeed, groupOf, sourceTimeAt, mergeWithNext, moveClip, unjoin, updateClip, visibleCuts, type Clip, type MediaRef, type MusicTrack, type Project, type ProxyHeight, type Title, type TitleFont, isFileLutKind, FILE_LUT_KINDS, type FileLutKind, type LutKind, type MathLutKind, type TitleAlign, type TitlePosition, type TitleShadow, type Transition, type TransitionKind, type ExportTags, type IntroSettings, type IntroCard, DEFAULT_CARD, cardSettings, hasCard, reorderClip, parseTime, type SteadyLights, STEADY_FRAMES, clampMusicStart, musicUnused, shuffleFillMusic, describeWhere, nameSome, whereSummary, type MediaWhere, exportFingerprint, SOUND_MODES, SOUND_LABELS, soundLevels, applySoundLevels, soundState, type SoundMode, type SoundLevels, FRAMES, FRAME_LABELS, MAX_REFRAME_ZOOM, MIN_CLIP_SPEED, MAX_CLIP_SPEED, type Frame, type Layout, type ReframeKey } from "@/lib/tools/video/project";
 import { gainToReach, YOUTUBE_LUFS, type Loudness } from "@/lib/tools/video/loudness";
 import { drawTransition } from "@/lib/tools/video/transitions";
@@ -63,7 +68,7 @@ function describeSoundState(st: ReturnType<typeof soundState>, levels: SoundLeve
   return `${part(st.clipsAt, st.clipsOff, st.clipsOther, clips, levels.camera, "clips")} · ${part(st.musicAt, st.musicOff, st.musicOther, music, levels.music, "tracks")}.`;
 }
 const toHex = (c: string) => (/^#[0-9a-fA-F]{6}$/.test(c) ? c : "#ffffff");
-type Tab = "trim" | "intro" | "transform" | "colour" | "audio" | "titles" | "export";
+type Tab = "trim" | "intro" | "transform" | "colour" | "audio" | "titles" | "shorts" | "export";
 const TABS: [Tab, string, typeof Scissors][] = [
   ["trim", "Trim", Scissors],
   ["intro", "Intro", Sparkles],
@@ -71,12 +76,13 @@ const TABS: [Tab, string, typeof Scissors][] = [
   ["colour", "Colour", SlidersHorizontal],
   ["audio", "Audio", Volume2],
   ["titles", "Titles", Type],
+  ["shorts", "Shorts", Smartphone],
   ["export", "Export", Download],
 ];
 
 /** A running job; the export fields (progress, output, pause, faults, parts) are what the run view shows. */
 interface Job extends ExportJobView {
-  kind: "proxy" | "export" | "frame" | "intro" | "stops" | "loudness" | "fix" | "check";
+  kind: "proxy" | "export" | "frame" | "intro" | "stops" | "loudness" | "fix" | "check" | "shorts";
   fraction: number;
   message?: string;
   abort: AbortController;
@@ -124,6 +130,10 @@ const SHORTCUTS: [string, string][] = [
   ["C", "Split the clip at the playhead"],
   ["J", "Merge or join the selected clip with the next (⇧J unjoins it from the previous)"],
   ["[ / ]", "Move the selected clip earlier or later"],
+  ["I / O", "Short mode: start or end the short at the playhead (a new short when there is none)"],
+  ["N", "A new short at the playhead"],
+  ["L", "Loop the short in Short mode, else the export range or the whole timeline"],
+  [", / .", "Short mode: the short's start a frame earlier or later (⇧ for its end, ⌥ for a second)"],
   ["M", "Mute the preview"],
   ["S", "Save a thumbnail of the frame (⇧S full-size JPEG, ⌥S PNG)"],
   ["⌫", "Delete the selected clip or transition"],
@@ -224,6 +234,7 @@ const JOB_WORK: Record<Job["kind"], string> = {
   loudness: "A loudness measurement is running in the video editor; leaving now would abandon it.",
   fix: "A fixed copy of a file is being written in the video editor; leaving now would abandon it.",
   check: "A file's index is being checked or repaired in the video editor.",
+  shorts: "Shorts are being planned in the video editor; leaving now would abandon it.",
 };
 /** Which export sections are open, remembered per browser. */
 const SECTIONS_KEY = "bench:video:export-sections";
@@ -407,6 +418,12 @@ export function VideoEditorWidget() {
     }
   };
   const [loop, setLoop] = useState(false);
+  // Short mode: the short being worked on, the export's extra file, the phone ghost and the loop's seam.
+  const [currentShort, setCurrentShort] = useState<string | null>(null);
+  const [withoutMusic, setWithoutMusic] = useState(false);
+  const [ghost, setGhost] = useState(true);
+  const [seam, setSeam] = useState<SeamState | null>(null);
+  const shortActionsRef = useRef<{ markIn: () => void; markOut: () => void; newAt: () => void; nudge: (end: "from" | "to", delta: number) => void }>({ markIn: () => undefined, markOut: () => undefined, newAt: () => undefined, nudge: () => undefined });
   const [previewMuted, setPreviewMuted] = useState(false);
   const loopRef = useRef(false);
   const previewMutedRef = useRef(false);
@@ -652,14 +669,105 @@ export function VideoEditorWidget() {
   const windows = useMemo(() => transitionWindows(placed, project.media), [placed, project.media]);
   const selectedWindow = useMemo(() => windows.find((w) => w.incoming.id === selectedTransition) ?? null, [windows, selectedTransition]);
   const titleLaneOf = useMemo(() => titleLanes(project.titles), [project.titles]);
-  const spans = useMemo(() => planExport(project), [project]);
+  /* ------------------------------------------------------------ Short mode: the shorts on this timeline */
+  const shorts = useMemo(() => project.shorts ?? [], [project.shorts]);
+  const shortMode = project.mode === "short";
+  const activeShort = useMemo(() => shorts.find((x) => x.id === currentShort) ?? (shortMode ? (shorts[0] ?? null) : null), [shorts, currentShort, shortMode]);
+  const shortIndex = activeShort ? shorts.indexOf(activeShort) + 1 : 0;
+  /** What the preview shows and a saved frame renders: the short's titles alone in Short mode, the landscape edit's otherwise. */
+  const view = useMemo(() => viewFor(project, shortMode ? activeShort : null), [project, shortMode, activeShort]);
+  /** What the landscape export renders: never a short's titles. */
+  const landscape = useMemo(() => viewFor(project, null), [project]);
+  const spans = useMemo(() => planExport(landscape), [landscape]);
   const range = useMemo(() => exportRange(project), [project]);
   const rangeRef = useRef<{ from: number; to: number } | null>(null);
   useEffect(() => {
     rangeRef.current = range;
   }, [range]);
+  /** The span the Loop button repeats: the short in Short mode, else the export range, else everything. */
+  const loopSpan = useMemo(() => (shortMode && activeShort ? { from: activeShort.from, to: activeShort.to } : range), [shortMode, activeShort, range]);
+  const loopSpanRef = useRef<{ from: number; to: number } | null>(null);
+  useEffect(() => {
+    loopSpanRef.current = loopSpan;
+  }, [loopSpan]);
   const setRange = (r: { from: number; to: number } | null) => setProject((p) => ({ ...p, export: { ...p.export, range: r } }));
   const setTags = (patch: Partial<ExportTags>) => setProject((p) => ({ ...p, export: { ...p.export, tags: { ...p.export.tags, ...patch } } }));
+  const setShorts = (fn: (list: Short[]) => Short[]) => setProject((p) => ({ ...p, shorts: fn(p.shorts ?? []) }));
+  const updateShort = (id: string, patch: Partial<Short>) => setShorts((l) => l.map((x) => (x.id === id ? clampShort({ ...x, ...patch }, durationRef.current) : x)));
+  /** A new short, in Short mode, selected: from the playhead for the default length unless both ends are given. */
+  const addShortAt = (from: number, to?: number, name?: string): Short => {
+    const made = clampShort(newShort(from, to ?? from + DEFAULT_SHORT_SECONDS, (projectRef.current?.shorts?.length ?? 0) + 1, name), durationRef.current);
+    setProject((p) => ({ ...p, mode: "short", shorts: [...(p.shorts ?? []), made] }));
+    setCurrentShort(made.id);
+    setTab("shorts");
+    return made;
+  };
+  /** Work on a short: Short mode, the Shorts tab, and (for a click) the playhead at its start. */
+  const selectShort = (id: string, jump = true) => {
+    const x = (projectRef.current?.shorts ?? []).find((y) => y.id === id);
+    if (!x) return;
+    setCurrentShort(id);
+    setProject((p) => (p.mode === "short" ? p : { ...p, mode: "short" }));
+    if (jump) stepTo(x.from);
+  };
+  /** A short goes with its titles; the footage stays. */
+  const removeShort = (id: string) => {
+    setProject((p) => ({ ...p, shorts: (p.shorts ?? []).filter((x) => x.id !== id), titles: p.titles.filter((t) => t.short !== id) }));
+    if (currentShort === id) setCurrentShort(null);
+  };
+  const duplicateShort = (id: string) => {
+    setProject((p) => {
+      const list = p.shorts ?? [];
+      const i = list.findIndex((x) => x.id === id);
+      if (i < 0) return p;
+      const copy: Short = { ...list[i], id: newId(), name: `${list[i].name} copy`, exported: null };
+      const titles = p.titles.filter((t) => t.short === id).map((t) => ({ ...t, id: newId(), short: copy.id }));
+      return { ...p, shorts: [...list.slice(0, i + 1), copy, ...list.slice(i + 1)], titles: [...p.titles, ...titles] };
+    });
+  };
+  const moveShort = (id: string, dir: -1 | 1) =>
+    setShorts((l) => {
+      const i = l.findIndex((x) => x.id === id), j = i + dir;
+      if (i < 0 || j < 0 || j >= l.length) return l;
+      const next = [...l];
+      [next[i], next[j]] = [next[j], next[i]];
+      return next;
+    });
+  /** Landscape or Short: Short mode with no short yet starts one at the playhead. */
+  const setMode = (mode: EditorMode) => {
+    if (mode === "short" && !(projectRef.current?.shorts ?? []).length) {
+      addShortAt(playheadRef.current);
+      return;
+    }
+    setProject((p) => ({ ...p, mode }));
+    if (mode === "short") setTab("shorts");
+    else if (tab === "shorts") setTab("trim");
+  };
+  const shortLength = (seconds: number) => {
+    if (!activeShort) return;
+    updateShort(activeShort.id, { to: activeShort.from + seconds });
+  };
+  const shortActions = {
+    markIn: () => {
+      const t = playheadRef.current, x = activeShort;
+      if (!x || !shortMode) addShortAt(t);
+      else updateShort(x.id, { from: Math.min(t, x.to - MIN_SHORT_SECONDS) });
+    },
+    markOut: () => {
+      const t = playheadRef.current, x = activeShort;
+      if (!x || !shortMode) addShortAt(Math.max(0, t - DEFAULT_SHORT_SECONDS), Math.max(MIN_SHORT_SECONDS, t));
+      else updateShort(x.id, { to: Math.max(t, x.from + MIN_SHORT_SECONDS) });
+    },
+    newAt: () => void addShortAt(playheadRef.current),
+    nudge: (end: "from" | "to", delta: number) => {
+      const x = activeShort;
+      if (!x || !shortMode) return;
+      updateShort(x.id, end === "from" ? { from: Math.min(x.to - MIN_SHORT_SECONDS, x.from + delta) } : { to: Math.max(x.from + MIN_SHORT_SECONDS, x.to + delta) });
+    },
+  };
+  useEffect(() => {
+    shortActionsRef.current = shortActions;
+  });
   const fingerprint = useMemo(() => exportFingerprint(project), [project]);
   /** Everything the sound mix depends on; a measurement is current while this is unchanged. */
   const audioKey = useMemo(
@@ -829,7 +937,7 @@ export function VideoEditorWidget() {
   }, [speedProfile, outH, project.export.codec, done]);
   const fps = firstMedia?.fps || 30;
   const guess = defaultSpeeds((firstMedia?.width ?? outW) * (firstMedia?.height ?? outH), outW * outH);
-  const estimate = useMemo(() => estimateExport(project, spans, (priors?.encode ?? guess.encode) * fps, 0.4, priors?.closeBytesPerS ?? guess.closeBytesPerS), [project, spans, priors, fps, guess.encode, guess.closeBytesPerS]);
+  const estimate = useMemo(() => estimateExport(landscape, spans, (priors?.encode ?? guess.encode) * fps, 0.4, priors?.closeBytesPerS ?? guess.closeBytesPerS), [landscape, spans, priors, fps, guess.encode, guess.closeBytesPerS]);
   const estimateBasis = priors?.label ? `speed of ${priors.label}` : "a first guess; your first export teaches it";
   const resumableView: ResumableView | null = resumable
     ? (() => {
@@ -856,7 +964,7 @@ export function VideoEditorWidget() {
     const mode = joinMode(estimate.bytes);
     return { parts: estimate.bytes, join: joinNeed(mode === "remove" ? [onePart] : [estimate.bytes], audio, mode, estimate.bytes), mode, resumable: false };
   }, [project.clips.length, project.export.audioBitrateKbps, project.export.bitrateMbps, estimate.bytes, range, duration, resumable]);
-  const checks = preflight(project, estimate, { width: outW, height: outH }, {
+  const checks = preflight(landscape, estimate, { width: outW, height: outH }, {
     fileSystem: hasFileSystemAccess(),
     folderName: folder,
     missing: missingMedia.length,
@@ -1033,7 +1141,7 @@ export function VideoEditorWidget() {
     if (!store.hasFolder) return setFiles([]);
     setFilesLoading(true);
     try {
-      const list = await store.listFiles();
+      const list = [...(await store.listFiles()), ...(await store.listFiles(SHORTS_FOLDER))];
       const recordings = new Set(Object.values(project.media).map((m) => m.name));
       const videos = list.filter((f) => /\.(mp4|mov|m4v)$/i.test(f.name) && !recordings.has(f.name));
       // A file that changed (a repair, a re-export) is checked again; what a repair did stays with it.
@@ -1280,7 +1388,7 @@ export function VideoEditorWidget() {
       const spec = FRAME_KINDS[kind];
       setJob({ kind: "frame", label: "Saving frame", message: `${fmtMs(t)} · ${spec.label} — decoding the source frame, grading it and encoding…`, fraction: 0.5, abort: new AbortController() });
       try {
-        const frame = await renderFrame({ project, getFile: (id) => store.getFile(id), logo, t, height: spec.height, type: spec.type, quality: spec.quality });
+        const frame = await renderFrame({ project: view, getFile: (id) => store.getFile(id), logo, t, height: spec.height, type: spec.type, quality: spec.quality });
         const name = `${project.name.replace(/[^\w-]+/g, "-")}-${fmtMs(t).replace(/[:.]/g, "-")}${kind === "thumb" ? `-${frame.width}x${frame.height}` : ""}.${spec.ext}`;
         const facts = `${frame.width}×${frame.height} ${spec.type === "image/png" ? "PNG" : "JPEG"}, ${fmtBytes(frame.blob.size)}, from ${frame.clipName} at ${fmtMs(frame.sourceTime)}`;
         if (store.hasFolder) {
@@ -1303,7 +1411,7 @@ export function VideoEditorWidget() {
         setJob(null);
       }
     },
-    [project, job, store, logo],
+    [project, view, job, store, logo],
   );
 
   useEffect(() => {
@@ -1431,6 +1539,11 @@ export function VideoEditorWidget() {
         else if (e.key === "c" || e.key === "C") { if (!e.repeat) trimActionsRef.current.splitHere(); }
         else if (e.key === "j" || e.key === "J") { if (!e.repeat) (e.shiftKey ? trimActionsRef.current.unjoinSelected : trimActionsRef.current.mergeSelected)(); }
         else if (e.key === "[" || e.key === "]") { if (!e.repeat) trimActionsRef.current.moveSelected(e.key === "[" ? -1 : 1); }
+        else if (e.key === "l" || e.key === "L") { if (!e.repeat) setLoop((l) => !l); }
+        else if (e.key === "i" || e.key === "I") { if (!e.repeat) shortActionsRef.current.markIn(); }
+        else if (e.key === "o" || e.key === "O") { if (!e.repeat) shortActionsRef.current.markOut(); }
+        else if (e.key === "n" || e.key === "N") { if (!e.repeat) shortActionsRef.current.newAt(); }
+        else if (e.code === "Comma" || e.code === "Period") shortActionsRef.current.nudge(e.shiftKey ? "to" : "from", (e.altKey ? 1 : frame) * (e.code === "Comma" ? -1 : 1));
         else return;
         e.preventDefault();
       }
@@ -1876,7 +1989,7 @@ export function VideoEditorWidget() {
         // Right after a seek Chrome's clock can sit a few ms before the in-point (audio-frame alignment on a real device); the
         // clip's own span bounds the time, so the first clip never reads as negative and the player is never left without a clip.
         const t = Math.min(under.clip.end, Math.max(under.clip.start, under.clip.start + (v.currentTime - under.clip.in) / clipSpeed(under.clip)));
-        const loopTo = rangeRef.current ? rangeRef.current.from : 0, loopEnd = rangeRef.current ? rangeRef.current.to : duration;
+        const loopTo = loopSpanRef.current ? loopSpanRef.current.from : 0, loopEnd = loopSpanRef.current ? loopSpanRef.current.to : duration;
         // Skimming: once a clip has shown its first seconds, jump to its last ones; the next clip then shows its own start.
         const k = skimRef.current, skipTo = under.clip.end - SKIM_S;
         if (k && k.skipped !== under.clip.id && under.clip.end - under.clip.start > 2 * SKIM_S && t >= under.clip.start + SKIM_S && t < skipTo - 0.05) {
@@ -1927,8 +2040,9 @@ export function VideoEditorWidget() {
         const w = c.width, h = c.height;
         try {
           // The composer is the export's: the frame's shape, the layout and each clip's window, from the proxy or the file.
-          const frameKey = `${w}x${h}:${project.export.frame ?? "source"}:${layoutChoice(project.layout)}`;
-          if (!graderRef.current || graderRef.current.key !== frameKey) graderRef.current = { key: frameKey, composer: new FrameComposer(w, h, project.export.frame, project.layout) };
+          const previewFrame = shortMode ? "9:16" : project.export.frame;
+          const frameKey = `${w}x${h}:${previewFrame ?? "source"}:${layoutChoice(project.layout)}`;
+          if (!graderRef.current || graderRef.current.key !== frameKey) graderRef.current = { key: frameKey, composer: new FrameComposer(w, h, previewFrame, project.layout) };
           const grader = graderRef.current.composer;
           grader.setCustomLut(customLut);
           if (fileLuts) for (const [k, l] of Object.entries(fileLuts)) if (l) grader.provideLut(k as LutKind, l);
@@ -1984,7 +2098,7 @@ export function VideoEditorWidget() {
             if (!fxScratchRef.current || fxScratchRef.current.w !== w || fxScratchRef.current.h !== h) fxScratchRef.current = { a: new OffscreenCanvas(w, h), b: new OffscreenCanvas(w, h), w, h };
             drawIntroFx(ctx, w, h, intro, project, fxScratchRef.current, introBlendAt(project, placed, tr, playhead));
           }
-          drawOverlays(ctx as unknown as OffscreenCanvasRenderingContext2D, w, h, playhead, project, logo);
+          drawOverlays(ctx as unknown as OffscreenCanvasRenderingContext2D, w, h, playhead, view, logo);
           // Steady lights, as the export will do it: only while playing, when frames arrive in order.
           const steadyFrames = STEADY_FRAMES[project.export.steadyLights ?? "off"];
           if (steadyFrames && playing) {
@@ -2005,7 +2119,7 @@ export function VideoEditorWidget() {
     };
     raf = requestAnimationFrame(draw);
     return () => cancelAnimationFrame(raf);
-  }, [under, playhead, project, placed, logo, duration, windows, playing, rate, previewUrlFor, customLut, fileLuts]);
+  }, [under, playhead, project, view, shortMode, placed, logo, duration, windows, playing, rate, previewUrlFor, customLut, fileLuts]);
 
   // Grade, crop and audio changes reach every clip of a joined run, so a hidden cut stays invisible.
   const update = (id: string, patch: Partial<Clip>) => setProject((p) => ({ ...p, clips: updateClip(p.clips, id, patch) }));
@@ -2061,8 +2175,16 @@ export function VideoEditorWidget() {
       setSeekToken((x) => x + 1);
     }
   };
+  /** In Short mode a new title belongs to the short and starts inside it. */
+  const titleAt = () => (shortMode && activeShort ? Math.min(Math.max(playhead, activeShort.from), Math.max(activeShort.from, activeShort.to - 0.5)) : playhead);
+  const tagForShort = (t: Title): Title => (shortMode && activeShort ? { ...t, short: activeShort.id } : t);
+  const untag = (t: Title): Title => {
+    const { short, ...rest } = t;
+    void short;
+    return rest;
+  };
   const addTitle = (kind: Title["kind"]) => {
-    const t = newTitle(kind, kind === "intro" ? 0 : playhead, kind === "intro" ? project.name : kind === "lowerThird" ? "Location" : kind === "hook" ? "Wait for it" : kind === "caption" ? "Caption" : "Title", kind === "intro" ? new Date().toLocaleDateString() : "");
+    const t = tagForShort(newTitle(kind, kind === "intro" && !shortMode ? 0 : titleAt(), kind === "intro" ? project.name : kind === "lowerThird" ? "Location" : kind === "hook" ? "Wait for it" : kind === "caption" ? "Caption" : "Title", kind === "intro" ? new Date().toLocaleDateString() : ""));
     setProject((p) => ({ ...p, titles: [...p.titles, t] }));
     focusTitle(t);
   };
@@ -2317,8 +2439,19 @@ export function VideoEditorWidget() {
       pendingHandles: () => store.pendingHandles(project.id),
       missing: () => store.missing(Object.keys(project.media)),
       getProject: () => project,
-      frameAt: (t: number, height?: number) => renderFrame({ project, getFile: (id) => store.getFile(id), logo, t, height, type: "image/png" }).then((f) => f.blob),
+      frameAt: (t: number, height?: number) => renderFrame({ project: view, getFile: (id) => store.getFile(id), logo, t, height, type: "image/png" }).then((f) => f.blob),
+      getShorts: () => project.shorts ?? [],
+      getView: () => view,
+      getSeam: () => seam,
+      setMode,
+      addShortAt,
+      selectShort,
+      exportShorts: (all: boolean) => startShortExport(all),
+      findSeam,
+      suggestShorts,
+      saveShortCover,
       getPlayhead: () => playhead,
+      stepTo,
       getDone: () => done,
       getFiles: () => files,
       isPlaying: () => playing,
@@ -2423,6 +2556,206 @@ export function VideoEditorWidget() {
     }
   };
   /** Export, through the checklist unless it is off or already ticked for this state of the project. */
+  /* ------------------------------------------------------------ Short mode: export, cover, seam, suggestions */
+  /** One short's file into the shorts folder, then the doctor's quick look at it. */
+  const exportShort = async (x: Short, index: number, noMusic: boolean, signal: AbortSignal) => {
+    const derived = shortProject(projectRef.current ?? project, x);
+    if (!derived.clips.length) throw new Error(`${x.name} covers no footage.`);
+    const target = noMusic ? { ...derived, music: [] } : derived;
+    const name = `${SHORTS_FOLDER}/${shortFileName(index, x, noMusic ? "no-music" : "")}`;
+    const src = derived.media[derived.clips[0].media];
+    const out = outputSize(src?.width || 3840, src?.height || 2160, derived.export);
+    const seconds = shortTimelineDuration(derived);
+    const output = { name, codec: derived.export.codec.toUpperCase(), width: out.width, height: out.height, bitrateMbps: derived.export.bitrateMbps, preset: derived.export.preset, estimatedBytes: shortBytes(derived, seconds) };
+    setJob((j) => (j ? { ...j, label: `Exporting ${name}`, fraction: 0, output } : j));
+    setEvents([{ at: Date.now(), kind: "start", text: `Started ${name} — ${output.codec} ${out.width}×${out.height} at ${derived.export.bitrateMbps} Mbps, ${fmtTime(seconds)}` }]);
+    const { writable, handle } = await store.createWritable(name);
+    const result = await exportProject({
+      project: target,
+      getFile: (id) => store.getFile(id),
+      logo,
+      writable: writable as unknown as WritableStream<import("mediabunny").StreamTargetChunk>,
+      signal,
+      onProgress: (progress) => {
+        setJob((j) => (j ? { ...j, fraction: progress.fraction, progress } : j));
+        lastProgress.current = progress;
+      },
+      onPreview: drawLive,
+      onEvent: (ev) => setEvents((l) => [...l, ev]),
+      onFault: async (fault) => {
+        setEvents((l) => [...l, { at: Date.now(), kind: "fault", text: `${fault.message} — skipped` }]);
+        return "skip";
+      },
+    });
+    const file = await handle.getFile();
+    setDone({ kind: "done", at: Date.now(), name, folder: folder ? `${folder}/${SHORTS_FOLDER}` : null, seconds, bytes: file.size, activeMs: result.activeMs, pausedMs: result.pausedMs, estimatedMs: 0, codec: output.codec, width: out.width, height: out.height, bitrateMbps: derived.export.bitrateMbps, audioKbps: derived.export.audioBitrateKbps, parts: 1, resumedFrom: 0, steps: lastProgress.current?.steps ?? [], events: [...eventsRef.current], skipped: result.skipped, checking: { stage: "Reading the index", fraction: 0 } });
+    setShorts((l) => l.map((y) => (y.id === x.id ? { ...y, exported: { name, bytes: file.size, at: Date.now() } } : y)));
+    await store.writeText(`${SHORTS_FOLDER}/${shortFileName(index, x, "post")}`, shortPostText(derived, x.targets, index, (projectRef.current?.shorts ?? []).length, seconds));
+    setFilesVersion((v) => v + 1);
+    await checkWritten(name, "quick");
+    return file;
+  };
+  /** The short being worked on, or every short in a row — each with a version without music when asked. */
+  const startShortExport = async (all: boolean) => {
+    if (job) return;
+    if (!store.hasFolder) return setError("Pick a project folder first — the shorts are written into its shorts folder.");
+    const list = all ? shorts : activeShort ? [activeShort] : [];
+    if (!list.length) return setError("No short to export — press N to start one at the playhead.");
+    const abort = new AbortController();
+    setDone(null);
+    setJob({ kind: "export", label: all ? `Exporting ${list.length} shorts` : "Exporting the short", fraction: 0, abort, output: { name: "", codec: "", width: 0, height: 0, bitrateMbps: 0, preset: "balanced", estimatedBytes: 0 }, paused: false, partsMode: false, resumedFrom: 0 });
+    setPlaying(false);
+    setError(null);
+    let made = 0;
+    try {
+      for (const x of list) {
+        if (abort.signal.aborted) break;
+        const index = shorts.indexOf(x) + 1;
+        await exportShort(x, index, false, abort.signal);
+        if (withoutMusic && projectRef.current?.music.length) await exportShort(x, index, true, abort.signal);
+        made++;
+      }
+      setStatus(made === 1 && !all ? `Exported ${shortFileName(shorts.indexOf(list[0]) + 1, list[0])} into ${SHORTS_FOLDER}/` : `${made} short${made === 1 ? "" : "s"} exported into ${SHORTS_FOLDER}/`);
+      notifyDone(all ? "Shorts exported" : "Short exported", `${made} file${made === 1 ? "" : "s"} in ${SHORTS_FOLDER}/`, lastProgress.current ?? undefined);
+    } catch (e) {
+      if ((e as DOMException).name === "AbortError") setStatus(`Export stopped after ${made} short${made === 1 ? "" : "s"}`);
+      else setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      document.title = pageTitleRef.current;
+      setJob(null);
+    }
+  };
+  /** The frame at the playhead as the short's 1080×1920 cover, beside its export. */
+  const saveShortCover = async () => {
+    if (!activeShort || job || !store.hasFolder) return;
+    const abort = new AbortController();
+    setJob({ kind: "frame", label: "Saving the cover", fraction: 0.5, abort });
+    try {
+      const derived = shortProject(project, activeShort);
+      const t = Math.max(0, Math.min(activeShort.to - activeShort.from, playhead - activeShort.from));
+      const frame = await renderFrame({ project: derived, getFile: (id) => store.getFile(id), logo, t, height: 1920, type: "image/jpeg", quality: 0.92 });
+      const src = derived.media[derived.clips[0]?.media ?? ""];
+      const want = src?.width && src.height ? outputSize(src.width, src.height, { resolution: 1080, frame: "9:16" }) : { width: frame.width, height: frame.height };
+      let blob = frame.blob;
+      if (frame.width !== want.width || frame.height !== want.height) {
+        const bmp = await createImageBitmap(frame.blob);
+        const c = new OffscreenCanvas(want.width, want.height);
+        c.getContext("2d")!.drawImage(bmp, 0, 0, want.width, want.height);
+        blob = await c.convertToBlob({ type: "image/jpeg", quality: 0.92 });
+      }
+      const name = `${SHORTS_FOLDER}/${shortFileName(shortIndex, activeShort, "cover")}`;
+      const { writable } = await store.createWritable(name);
+      await writable.write(blob);
+      await writable.close();
+      updateShort(activeShort.id, { cover: playhead });
+      setStatus(`Cover saved: ${name}, ${want.width}×${want.height}, from ${fmtTime(playhead)}`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setJob(null);
+    }
+  };
+  /** A small graded frame of the view at a timeline instant, as pixels and as a thumbnail. */
+  const seamFrame = async (t: number) => {
+    const f = await renderFrame({ project: viewFor(project, activeShort), getFile: fileForIntro, logo: null, t, height: 96, type: "image/jpeg", quality: 0.8 });
+    const bmp = await createImageBitmap(f.blob);
+    const c = new OffscreenCanvas(36, 64);
+    const ctx = c.getContext("2d")!;
+    ctx.drawImage(bmp, 0, 0, 36, 64);
+    return { pixels: ctx.getImageData(0, 0, 36, 64).data, thumb: URL.createObjectURL(f.blob) };
+  };
+  /**
+   * The loop's seam: how the last frame meets the first, and the frame in the last second that meets it best — the
+   * end moves there when it is a better match than the end there is.
+   */
+  const findSeam = async () => {
+    const x = activeShort;
+    if (!x || job) return;
+    const fps = fpsRef.current;
+    setSeam({ shortId: x.id, lastThumb: null, firstThumb: null, score: null, scanning: true });
+    try {
+      const first = await seamFrame(x.from);
+      const last = await seamFrame(Math.max(x.from, x.to - 1 / fps));
+      const now = seamScore(last.pixels, first.pixels);
+      setSeam({ shortId: x.id, lastThumb: last.thumb, firstThumb: first.thumb, score: now, scanning: true });
+      let best = { t: x.to, score: now, thumb: last.thumb };
+      for (const t of seamCandidates(x.from, x.to, fps, 1)) {
+        if (Math.abs(t - x.to) < 1e-6) continue;
+        const f = await seamFrame(Math.max(x.from, t - 1 / fps));
+        const score = seamScore(f.pixels, first.pixels);
+        if (score < best.score - 0.005) best = { t, score, thumb: f.thumb };
+      }
+      if (best.t !== x.to) {
+        updateShort(x.id, { to: best.t });
+        setSeam({ shortId: x.id, lastThumb: best.thumb, firstThumb: first.thumb, score: best.score, movedFrom: x.to, scanning: false });
+        setStatus(`The end moved from ${fmtTime(x.to, fps)} to ${fmtTime(best.t, fps)}: the seam is ${Math.round(best.score * 100)}% apart instead of ${Math.round(now * 100)}%`);
+      } else {
+        setSeam({ shortId: x.id, lastThumb: last.thumb, firstThumb: first.thumb, score: now, movedFrom: null, scanning: false });
+        setStatus(`The end stays: no frame in the last second meets the first better (${Math.round(now * 100)}% apart)`);
+      }
+    } catch (e) {
+      setSeam(null);
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  };
+  /** Shorts across the whole drive: the timeline in equal stretches, each short on the liveliest moment of its stretch. */
+  const suggestShorts = async (count: number, seconds: number) => {
+    if (job || !placed.length) return;
+    const abort = new AbortController();
+    setJob({ kind: "shorts", label: `Looking for ${count} short${count === 1 ? "" : "s"}`, fraction: 0, abort });
+    try {
+      const windows = suggestWindows(project, count, seconds);
+      let picks = windows.map((w) => ({ stretch: w.stretch, moment: w.candidates[Math.floor(w.candidates.length / 2)] }));
+      try {
+        const stats = await scanMoments(fileForIntro, project, windows.map((w) => w.candidates), { signal: abort.signal, onProgress: (d, t) => setJob((j) => (j ? { ...j, fraction: d / Math.max(1, t), message: `${d} of ${t} moments looked at` } : j)) });
+        const scored = scoreShortMoments(windows.map((w) => w.candidates), stats);
+        picks = windows.map((w, i) => ({ stretch: w.stretch, moment: scored[i]?.reduce((best, m) => ((m.score ?? 0) > (best.score ?? 0) ? m : best)) ?? picks[i].moment }));
+      } catch (e) {
+        if ((e as DOMException).name === "AbortError") throw e;
+        setStatus("Couldn't look at the footage; the shorts are spaced evenly instead.");
+      }
+      const made = shortsFromMoments(picks, seconds, shorts.length);
+      setProject((p) => ({ ...p, mode: "short", shorts: [...(p.shorts ?? []), ...made] }));
+      if (made[0]) {
+        setCurrentShort(made[0].id);
+        stepTo(made[0].from);
+      }
+      setTab("shorts");
+      setStatus(`${made.length} short${made.length === 1 ? "" : "s"} suggested, ${seconds} s each, on the liveliest moment of each stretch — trim, loop and export them from the Shorts tab`);
+    } catch (e) {
+      if ((e as DOMException).name !== "AbortError") setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setJob(null);
+    }
+  };
+  const copyShortPost = async () => {
+    if (!activeShort) return;
+    const derived = shortProject(project, activeShort);
+    const text = shortPostText(derived, activeShort.targets, shortIndex, shorts.length, shortTimelineDuration(derived));
+    try {
+      await navigator.clipboard.writeText(text);
+      setStatus("Post text copied: the title, description and hashtags");
+    } catch {
+      setError("The browser would not copy — open Post text below and copy it by hand.");
+    }
+  };
+  const onShortAction = (id: string) => {
+    if (/hook|caption|title/.test(id)) {
+      setTab("titles");
+      addTitle("hook");
+    } else if (/length|shorten/.test(id) && activeShort) shortLength(Math.min(activeShort.to - activeShort.from, 60));
+    else setStatus("Change it in the Shorts tab, then export again.");
+  };
+  const shortPreflight = useMemo(() => {
+    if (!activeShort || !shortMode) return [];
+    const derived = shortProject(project, activeShort);
+    return derived.clips.length ? shortChecks(derived, activeShort.targets, fps) : [];
+  }, [project, activeShort, shortMode, fps]);
+  const shortPost = useMemo(() => {
+    if (!activeShort) return "";
+    const derived = shortProject(project, activeShort);
+    return shortPostText(derived, activeShort.targets, shortIndex, shorts.length, shortTimelineDuration(derived));
+  }, [project, activeShort, shortIndex, shorts.length]);
   const startExport = () => {
     if ((project.export.review ?? "on") === "off" || allTicked(review, ticked)) return void runExport();
     void refreshFramesSaved();
@@ -2486,7 +2819,7 @@ export function VideoEditorWidget() {
     try {
       const { writable } = await store.createWritable(name);
       const result = await exportProject({
-        project,
+        project: landscape,
         getFile: (id) => store.getFile(id),
         logo,
         writable: testWritable(writable as unknown as WritableStream<import("mediabunny").StreamTargetChunk>, true),
@@ -2624,7 +2957,7 @@ export function VideoEditorWidget() {
     const outW = firstMedia?.width && firstMedia.height ? Math.round((firstMedia.width * (outH / firstMedia.height)) / 2) * 2 : Math.round((outH * 16) / 9);
     const bitrateMbps = Math.max(1, Math.round(outH / 90));
     const seconds = scope ? scope.to - scope.from : duration;
-    const preview: Project = { ...project, export: { ...project.export, resolution: outH, codec: "avc", bitrateMbps, preset: "fast", smartCopy: false, range: scope } };
+    const preview: Project = { ...landscape, export: { ...project.export, resolution: outH, codec: "avc", bitrateMbps, preset: "fast", smartCopy: false, range: scope } };
     const name = `preview-${outH}p.mp4`;
     setJob({ kind: "export", label: "Test render", fraction: 0, abort, output: { name, codec: "AVC", width: outW, height: outH, bitrateMbps, preset: "fast", estimatedBytes: (bitrateMbps * 1e6 * seconds) / 8 }, paused: false });
     setPlaying(false);
@@ -2730,6 +3063,50 @@ export function VideoEditorWidget() {
       hoverLineRef.current.style.display = clipDragRef.current?.moved ? "none" : "block";
     }
     showHoverTime(t);
+  };
+  /* The shorts lane: a short is dragged to move it, its edges to trim it; the empty lane draws a new one. */
+  const shortDragRef = useRef<{ id: string | null; kind: "move" | "from" | "to" | "draw"; startT: number; from: number; to: number; moved: boolean } | null>(null);
+  const onShortsLanePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0 || !timelineRef.current) return;
+    e.stopPropagation();
+    const t = timeAtPointer(timelineRef.current, e.clientX, !e.altKey);
+    const target = e.target as HTMLElement;
+    const id = (target.closest("[data-short-span]") as HTMLElement | null)?.dataset.shortSpan ?? null;
+    const handle = target.dataset.shortHandle as "from" | "to" | undefined;
+    const x = id ? shorts.find((y) => y.id === id) : null;
+    e.currentTarget.setPointerCapture(e.pointerId);
+    if (x) {
+      shortDragRef.current = { id: x.id, kind: handle ?? "move", startT: t, from: x.from, to: x.to, moved: false };
+      selectShort(x.id, false);
+    } else shortDragRef.current = { id: null, kind: "draw", startT: t, from: t, to: t, moved: false };
+  };
+  const onShortsLanePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    const d = shortDragRef.current;
+    if (!d || !timelineRef.current) return;
+    const t = timeAtPointer(timelineRef.current, e.clientX, !e.altKey);
+    const delta = t - d.startT;
+    if (!d.moved && Math.abs(delta) * pxPerSec < 3) return;
+    d.moved = true;
+    const total = durationRef.current;
+    if (d.kind === "draw") {
+      const from = Math.min(d.startT, t), to = Math.max(d.startT, t);
+      if (!d.id) {
+        if (to - from < MIN_SHORT_SECONDS) return;
+        d.id = addShortAt(from, to).id;
+      } else updateShort(d.id, { from, to });
+    } else if (d.kind === "move") {
+      const len = d.to - d.from, from = Math.max(0, Math.min(total - len, d.from + delta));
+      updateShort(d.id!, { from, to: from + len });
+    } else if (d.kind === "from") updateShort(d.id!, { from: Math.min(d.to - MIN_SHORT_SECONDS, Math.max(0, d.from + delta)) });
+    else updateShort(d.id!, { to: Math.max(d.from + MIN_SHORT_SECONDS, Math.min(total, d.to + delta)) });
+    showHoverTime(t);
+  };
+  const onShortsLanePointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    const d = shortDragRef.current;
+    if (!d) return;
+    shortDragRef.current = null;
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
+    if (!d.moved && d.id) selectShort(d.id, true);
   };
   const onTimelinePointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
     if (!scrubRef.current) return;
@@ -2868,7 +3245,7 @@ export function VideoEditorWidget() {
   const first = project.media[project.clips[0]?.media ?? ""];
   const sourceAspect = first?.width && first.height ? first.width / first.height : 16 / 9;
   // The preview takes the export frame's shape, so a vertical cut is seen as it will come out.
-  const previewAspect = frameAspect(project.export.frame, first?.width || 16, first?.height || 9);
+  const previewAspect = frameAspect(shortMode ? "9:16" : project.export.frame, first?.width || 16, first?.height || 9);
   const thumbH = Math.min(THUMB_HEIGHT, first?.height ?? THUMB_HEIGHT);
   const thumbSize = `${Math.round((sourceAspect * thumbH) / 2) * 2}×${thumbH}`;
 
@@ -2878,9 +3255,12 @@ export function VideoEditorWidget() {
   const laneVideo = { flex: "3 1 0px", minHeight: 28 } as const;
   const laneTitles = { flex: `${titleLaneOf.count} 1 0px`, minHeight: Math.max(0, titleLaneOf.count * 20 - 2) } as const;
   const laneMusic = { flex: "1 1 0px", minHeight: 18 } as const;
+  // The shorts lane shows whenever there are shorts, and in Short mode from the start.
+  const showShortsLane = shortMode || shorts.length > 0;
+  const laneShorts = { flex: "1 1 0px", minHeight: 22 } as const;
   // The smallest the timeline pane may be: every lane at its floor plus the header, the hint line and padding. The rows
   // split holds it as a hard floor, so a notice or a result card above the rows squeezes the preview, never the lanes.
-  const timelineFloor = 216 + 20 * titleLaneOf.count;
+  const timelineFloor = 216 + 20 * titleLaneOf.count + (showShortsLane ? 26 : 0);
   const timelinePanel = (
       <div className="panel flex h-full min-h-0 flex-col select-none overflow-hidden p-2" data-timeline>
         <div className="mb-1.5 flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1">
@@ -2901,6 +3281,7 @@ export function VideoEditorWidget() {
           <div className="flex min-h-0 w-14 shrink-0 flex-col overflow-hidden pr-1.5 text-right text-[10.5px] leading-none text-faint select-none" style={{ paddingBottom: scrollbarH }} aria-hidden>
             <div className="h-5 shrink-0" />
             <div className="mt-1 flex items-center justify-end" style={laneVideo}>Video</div>
+            {showShortsLane && <div className="mt-1 flex items-center justify-end" style={laneShorts}>Shorts</div>}
             <div className="mt-1 flex items-center justify-end" style={laneTitles}>Titles</div>
             {[0, 1, 2].map((lane) => (
               <div key={lane} className="mt-1 flex items-center justify-end" style={laneMusic}>Music {lane + 1}</div>
@@ -3004,6 +3385,22 @@ export function VideoEditorWidget() {
                 />
               ))}
             </div>
+            {/* shorts lane: each short a span to drag or trim; the empty lane draws a new one */}
+            {showShortsLane && (
+              <div className="relative mt-1" style={laneShorts} data-shorts-lane onPointerDown={onShortsLanePointerDown} onPointerMove={onShortsLanePointerMove} onPointerUp={onShortsLanePointerUp} onPointerCancel={onShortsLanePointerUp}>
+                {!shorts.length && <div className="pointer-events-none absolute inset-0 flex items-center rounded-[3px] border border-dashed border-edge px-2 text-[10.5px] text-faint">Drag here to draw a short, or press N at the playhead</div>}
+                {shorts.map((x, i) => {
+                  const active = activeShort?.id === x.id;
+                  return (
+                    <div key={x.id} role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === "Enter") selectShort(x.id); }} className={cn("absolute top-0 flex h-full cursor-grab items-center overflow-hidden rounded-[3px] border px-1.5 text-[10.5px] select-none", active ? "z-10 border-accent bg-accent/30 text-ink" : "border-edge bg-accent/10 text-muted", x.loop !== "off" && "border-dashed")} style={{ left: x.from * pxPerSec, width: Math.max(6, (x.to - x.from) * pxPerSec) }} title={`${x.name} · ${fmtTime(x.from)}–${fmtTime(x.to)} · drag to move it, its edges to trim it`} data-short-span={x.id} data-active={active ? "true" : "false"}>
+                      <span className="pointer-events-none truncate">{String(i + 1).padStart(2, "0")} {x.name} · {(x.to - x.from).toFixed(1)} s</span>
+                      <span className="absolute inset-y-0 left-0 w-1.5 cursor-ew-resize bg-accent/60" data-short-handle="from" />
+                      <span className="absolute inset-y-0 right-0 w-1.5 cursor-ew-resize bg-accent/60" data-short-handle="to" />
+                    </div>
+                  );
+                })}
+              </div>
+            )}
             {/* title lanes: overlapping titles stack */}
             <div className="relative mt-1" style={laneTitles} data-title-lane>
               {!project.titles.length && project.clips.length > 0 && <div className="pointer-events-none absolute inset-0 flex items-center rounded-[3px] border border-dashed border-edge px-2 text-[10.5px] text-faint">Titles and lower thirds from the Titles tab land here</div>}
@@ -3016,7 +3413,7 @@ export function VideoEditorWidget() {
                     setTab("titles");
                     focusTitle(t);
                   }}
-                  className={cn("absolute truncate rounded-[3px] bg-[#e5484d]/70 px-1 text-left text-[10.5px] text-white", selectedTitle === t.id && "ring-2 ring-white/90")}
+                  className={cn("absolute truncate rounded-[3px] bg-[#e5484d]/70 px-1 text-left text-[10.5px] text-white", selectedTitle === t.id && "ring-2 ring-white/90", (shortMode ? t.short !== activeShort?.id : !!t.short) && "opacity-35")}
                   style={{ left: t.start * pxPerSec, width: Math.max(4, t.duration * pxPerSec), top: `${((titleLaneOf.lanes[t.id] ?? 0) / titleLaneOf.count) * 100}%`, height: `calc(${100 / titleLaneOf.count}% - 2px)` }}
                   title={t.text}
                 >
@@ -3090,6 +3487,14 @@ export function VideoEditorWidget() {
           <FolderOpen size={14} /> {folder ? folder : "Choose project folder"}
         </button>
         <input value={project.name} onChange={(e) => setProject((p) => ({ ...p, name: e.target.value }))} className={cn(INPUT, "w-48")} aria-label="Project name" />
+        <div className="flex items-center rounded-[var(--radius-sm)] border border-edge p-0.5 text-[12px]" role="group" aria-label="Editor mode" data-mode={shortMode ? "short" : "landscape"}>
+          <button type="button" onClick={() => setMode("landscape")} aria-pressed={!shortMode} className={cn("h-7 rounded-[var(--radius-sm)] px-2", !shortMode ? "bg-accent text-on-accent" : "text-muted hover:text-ink")} title="The landscape edit: the whole timeline, exported as one file" data-mode-landscape>
+            Landscape
+          </button>
+          <button type="button" onClick={() => setMode("short")} aria-pressed={shortMode} className={cn("flex h-7 items-center gap-1 rounded-[var(--radius-sm)] px-2", shortMode ? "bg-accent text-on-accent" : "text-muted hover:text-ink")} title="Short mode: vertical shorts cut from this timeline, one at a time, in the phone's shape" data-mode-short>
+            <Smartphone size={12} /> Short
+          </button>
+        </div>
         <button type="button" onClick={() => void store.save(project)} disabled={!folder} className={GHOST}>
           <Save size={13} /> Save
         </button>
@@ -3227,6 +3632,17 @@ export function VideoEditorWidget() {
             <video ref={videoRef} playsInline className="absolute inset-0 h-full w-full object-contain opacity-0" />
             <video ref={altRef} muted playsInline className="pointer-events-none absolute inset-0 h-full w-full object-contain opacity-0" />
             <canvas ref={canvasRef} width={previewAspect >= 1 ? 1280 : Math.round(1280 * previewAspect)} height={previewAspect >= 1 ? Math.round(1280 / previewAspect) : 1280} className="absolute inset-0 h-full w-full object-contain" data-preview-canvas />
+            {shortMode && activeShort && (
+              <>
+                {ghost && view.safeArea && <SafeGhost safe={view.safeArea} />}
+                <div className="pointer-events-none absolute bottom-2 left-2 rounded-[var(--radius-sm)] bg-black/60 px-2 py-0.5 font-mono text-[11px] text-white tabular" data-short-clock>
+                  {fmtTime(Math.max(0, playhead - activeShort.from), first?.fps)} / {fmtTime(activeShort.to - activeShort.from)} · {String(shortIndex).padStart(2, "0")} {activeShort.name}
+                </div>
+                <button type="button" onClick={() => setGhost((g) => !g)} aria-pressed={ghost} className="absolute top-2 left-2 rounded-[var(--radius-sm)] bg-black/50 px-1.5 py-0.5 text-[11px] text-white/90 opacity-0 transition-opacity group-hover:opacity-100 focus:opacity-100 hover:bg-black/70" title="Show what the platforms' own buttons and captions cover" data-ghost-toggle>
+                  {ghost ? "Hide the phone's UI" : "Show the phone's UI"}
+                </button>
+              </>
+            )}
             {project.clips.length > 0 && (
               <button type="button" onClick={toggleFullscreen} aria-label={fullscreen ? "Exit full screen" : "Full screen"} title={fullscreen ? "Exit full screen (Esc)" : "Full screen (double-click the preview)"} className="absolute top-2 right-2 rounded-[var(--radius-sm)] bg-black/50 p-1.5 text-white/90 opacity-0 transition-opacity group-hover:opacity-100 focus:opacity-100 hover:bg-black/70">
                 {fullscreen ? <Minimize2 size={15} /> : <Maximize2 size={15} />}
@@ -3393,7 +3809,7 @@ export function VideoEditorWidget() {
                 </option>
               ))}
             </select>
-            <button type="button" onClick={() => setLoop((l) => !l)} aria-pressed={loop} className={cn(GHOST, "h-8 px-2 text-[12px]", loop && "border-accent text-accent")} title={range ? "Loop the export range" : "Loop the whole timeline"} aria-label={range ? "Loop the export range" : "Loop the whole timeline"}>
+            <button type="button" onClick={() => setLoop((l) => !l)} aria-pressed={loop} className={cn(GHOST, "h-8 px-2 text-[12px]", loop && "border-accent text-accent")} title={shortMode && activeShort ? "Loop the short (L)" : range ? "Loop the export range (L)" : "Loop the whole timeline (L)"} aria-label={shortMode && activeShort ? "Loop the short" : range ? "Loop the export range" : "Loop the whole timeline"}>
               <Repeat size={13} />
             </button>
             <button type="button" onClick={() => setPreviewMuted((m) => !m)} aria-pressed={previewMuted} className={cn(GHOST, "h-8 px-2 text-[12px]", previewMuted && "border-accent text-accent")} title="Mute the preview (M) — export is unaffected" aria-label={previewMuted ? "Unmute preview" : "Mute preview"}>
@@ -4209,8 +4625,9 @@ export function VideoEditorWidget() {
                   </span>
                 </div>
                 <p className="text-[12px] text-faint">Download the template (one file for the intro and the titles), give it to an LLM with your notes (places, people, dates), then import the JSON it returns: every title with its timing, position, colours, font and size arrives populated.</p>
-                {project.titles.length > 0 && <p className="text-[12px] text-faint">In time order. Open one to edit it; titles that overlap in time are all drawn, so give them different positions.</p>}
-                {[...project.titles]
+                {shortMode && activeShort && <p className="text-[12px] text-accent" data-titles-short>Short mode: these titles belong to {String(shortIndex).padStart(2, "0")} {activeShort.name}; a new one starts inside it.</p>}
+                {view.titles.length > 0 && <p className="text-[12px] text-faint">In time order. Open one to edit it; titles that overlap in time are all drawn, so give them different positions.</p>}
+                {[...view.titles]
                   .sort((a, b) => a.start - b.start)
                   .map((t) => {
                     const open = selectedTitle === t.id;
@@ -4233,6 +4650,19 @@ export function VideoEditorWidget() {
                     <div className="space-y-1.5 border-t border-edge p-2">
                     <input value={t.text} onChange={(e) => setProject((p) => ({ ...p, titles: p.titles.map((x) => (x.id === t.id ? { ...x, text: e.target.value } : x)) }))} className={INPUT} aria-label="Title text" />
                     <input value={t.subtitle ?? ""} onChange={(e) => setProject((p) => ({ ...p, titles: p.titles.map((x) => (x.id === t.id ? { ...x, subtitle: e.target.value } : x)) }))} placeholder="Subtitle (optional)" className={INPUT} aria-label="Subtitle" />
+                    {shorts.length > 0 && (
+                      <label className="flex items-center gap-1 text-[12px] text-muted">
+                        Belongs to
+                        <select value={t.short ?? ""} onChange={(e) => setProject((p) => ({ ...p, titles: p.titles.map((x) => (x.id === t.id ? (e.target.value ? { ...x, short: e.target.value } : untag(x)) : x)) }))} className={cn(INPUT, "h-7")} aria-label="Belongs to" data-title-short>
+                          <option value="">The landscape edit</option>
+                          {shorts.map((x, i) => (
+                            <option key={x.id} value={x.id}>
+                              {String(i + 1).padStart(2, "0")} {x.name}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    )}
                     <div className="grid grid-cols-3 gap-2 text-[12px] text-muted">
                       <label>
                         Start (s)
@@ -4403,6 +4833,42 @@ export function VideoEditorWidget() {
                   </div>
                 )}
               </>
+            )}
+            {tab === "shorts" && (
+              <ShortsPanel
+                shorts={shorts}
+                current={shortMode ? activeShort : null}
+                duration={duration}
+                fps={fps}
+                playhead={playhead}
+                busy={!!job}
+                titlesCount={activeShort ? project.titles.filter((t) => t.short === activeShort.id).length : 0}
+                checks={shortPreflight}
+                seam={seam}
+                withoutMusic={withoutMusic}
+                loop={loop}
+                postText={shortPost}
+                onSelect={(id) => selectShort(id, true)}
+                onChange={updateShort}
+                onAdd={() => void addShortAt(playhead)}
+                onRemove={removeShort}
+                onDuplicate={duplicateShort}
+                onMove={moveShort}
+                onJump={stepTo}
+                onMarkIn={() => shortActionsRef.current.markIn()}
+                onMarkOut={() => shortActionsRef.current.markOut()}
+                onNudge={(end, delta) => shortActionsRef.current.nudge(end, delta)}
+                onLength={shortLength}
+                onLoopToggle={() => setLoop((l) => !l)}
+                onFindSeam={() => void findSeam()}
+                onSuggest={(count, seconds) => void suggestShorts(count, seconds)}
+                onExport={(all) => void startShortExport(all)}
+                onWithoutMusic={setWithoutMusic}
+                onSaveCover={() => void saveShortCover()}
+                onCopyPost={() => void copyShortPost()}
+                onTitles={() => setTab("titles")}
+                onAction={onShortAction}
+              />
             )}
             {tab === "export" && (
               <>

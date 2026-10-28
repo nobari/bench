@@ -249,6 +249,56 @@ export interface MusicTrack {
   keyframes: Keyframe[];
 }
 
+/* ---------------------------------------------------------- shorts (Short mode) */
+
+/** The platforms a short is made for — the same ids as shorts.ts's PlatformId. */
+export type ShortTarget = "shorts" | "reels" | "tiktok";
+export const SHORT_TARGETS: ShortTarget[] = ["shorts", "reels", "tiktok"];
+export type ShortLoop = "off" | "cut" | "glimpse";
+export const SHORT_LOOPS: { id: ShortLoop; name: string; hint: string }[] = [
+  { id: "off", name: "No loop", hint: "The short ends where it ends." },
+  { id: "cut", name: "Loop on a cut", hint: "The end is chosen to match the start, so the platform's replay runs on without a jolt." },
+  { id: "glimpse", name: "Loop with a glimpse", hint: "The first fraction of a second returns at the end under a short dissolve, so the replay lands on a frame already seen." },
+];
+/** How much of the start a glimpse loop shows again at the end, in seconds. */
+export const GLIMPSE_SECONDS = 0.4;
+/**
+ * A short in Short mode: a named span of the landscape timeline with its own loop, targets and export preset. Its
+ * titles are the timeline's titles tagged with its id; its window keys are the clips' own.
+ */
+export interface Short {
+  id: string;
+  name: string;
+  /** Timeline seconds. */
+  from: number;
+  to: number;
+  loop: ShortLoop;
+  targets: ShortTarget[];
+  /** The export preset for the short's file (export-presets.ts); the Shorts / Reels file when unset. */
+  preset?: string;
+  /** The cover frame, in timeline seconds; the first frame when unset. */
+  cover?: number | null;
+  exported?: { name: string; bytes: number; at: number } | null;
+}
+export type EditorMode = "landscape" | "short";
+export const newShort = (from: number, to: number, index: number, name?: string): Short => ({ id: newId(), name: name ?? `Short ${index}`, from, to, loop: "off", targets: ["shorts", "reels"] });
+/** A saved short made whole: an unknown loop or target dropped, a span that is not a span refused. */
+export function normalizeShort(s: Partial<Short> | null | undefined): Short | null {
+  if (!s || typeof s !== "object" || typeof s.from !== "number" || typeof s.to !== "number" || !(s.to > s.from)) return null;
+  const targets = Array.isArray(s.targets) ? s.targets.filter((t): t is ShortTarget => SHORT_TARGETS.includes(t as ShortTarget)) : [];
+  return {
+    id: typeof s.id === "string" && s.id ? s.id : newId(),
+    name: typeof s.name === "string" && s.name.trim() ? s.name : "Short",
+    from: Math.max(0, s.from),
+    to: s.to,
+    loop: SHORT_LOOPS.some((l) => l.id === s.loop) ? (s.loop as ShortLoop) : "off",
+    targets: targets.length ? targets : ["shorts", "reels"],
+    ...(typeof s.preset === "string" && s.preset ? { preset: s.preset } : {}),
+    ...(typeof s.cover === "number" && s.cover >= 0 ? { cover: s.cover } : {}),
+    ...(s.exported && typeof s.exported === "object" && typeof s.exported.name === "string" ? { exported: { name: s.exported.name, bytes: Number(s.exported.bytes) || 0, at: Number(s.exported.at) || 0 } } : {}),
+  };
+}
+
 export interface Title {
   id: string;
   kind: TitleKind;
@@ -285,6 +335,8 @@ export interface Title {
   enter?: TitleEnter;
   /** false lets the title ignore the project's safe area (the frame's edges still keep their margin). */
   safe?: boolean;
+  /** The short this title belongs to (Short mode): shown and exported only with that short; unset, it is the landscape edit's. */
+  short?: string;
 }
 /** intro: a full-screen card on black. title: text over the picture. lowerThird: a small caption in a corner with a box. hook: the big line that opens a short. caption: a short's wrapped caption line, inside the platform's safe area. */
 export type TitleKind = "intro" | "title" | "lowerThird" | "hook" | "caption";
@@ -360,6 +412,7 @@ export function normalizeTitle(t: Partial<Title> & { kind: Title["kind"] }): Tit
     borderWidth: typeof t.borderWidth === "number" ? Math.min(0.5, Math.max(0, t.borderWidth)) : d.borderWidth,
     borderColor: typeof t.borderColor === "string" && t.borderColor ? t.borderColor : d.borderColor,
     enter: TITLE_ENTERS.includes(t.enter as TitleEnter) ? (t.enter as TitleEnter) : d.enter,
+    ...(typeof t.short === "string" && t.short ? { short: t.short } : {}),
     ...(t.safe === false ? { safe: false } : {}),
   };
 }
@@ -886,6 +939,10 @@ export interface Project {
   layout?: Layout | null;
   /** The part of the frame a platform leaves visible, for placing titles; null or missing: all of it. */
   safeArea?: SafeArea | null;
+  /** Short mode: the editor shows one short at a time, in the phone's shape. */
+  mode?: EditorMode;
+  /** The shorts cut from this timeline (Short mode). */
+  shorts?: Short[];
 }
 
 /** A readable location for a media file. */
@@ -1443,7 +1500,9 @@ export function deserialize(json: string): Project | null {
     if (typeof intro.sceneSeconds !== "number" || !(intro.sceneSeconds > 0)) intro.sceneSeconds = null;
     if (!INTRO_OUTROS.includes(intro.outro as IntroOutro)) intro.outro = "look";
     const sound: SoundMode = SOUND_MODES.includes(p.sound as SoundMode) ? (p.sound as SoundMode) : "footage";
-    return { ...newProject(), ...p, clips, sound, layout, safeArea, export: { ...DEFAULT_EXPORT, ...p.export, frame, tags: { ...DEFAULT_TAGS, ...(p.export?.tags ?? {}) } }, preview: { ...DEFAULT_PREVIEW, ...(p.preview ?? (Object.values(p.proxies ?? {}).some((x) => x?.ready) ? { proxyHeight: 1080 } : {})) }, transition, intro, stops, titles: (p.titles ?? []).map((t) => normalizeTitle(t)) };
+    const shorts: Short[] = Array.isArray(p.shorts) ? p.shorts.map((x) => normalizeShort(x)).filter((x): x is Short => !!x) : [];
+    const mode: EditorMode = p.mode === "short" ? "short" : "landscape";
+    return { ...newProject(), ...p, clips, sound, layout, safeArea, shorts, mode, export: { ...DEFAULT_EXPORT, ...p.export, frame, tags: { ...DEFAULT_TAGS, ...(p.export?.tags ?? {}) } }, preview: { ...DEFAULT_PREVIEW, ...(p.preview ?? (Object.values(p.proxies ?? {}).some((x) => x?.ready) ? { proxyHeight: 1080 } : {})) }, transition, intro, stops, titles: (p.titles ?? []).map((t) => normalizeTitle(t)) };
   } catch {
     return null;
   }

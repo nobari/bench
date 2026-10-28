@@ -416,10 +416,27 @@ export class ProjectStore {
   }
 
   /** Writable stream for a proxy or export file in the folder. */
-  async createWritable(name: string, sub?: string): Promise<{ writable: FileSystemWritableFileStream; handle: FileSystemFileHandle }> {
+  /**
+   * Where a name points: "shorts/01 Drive.mp4" names a file in a sub-folder, so the folder part joins `sub`; every
+   * file method below takes names of that shape, which lets a list of files span the folder and its sub-folders.
+   */
+  private place(name: string, sub?: string): { name: string; sub?: string } {
+    const i = name.lastIndexOf("/");
+    if (i < 0) return { name, sub };
+    const folder = name.slice(0, i), base = name.slice(i + 1);
+    return { name: base, sub: sub ? `${sub}/${folder}` : folder };
+  }
+  private async folderFor(sub: string | undefined, create: boolean): Promise<FileSystemDirectoryHandle> {
     if (!this.dir) throw new Error("Pick a project folder first.");
-    const parent = sub ? await this.dir.getDirectoryHandle(sub, { create: true }) : this.dir;
-    const handle = await parent.getFileHandle(name, { create: true });
+    let dir = this.dir;
+    for (const part of (sub ?? "").split("/").filter(Boolean)) dir = await dir.getDirectoryHandle(part, { create });
+    return dir;
+  }
+
+  async createWritable(name: string, sub?: string): Promise<{ writable: FileSystemWritableFileStream; handle: FileSystemFileHandle }> {
+    const at = this.place(name, sub);
+    const parent = await this.folderFor(at.sub, true);
+    const handle = await parent.getFileHandle(at.name, { create: true });
     return { writable: await handle.createWritable(), handle };
   }
 
@@ -427,17 +444,18 @@ export class ProjectStore {
   async fileIn(name: string, sub?: string): Promise<File | null> {
     if (!this.dir) return null;
     try {
-      const parent = sub ? await this.dir.getDirectoryHandle(sub) : this.dir;
-      return await (await parent.getFileHandle(name)).getFile();
+      const at = this.place(name, sub);
+      const parent = await this.folderFor(at.sub, false);
+      return await (await parent.getFileHandle(at.name)).getFile();
     } catch {
       return null;
     }
   }
 
   async writeText(name: string, text: string, sub?: string): Promise<void> {
-    if (!this.dir) throw new Error("Pick a project folder first.");
-    const parent = sub ? await this.dir.getDirectoryHandle(sub, { create: true }) : this.dir;
-    const fh = await parent.getFileHandle(name, { create: true });
+    const at = this.place(name, sub);
+    const parent = await this.folderFor(at.sub, true);
+    const fh = await parent.getFileHandle(at.name, { create: true });
     const w = await fh.createWritable();
     await w.write(text);
     await w.close();
@@ -453,26 +471,32 @@ export class ProjectStore {
     if (!this.dir) return;
     try {
       if (name === null) {
-        if (sub) await this.dir.removeEntry(sub, { recursive: true });
+        if (sub) {
+          const parts = sub.split("/").filter(Boolean);
+          const parent = await this.folderFor(parts.slice(0, -1).join("/"), false);
+          await parent.removeEntry(parts[parts.length - 1], { recursive: true });
+        }
         return;
       }
-      const parent = sub ? await this.dir.getDirectoryHandle(sub) : this.dir;
-      await parent.removeEntry(name);
+      const at = this.place(name, sub);
+      const parent = await this.folderFor(at.sub, false);
+      await parent.removeEntry(at.name);
     } catch {
       /* already gone */
     }
   }
 
-  /** Files at the top of the project folder (sub-folders excluded), newest first. */
-  async listFiles(): Promise<{ name: string; size: number; lastModified: number }[]> {
+  /** Files at the top of the project folder (or of one sub-folder, named "sub/file"), newest first; sub-folders excluded. */
+  async listFiles(sub?: string): Promise<{ name: string; size: number; lastModified: number }[]> {
     if (!this.dir) return [];
     const out: { name: string; size: number; lastModified: number }[] = [];
     try {
-      for await (const [name, h] of this.dir as unknown as AsyncIterable<[string, FileSystemHandle]>) {
+      const dir = await this.folderFor(sub, false);
+      for await (const [name, h] of dir as unknown as AsyncIterable<[string, FileSystemHandle]>) {
         if (h.kind !== "file") continue;
         try {
           const f = await (h as FileSystemFileHandle).getFile();
-          out.push({ name, size: f.size, lastModified: f.lastModified });
+          out.push({ name: sub ? `${sub}/${name}` : name, size: f.size, lastModified: f.lastModified });
         } catch {
           /* unreadable entry */
         }
@@ -487,8 +511,9 @@ export class ProjectStore {
   async fileHandle(name: string, sub?: string): Promise<FileSystemFileHandle | null> {
     if (!this.dir) return null;
     try {
-      const parent = sub ? await this.dir.getDirectoryHandle(sub) : this.dir;
-      return await parent.getFileHandle(name);
+      const at = this.place(name, sub);
+      const parent = await this.folderFor(at.sub, false);
+      return await parent.getFileHandle(at.name);
     } catch {
       return null;
     }

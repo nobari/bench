@@ -47,6 +47,28 @@ export function PlatformChips({ chosen, onToggle }: { chosen: PlatformId[]; onTo
  * The 9:16 preview: the frame at the playhead (or the rendered preview playing), with the platforms' own buttons and
  * caption area ghosted over it when asked, so what they will cover is plain.
  */
+/** What a platform's own interface covers, ghosted over a vertical frame: the bars, the buttons on the right, the dashed safe area. */
+export function SafeGhost({ safe }: { safe: SafeArea }) {
+  return (
+    <div className="pointer-events-none absolute inset-0" data-phone-ghost>
+          {/* what the platform's own interface covers */}
+          <div className="absolute inset-x-0 top-0 bg-white/10" style={{ height: `${safe.top * 100}%` }} />
+          <div className="absolute inset-x-0 bottom-0 bg-white/10" style={{ height: `${safe.bottom * 100}%` }}>
+            <div className="absolute left-3 bottom-[28%] h-2 w-1/2 rounded bg-white/50" />
+            <div className="absolute left-3 bottom-[18%] h-1.5 w-2/3 rounded bg-white/35" />
+            <div className="absolute left-3 bottom-[10%] h-1.5 w-1/3 rounded bg-white/35" />
+          </div>
+          <div className="absolute top-0 right-0 bottom-0 bg-white/10" style={{ width: `${safe.right * 100}%` }}>
+            {[0, 1, 2, 3].map((i) => (
+              <div key={i} className="absolute right-1/2 h-6 w-6 translate-x-1/2 rounded-full bg-white/45" style={{ bottom: `${safe.bottom * 100 + 4 + i * 11}%` }} />
+            ))}
+          </div>
+          <div className="absolute top-0 bottom-0 left-0 bg-white/10" style={{ width: `${safe.left * 100}%` }} />
+          <div className="absolute border border-dashed border-white/50" style={{ top: `${safe.top * 100}%`, bottom: `${safe.bottom * 100}%`, left: `${safe.left * 100}%`, right: `${safe.right * 100}%` }} />
+        </div>
+  );
+}
+
 export function PhonePreview({ src, video, safe, ghost, children, height = 520, hook }: { src: string | null; video?: ReactNode; safe: SafeArea | null; ghost: boolean; children?: ReactNode; height?: number; hook?: string }) {
   const w = Math.round((height * 9) / 16);
   return (
@@ -54,24 +76,7 @@ export function PhonePreview({ src, video, safe, ghost, children, height = 520, 
       <div className="relative h-full w-full bg-black">
         {/* eslint-disable-next-line @next/next/no-img-element */}
         {video ?? (src ? <img src={src} alt="" className="absolute inset-0 h-full w-full object-contain" data-phone-frame /> : <div className="absolute inset-0 flex items-center justify-center text-[12px] text-white/40">No frame yet</div>)}
-        {ghost && safe && (
-          <div className="pointer-events-none absolute inset-0" data-phone-ghost>
-            {/* what the platform's own interface covers */}
-            <div className="absolute inset-x-0 top-0 bg-white/10" style={{ height: `${safe.top * 100}%` }} />
-            <div className="absolute inset-x-0 bottom-0 bg-white/10" style={{ height: `${safe.bottom * 100}%` }}>
-              <div className="absolute left-3 bottom-[28%] h-2 w-1/2 rounded bg-white/50" />
-              <div className="absolute left-3 bottom-[18%] h-1.5 w-2/3 rounded bg-white/35" />
-              <div className="absolute left-3 bottom-[10%] h-1.5 w-1/3 rounded bg-white/35" />
-            </div>
-            <div className="absolute top-0 right-0 bottom-0 bg-white/10" style={{ width: `${safe.right * 100}%` }}>
-              {[0, 1, 2, 3].map((i) => (
-                <div key={i} className="absolute right-1/2 h-6 w-6 translate-x-1/2 rounded-full bg-white/45" style={{ bottom: `${safe.bottom * 100 + 4 + i * 11}%` }} />
-              ))}
-            </div>
-            <div className="absolute top-0 bottom-0 left-0 bg-white/10" style={{ width: `${safe.left * 100}%` }} />
-            <div className="absolute border border-dashed border-white/50" style={{ top: `${safe.top * 100}%`, bottom: `${safe.bottom * 100}%`, left: `${safe.left * 100}%`, right: `${safe.right * 100}%` }} />
-          </div>
-        )}
+        {ghost && safe && <SafeGhost safe={safe} />}
         {children}
       </div>
     </div>
