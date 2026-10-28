@@ -34,9 +34,13 @@ export function outputSize(srcW: number, srcH: number, s: Pick<ExportSettings, "
 export const sizeText = (size: { width: number; height: number }) => `${size.width}×${size.height}`;
 
 export const DEFAULT_KEY: ReframeKey = { t: 0, cx: 0.5, cy: 0.5, zoom: 1 };
-const smooth = (x: number) => x * x * (3 - 2 * x);
 
-/** The window's centre and zoom at a source instant: the keys eased between, held beyond the first and the last. */
+/**
+ * The window's centre and zoom at a source instant: a smooth curve through the keys (a cubic in time between each
+ * pair, its slope at a key set by the keys either side, so the window glides through a key without stopping), at
+ * rest at the first and the last key, held beyond them; a held key keeps its window up to the next, and on a key's
+ * own instant the key itself. Zoom moves in log space, so zooming in and out feels even. Two keys ease as before.
+ */
 export function reframeAt(keys: ReframeKey[] | undefined, t: number): ReframeKey {
   if (!keys?.length) return DEFAULT_KEY;
   const sorted = keys.length > 1 ? [...keys].sort((a, b) => a.t - b.t) : keys;
@@ -46,11 +50,30 @@ export function reframeAt(keys: ReframeKey[] | undefined, t: number): ReframeKey
   let i = 1;
   while (sorted[i].t < t) i++;
   const a = sorted[i - 1], b = sorted[i];
-  // On a key, the key itself; a held key keeps its window up to the next.
   if (b.t - t <= 1e-9) return b;
   if (a.hold) return { t, cx: a.cx, cy: a.cy, zoom: a.zoom };
-  const u = b.t > a.t ? smooth((t - a.t) / (b.t - a.t)) : 1;
-  return { t, cx: a.cx + (b.cx - a.cx) * u, cy: a.cy + (b.cy - a.cy) * u, zoom: a.zoom + (b.zoom - a.zoom) * u };
+  const dt = b.t - a.t;
+  const u = dt > 0 ? (t - a.t) / dt : 1;
+  const h00 = 2 * u * u * u - 3 * u * u + 1, h10 = u * u * u - 2 * u * u + u, h01 = -2 * u * u * u + 3 * u * u, h11 = u * u * u - u * u;
+  const blend = (read: (k: ReframeKey) => number) => {
+    const p1 = read(a), p2 = read(b);
+    const m1 = tangentAt(sorted, i - 1, read), m2 = tangentAt(sorted, i, read);
+    return h00 * p1 + h10 * dt * m1 + h01 * p2 + h11 * dt * m2;
+  };
+  const cx = Math.min(1, Math.max(0, blend((k) => k.cx)));
+  const cy = Math.min(1, Math.max(0, blend((k) => k.cy)));
+  const zoom = Math.min(MAX_REFRAME_ZOOM, Math.max(1, Math.exp(blend((k) => Math.log(Math.max(1, k.zoom || 1))))));
+  return { t, cx, cy, zoom };
+}
+
+/** The slope through a key: the secant between its neighbours, zero at the ends, beside a hold, or where the key is a local extreme (so the curve never overshoots it). */
+function tangentAt(sorted: ReframeKey[], i: number, read: (k: ReframeKey) => number): number {
+  if (i <= 0 || i >= sorted.length - 1) return 0;
+  const p = sorted[i - 1], k = sorted[i], n = sorted[i + 1];
+  if (p.hold || k.hold || n.hold) return 0;
+  const left = (read(k) - read(p)) / Math.max(1e-6, k.t - p.t), right = (read(n) - read(k)) / Math.max(1e-6, n.t - k.t);
+  if (left * right <= 0) return 0;
+  return (read(n) - read(p)) / Math.max(1e-6, n.t - p.t);
 }
 
 /**

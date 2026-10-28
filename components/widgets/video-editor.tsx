@@ -8,7 +8,7 @@ import { DEFAULT_SHORT_SECONDS, MIN_SHORT_SECONDS, SHORTS_FOLDER, clampShort, se
 import { scoreMoments as scoreShortMoments } from "@/lib/tools/video/intro";
 import { ShortsPanel, type SeamState } from "@/components/widgets/short-mode-panel";
 import { SafeGhost } from "@/components/widgets/shorts-parts";
-import { carryKeys, describeKeys, keyAround, keyFor, keyIndexAt, keysFromSamples, movedKey, removeKeyAt, setKey, smoothKeys, thinKeys, windowInPicture, zoomedKey } from "@/lib/tools/video/window-keys";
+import { carryKeys, describeKeys, keyAround, keyFor, keyIndexAt, keysFromSamples, layoutSteps, movedKey, removeKeyAt, setKey, smoothKeys, sortKeys, thinKeys, windowInPicture, zoomedKey } from "@/lib/tools/video/window-keys";
 import { ROAD_CONFIDENCE, greyOf, vanishingPoint } from "@/lib/tools/video/road";
 import { framed, pictureAspect, reframeAt } from "@/lib/tools/video/reframe";
 import { scanMotionTrack } from "@/lib/tools/video/engine";
@@ -438,6 +438,10 @@ export function VideoEditorWidget() {
   // The window on the frame: the whole-picture view with the window drawn over it, a drag in progress, the key actions.
   const [windowView, setWindowView] = useState(false);
   const [snapBeats, setSnapBeats] = useState(true);
+  // Steps: a key every so many seconds across the short, and a thumbnail per step (cached by recording and instant).
+  const [stepSeconds, setStepSeconds] = useState(1);
+  const stepThumbs = useRef(new Map<string, string>());
+  const [stepThumbVersion, setStepThumbVersion] = useState(0);
   const [dragKey, setDragKey] = useState<ReframeKey | null>(null);
   const windowDragRef = useRef<{ startX: number; startY: number; key: ReframeKey; clipId: string; moved: boolean } | null>(null);
   const windowOverlayRef = useRef<HTMLDivElement>(null);
@@ -2487,6 +2491,9 @@ export function VideoEditorWidget() {
       trackWindow: (how: "track" | "road") => trackWindow(how),
       getWindowRect: () => windowRect,
       windowKeys: () => under?.clip.reframe?.keys ?? [],
+      layOutSteps,
+      getStepKeys: () => stepKeys,
+      setStepSeconds: (v: number) => setStepSeconds(v),
       analyseTrackBeats,
       getBeats: () => beats,
       cutShortToBeats,
@@ -2600,6 +2607,70 @@ export function VideoEditorWidget() {
     }
   };
   /** Export, through the checklist unless it is off or already ticked for this state of the project. */
+  /** The short's part of a clip in source seconds (the whole clip outside Short mode). */
+  const shortSpanOf = (clip: Clip): { from: number; to: number } | null => {
+    const pc = placed.find((c) => c.id === clip.id);
+    if (!pc) return null;
+    if (shortMode && activeShort) {
+      const a = Math.max(pc.start, activeShort.from), b = Math.min(pc.end, activeShort.to);
+      if (b > a) return { from: sourceTimeAt(pc, a), to: sourceTimeAt(pc, b) };
+    }
+    return { from: clip.in, to: clip.out };
+  };
+  /** The selected clip's keys inside the short's span, in order: the steps of the strip. */
+  const stepKeys = useMemo(() => {
+    const clip = current;
+    if (!clip?.reframe?.keys.length) return [] as ReframeKey[];
+    const pc = placed.find((c) => c.id === clip.id);
+    if (!pc) return [] as ReframeKey[];
+    let from = clip.in, to = clip.out;
+    if (shortMode && activeShort) {
+      const a = Math.max(pc.start, activeShort.from), b = Math.min(pc.end, activeShort.to);
+      if (b > a) {
+        from = sourceTimeAt(pc, a);
+        to = sourceTimeAt(pc, b);
+      }
+    }
+    return sortKeys(clip.reframe.keys).filter((k) => k.t >= from - 1e-6 && k.t <= to + 1e-6);
+  }, [current, placed, shortMode, activeShort]);
+  const stepSignature = stepKeys.map((k) => k.t).join(",");
+  /** A key at every step across the short's part of the clip, from the window as the curve has it there. */
+  const layOutSteps = () => {
+    const clip = current;
+    const span = clip ? shortSpanOf(clip) : null;
+    if (!clip || !span) return;
+    const keys = layoutSteps(clip.reframe?.keys, span.from, span.to, stepSeconds);
+    update(clip.id, { reframe: { keys } });
+    setWindowView(true);
+    setStatus(`${keys.length} steps of ${stepSeconds} s — click a step and drag the window there`);
+  };
+  // The strip's thumbnails: the plain picture at each step, rendered once per recording and instant.
+  useEffect(() => {
+    const clip = current;
+    if (!clip || !stepKeys.length) return;
+    const pc = placed.find((c) => c.id === clip.id);
+    if (!pc) return;
+    let active = true;
+    (async () => {
+      const plain: Project = { ...landscape, export: { ...landscape.export, frame: "source" }, titles: [], watermark: { ...landscape.watermark, media: null } };
+      for (const k of stepKeys) {
+        const id = `${clip.media}:${k.t.toFixed(2)}`;
+        if (stepThumbs.current.has(id)) continue;
+        try {
+          const f = await renderFrame({ project: plain, getFile: fileForIntro, logo: null, t: pc.start + (k.t - clip.in) / clipSpeed(clip), height: 72, type: "image/jpeg", quality: 0.7 });
+          if (!active) return;
+          stepThumbs.current.set(id, URL.createObjectURL(f.blob));
+          setStepThumbVersion((v) => v + 1);
+        } catch {
+          /* a step without a picture: the rect still shows */
+        }
+      }
+    })();
+    return () => {
+      active = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [current?.id, current?.media, stepSignature, landscape, fileForIntro]);
   /* ------------------------------------------------------------ the window's keys */
   /** One key written on a clip (and along its joined run): the key at that instant replaced, or added in order. */
   const writeWindowKey = (clipId: string, key: ReframeKey) => setProject((p) => ({ ...p, clips: updateClip(p.clips, clipId, { reframe: { keys: setKey(p.clips.find((c) => c.id === clipId)?.reframe?.keys, key) } }) }));
@@ -4676,7 +4747,53 @@ export function VideoEditorWidget() {
                             Centre
                           </button>
                         </div>
-                        <p className="text-[12px] text-faint">Follow by hand: show the whole picture, step with ← and →, and click where the road goes at a few frames — the window eases between. Track keys the window on where the picture moves; Road (experimental) on where the lane edges meet, falling back to Track where it is unsure.</p>
+                        <div className="flex flex-wrap items-center gap-1.5" data-steps-row>
+                          <span className="text-[12px] text-muted">Steps</span>
+                          <select value={stepSeconds} onChange={(e) => setStepSeconds(Number(e.target.value))} className={cn(INPUT, "h-7")} aria-label="Step length" data-step-seconds>
+                            {[0.5, 1, 2].map((v) => (
+                              <option key={v} value={v}>
+                                {v} s
+                              </option>
+                            ))}
+                          </select>
+                          <button type="button" onClick={layOutSteps} className={cn(GHOST, "h-7 text-[12px]")} title="A key at every step across the short's part of this clip, from the window as it is; then click a step and drag the window there — the motion glides through the keys" data-lay-steps>
+                            Lay out steps
+                          </button>
+                          <span className="text-[12px] text-faint" data-steps-count>{stepKeys.length ? `${stepKeys.length} steps` : "no steps yet"}</span>
+                        </div>
+                        {stepKeys.length > 0 &&
+                          (() => {
+                            const pc = placed.find((c) => c.id === current.id);
+                            const m = project.media[current.media];
+                            if (!pc || !m?.width || !m.height) return null;
+                            const aspect = frameAspect(previewFrame === "source" ? "9:16" : previewFrame, m.width, m.height);
+                            void stepThumbVersion;
+                            return (
+                              <div className="flex gap-1 overflow-x-auto pb-1" data-steps-strip>
+                                {stepKeys.map((k, i) => {
+                                  const at = pc.start + (k.t - current.in) / clipSpeed(current);
+                                  const onStep = under?.clip.id === current.id && Math.abs(under.sourceTime - k.t) <= 1 / 120;
+                                  const rect = windowInPicture(current.transform.crop, k, aspect, m.width!, m.height!, current.transform.rotate % 2 === 1);
+                                  const thumb = stepThumbs.current.get(`${current.media}:${k.t.toFixed(2)}`);
+                                  return (
+                                    <button key={k.t} type="button" onClick={() => { setWindowView(true); stepTo(at); }} className={cn("w-[96px] shrink-0 overflow-hidden rounded border bg-black text-left", onStep ? "border-accent ring-1 ring-accent" : "border-edge")} title={`Step ${i + 1} at ${fmtTime(at)} — click to go there and place the window`} data-step={i} data-on-step={onStep ? "true" : "false"}>
+                                      <div className="relative aspect-video w-full">
+                                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                                        {thumb ? <img src={thumb} alt="" className="h-full w-full object-cover" /> : null}
+                                        <span className="pointer-events-none absolute border border-accent bg-accent/15" style={{ left: `${rect.x * 100}%`, top: `${rect.y * 100}%`, width: `${rect.w * 100}%`, height: `${rect.h * 100}%` }} data-step-rect />
+                                      </div>
+                                      <span className="block truncate px-1 text-[10px] text-faint">
+                                        {i + 1} · {fmtTime(at)}
+                                        {k.zoom !== 1 ? ` · ${k.zoom.toFixed(2)}×` : ""}
+                                        {k.hold ? " · held" : ""}
+                                      </span>
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            );
+                          })()}
+                        <p className="text-[12px] text-faint">Lay out steps for a key every second across the short, click each step and place the window; or follow by hand: show the whole picture, step with ← and →, and click where the road goes at a few frames. The window glides through the keys without stopping, zoom included. Track keys the window on where the picture moves; Road (experimental) on where the lane edges meet, falling back to Track where it is unsure.</p>
                       </div>
                     );
                   })()}

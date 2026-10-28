@@ -75,7 +75,7 @@ export function smoothKeys(keys: ReframeKey[], passes = 1): ReframeKey[] {
  * The keys with the ones the eased path already passes dropped: a middle key goes when, without it, the window at
  * its instant is within `epsilon` of it (zoom counted at a quarter). Keeps a track's shape with far fewer keys.
  */
-export function thinKeys(keys: ReframeKey[], epsilon = 0.01): ReframeKey[] {
+export function thinKeys(keys: ReframeKey[], epsilon = 0.02): ReframeKey[] {
   let out = sortKeys(keys);
   let changed = true;
   while (changed && out.length > 2) {
@@ -121,4 +121,26 @@ export function describeKeys(keys: ReframeKey[] | undefined): string {
   if (keys.length === 1) return `1 key${keys[0].hold ? " (held)" : ""}`;
   const sorted = sortKeys(keys);
   return `${keys.length} keys · ${sorted[0].t.toFixed(1)}–${sorted[sorted.length - 1].t.toFixed(1)} s`;
+}
+
+/** The instants of a step grid across a span: from, every `step`, and the end itself when the remainder is at least half a step. */
+export function stepTimes(from: number, to: number, step: number): number[] {
+  const out: number[] = [];
+  const s = Math.max(0.1, step);
+  for (let t = from; t <= to + 1e-9; t += s) out.push(Math.round(t * 1e4) / 1e4);
+  if (!out.length || to - out[out.length - 1] >= s / 2 - 1e-9) out.push(Math.round(to * 1e4) / 1e4);
+  return out;
+}
+
+/**
+ * A key at every step across the span, each the window as the curve has it there, the keys inside the span that are
+ * not on the grid dropped; keys outside the span stay.
+ */
+export function layoutSteps(keys: ReframeKey[] | undefined, from: number, to: number, step: number): ReframeKey[] {
+  const have = keys ?? [];
+  const grid = stepTimes(from, to, step);
+  const outside = have.filter((k) => k.t < from - KEY_TOLERANCE || k.t > to + KEY_TOLERANCE);
+  let out = sortKeys(outside);
+  for (const t of grid) out = setKey(out, keyFor(have, t));
+  return out;
 }
