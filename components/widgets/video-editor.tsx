@@ -3,7 +3,7 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import Link from "next/link";
 import { AlertTriangle, Camera, ChevronDown, ChevronRight, ChevronUp, Sparkles, Clapperboard, Crop, Download, FolderOpen, Gauge, Loader, Maximize2, Minimize2, Music, Pause, Play, Repeat, Save, Scissors, SkipBack, SkipForward, SlidersHorizontal, Smartphone, StepBack, StepForward, Trash2, Type, Upload, Volume2, VolumeX, Keyboard, Search, Shuffle, X } from "lucide-react";
-import { newShort, timelineDuration as shortTimelineDuration, type EditorMode, type Short } from "@/lib/tools/video/project";
+import { makeRoomForAll, makeRoomForTransition, newShort, timelineDuration as shortTimelineDuration, type EditorMode, type Short } from "@/lib/tools/video/project";
 import { DEFAULT_SHORT_SECONDS, MIN_SHORT_SECONDS, SHORTS_FOLDER, clampShort, seamCandidates, seamScore, shortBytes, shortChecks, shortFileName, shortPostText, shortProject, shortStem, shortTemplate, shortTemplateProject, shortsFromMoments, suggestWindows, titlesIntoShort, viewFor } from "@/lib/tools/video/short-mode";
 import { scoreMoments as scoreShortMoments } from "@/lib/tools/video/intro";
 import { ShortsPanel, type SeamState } from "@/components/widgets/short-mode-panel";
@@ -2192,14 +2192,31 @@ export function VideoEditorWidget() {
   const addTransitionAtPlayhead = () => {
     const r = addTransitionAt(project.clips, playhead, project.transition);
     if (!r) return setError("Move the playhead at least 0.2 s inside a clip, or onto a cut, to add a transition.");
-    setProject((p) => ({ ...p, clips: r.clips }));
+    const room = makeRoomForTransition(r.clips, r.incomingId, project.media);
+    setProject((p) => ({ ...p, clips: room.clips }));
     setSelectedTransition(r.incomingId);
+    if (room.trimmedOut + room.trimmedIn > 0) setStatus(roomNote(room.trimmedOut, room.trimmedIn));
   };
-  const changeTransition = (patch: Partial<Transition>) =>
+  /** What making room took from the clips' own footage, for the status. */
+  const roomNote = (out: number, inn: number) => `Made room for the transition: ${out > 0 ? `${out.toFixed(1)} s off the end of the clip before` : ""}${out > 0 && inn > 0 ? " and " : ""}${inn > 0 ? `${inn.toFixed(1)} s off the start of the clip after` : ""} — the footage plays under the transition; ⌘Z undoes it`;
+  const changeTransition = (patch: Partial<Transition>) => {
+    let made: { trimmedOut: number; trimmedIn: number } | null = null;
     setProject((p) => {
       const tr = { ...p.transition, ...patch };
-      return { ...p, transition: tr, clips: selectedTransition ? setTransition(p.clips, selectedTransition, tr) : p.clips };
+      if (!selectedTransition) return { ...p, transition: tr };
+      const room = makeRoomForTransition(setTransition(p.clips, selectedTransition, tr), selectedTransition, p.media);
+      if (room.trimmedOut + room.trimmedIn > 0) made = room;
+      return { ...p, transition: tr, clips: room.clips };
     });
+    if (made) setStatus(roomNote((made as { trimmedOut: number; trimmedIn: number }).trimmedOut, (made as { trimmedOut: number; trimmedIn: number }).trimmedIn));
+  };
+  /** Room for one cut's transition from the clips' own ends, by the button on its note. */
+  const makeRoomAt = (incomingId: string) => {
+    const room = makeRoomForTransition(project.clips, incomingId, project.media);
+    if (room.trimmedOut + room.trimmedIn <= 0) return setStatus("No more room can be made: each clip keeps at least the transition's length");
+    setProject((p) => ({ ...p, clips: room.clips }));
+    setStatus(roomNote(room.trimmedOut, room.trimmedIn));
+  };
   // Opening a title also parks the playhead where it is fully faded in, so the preview shows what you are editing.
   const focusTitle = (t: Title | null) => {
     setSelectedTitle(t?.id ?? null);
@@ -2507,6 +2524,9 @@ export function VideoEditorWidget() {
       getWindowRect: () => windowRect,
       windowKeys: () => under?.clip.reframe?.keys ?? [],
       layOutSteps,
+      makeRoomAt,
+      getWindows: () => windows.map((w) => ({ incomingId: w.incoming.id, fit: w.fit, start: w.start, end: w.end, want: w.want, note: w.note ?? null })),
+      addTransitionAtPlayhead,
       getTemplate: () => templateData(),
       importTemplateText: (text: string) => importTemplateText(text, "pasted JSON"),
       getStepKeys: () => stepKeys,
@@ -4408,9 +4428,16 @@ export function VideoEditorWidget() {
                   </select>
                   <p className="text-[12px] text-faint">{TRANSITIONS.find((t) => t.kind === (selectedWindow?.kind ?? project.transition.kind))?.hint}</p>
                   {selectedWindow?.note && (
-                    <p className={cn("text-[12px]", selectedWindow.fit === "none" ? "text-danger" : "text-warn")} data-transition-note={selectedWindow.fit}>
-                      {selectedWindow.note}
-                    </p>
+                    <div className="space-y-1">
+                      <p className={cn("text-[12px]", selectedWindow.fit === "none" ? "text-danger" : "text-warn")} data-transition-note={selectedWindow.fit}>
+                        {selectedWindow.note}
+                      </p>
+                      {selectedWindow.fit !== "full" && (
+                        <button type="button" onClick={() => makeRoomAt(selectedWindow.incoming.id)} className={cn(GHOST, "h-7 text-[12px]")} title="Trim the clips' own ends so the transition runs in full; the trimmed footage plays under it" data-make-room>
+                          Make room
+                        </button>
+                      )}
+                    </div>
                   )}
                   <Slider label="Length" value={selectedWindow ? selectedWindow.incoming.transitionIn!.duration : project.transition.duration} min={0.25} max={3} step={0.25} onChange={(v) => changeTransition({ duration: v })} format={(v) => `${v} s, centred on the cut`} />
                   <div className="flex flex-wrap gap-1.5">
@@ -4430,7 +4457,13 @@ export function VideoEditorWidget() {
                         + Add at playhead
                       </button>
                     )}
-                    <button type="button" onClick={() => setProject((p) => ({ ...p, clips: applyTransitionToAll(p.clips, selectedWindow?.incoming.transitionIn ?? p.transition) }))} disabled={placed.length < 2} className={GHOST} title="Put this transition on every cut">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const room = makeRoomForAll(applyTransitionToAll(project.clips, selectedWindow?.incoming.transitionIn ?? project.transition), project.media);
+                        setProject((p) => ({ ...p, clips: room.clips }));
+                        if (room.cuts) setStatus(`Made room at ${room.cuts} cut${room.cuts === 1 ? "" : "s"}: ${room.trimmed.toFixed(1)} s of the clips' own ends in all play under the transitions; ⌘Z undoes it`);
+                      }} disabled={placed.length < 2} className={GHOST} title="Put this transition on every cut">
                       Apply to all cuts
                     </button>
                     {windows.length > 0 && (

@@ -763,19 +763,75 @@ export function transitionWindows(placed: PlacedClip[], media?: Record<string, M
     const d = before + after;
     const name = TRANSITIONS.find((t) => t.kind === tr.kind)?.name.toLowerCase() ?? tr.kind;
     if (d < 0.2) {
-      out.push({ kind: tr.kind, outgoing: a, incoming: b, cut: b.start, start: b.start, end: b.start, want, fit: "none", note: `No spare footage on either side of this cut, so the ${name} cannot run here: it plays as a plain cut. Each side needs its half of the transition plus a ${HANDLE_MARGIN} s margin inside the recording; trim the clips a little away from their recordings' ends to make room.` });
+      out.push({ kind: tr.kind, outgoing: a, incoming: b, cut: b.start, start: b.start, end: b.start, want, fit: "none", note: `No spare footage on either side of this cut, so the ${name} cannot run here: it plays as a plain cut. Make room trims the clips' own ends to make it — each side gives half the transition plus the ${HANDLE_MARGIN} s margin where the clip sits at its recording's end — or trim them away from their recordings' ends by hand.` });
       continue;
     }
     const fit = rest > 1e-6 ? "shortened" : Math.abs(before - after) > 1e-6 ? "shifted" : "full";
     const note =
       fit === "shortened"
-        ? `Only ${d.toFixed(1)} s of spare footage around this cut, so the ${name} is ${d.toFixed(1)} s here instead of ${want} s.`
+        ? `Only ${d.toFixed(1)} s of spare footage around this cut, so the ${name} is ${d.toFixed(1)} s here instead of ${want} s; Make room trims the clips' own ends for the rest.`
         : fit === "shifted"
           ? `The ${name} runs ${after > before ? "mostly after" : "mostly before"} the cut, because the clip ${after > before ? "after it has too little footage before its start" : "before it has too little footage after its end"}; nothing freezes.`
           : undefined;
     out.push({ kind: tr.kind, outgoing: a, incoming: b, cut: b.start, start: b.start - before, end: b.start + after, want, fit, ...(note ? { note } : {}) });
   }
   return out;
+}
+
+/**
+ * Room for a cut's transition from the clips' own footage, as an overlap would take it in any editor: where a side
+ * has too little spare footage beyond its edge, the outgoing clip gives up its end and the incoming clip its start —
+ * half the transition plus the margin where the clip sits at its recording's end — and that footage becomes the
+ * handle the transition plays; the timeline shortens by what was trimmed. Each clip keeps at least the transition's
+ * length (a second at the least); a side that cannot give enough gives what it can. Nothing changes when the
+ * handles are already there.
+ */
+export function makeRoomForTransition(clips: Clip[], incomingId: string, media?: Record<string, MediaRef>): { clips: Clip[]; trimmedOut: number; trimmedIn: number } {
+  const none = { clips, trimmedOut: 0, trimmedIn: 0 };
+  const placed = placeClips(clips);
+  const i = placed.findIndex((c) => c.id === incomingId);
+  if (i < 1) return none;
+  const a = placed[i - 1], b = placed[i], tr = b.transitionIn;
+  if (!tr || !(tr.duration > 0) || b.joinedToPrevious) return none;
+  const want = tr.duration, sa = clipSpeed(a), sb = clipSpeed(b);
+  const keep = Math.max(1, want);
+  const ma = a.introRole === "card" ? undefined : media?.[a.media]?.duration, mb = media?.[b.media]?.duration;
+  let trimmedOut = 0, trimmedIn = 0;
+  if (ma !== undefined) {
+    // Timeline seconds of handle the outgoing side has (negative inside the margin), and what it is short of.
+    const spare = (ma - a.out - HANDLE_MARGIN) / sa;
+    const short = Math.max(0, want / 2 - spare);
+    trimmedOut = Math.min(short, Math.max(0, a.end - a.start - keep));
+  }
+  if (mb !== undefined) {
+    const spare = (b.in - HANDLE_MARGIN) / sb;
+    const short = Math.max(0, want / 2 - spare);
+    trimmedIn = Math.min(short, Math.max(0, b.end - b.start - keep));
+  }
+  const round = (v: number) => Math.round(v * 1e4) / 1e4;
+  trimmedOut = round(trimmedOut);
+  trimmedIn = round(trimmedIn);
+  if (trimmedOut < 1e-6 && trimmedIn < 1e-6) return none;
+  return {
+    clips: clips.map((c) => (c.id === a.id && trimmedOut > 0 ? { ...c, out: round(c.out - trimmedOut * sa) } : c.id === b.id && trimmedIn > 0 ? { ...c, in: round(c.in + trimmedIn * sb) } : c)),
+    trimmedOut,
+    trimmedIn,
+  };
+}
+
+/** Room made at every cut that carries a transition, in order; the seconds trimmed in all. */
+export function makeRoomForAll(clips: Clip[], media?: Record<string, MediaRef>): { clips: Clip[]; trimmed: number; cuts: number } {
+  let out = clips, trimmed = 0, cuts = 0;
+  for (const c of clips) {
+    if (!c.transitionIn || c.joinedToPrevious) continue;
+    const r = makeRoomForTransition(out, c.id, media);
+    if (r.trimmedOut + r.trimmedIn > 0) {
+      out = r.clips;
+      trimmed += r.trimmedOut + r.trimmedIn;
+      cuts++;
+    }
+  }
+  return { clips: out, trimmed: Math.round(trimmed * 1e4) / 1e4, cuts };
 }
 
 /**
