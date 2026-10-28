@@ -61,6 +61,8 @@ export interface ReframeKey {
   cx: number;
   cy: number;
   zoom: number;
+  /** Hold this window until the next key instead of easing towards it. */
+  hold?: boolean;
 }
 export interface Reframe {
   keys: ReframeKey[];
@@ -1466,7 +1468,7 @@ function normalizeReframe(r: unknown): { reframe: Reframe } | Record<string, nev
   const num = (v: unknown, lo: number, hi: number, dflt: number) => (typeof v === "number" && Number.isFinite(v) ? Math.min(hi, Math.max(lo, v)) : dflt);
   const clean = keys
     .filter((k): k is Record<string, unknown> => !!k && typeof k === "object")
-    .map((k) => ({ t: num(k.t, 0, Infinity, 0), cx: num(k.cx, 0, 1, 0.5), cy: num(k.cy, 0, 1, 0.5), zoom: num(k.zoom, 1, MAX_REFRAME_ZOOM, 1) }))
+    .map((k) => ({ t: num(k.t, 0, Infinity, 0), cx: num(k.cx, 0, 1, 0.5), cy: num(k.cy, 0, 1, 0.5), zoom: num(k.zoom, 1, MAX_REFRAME_ZOOM, 1), ...(k.hold === true ? { hold: true } : {}) }))
     .sort((a, b) => a.t - b.t);
   return clean.length ? { reframe: { keys: clean } } : {};
 }

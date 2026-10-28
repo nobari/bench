@@ -8,6 +8,10 @@ import { DEFAULT_SHORT_SECONDS, MIN_SHORT_SECONDS, SHORTS_FOLDER, clampShort, se
 import { scoreMoments as scoreShortMoments } from "@/lib/tools/video/intro";
 import { ShortsPanel, type SeamState } from "@/components/widgets/short-mode-panel";
 import { SafeGhost } from "@/components/widgets/shorts-parts";
+import { carryKeys, describeKeys, keyAround, keyFor, keyIndexAt, keysFromSamples, movedKey, removeKeyAt, setKey, smoothKeys, thinKeys, windowInPicture, zoomedKey } from "@/lib/tools/video/window-keys";
+import { ROAD_CONFIDENCE, greyOf, vanishingPoint } from "@/lib/tools/video/road";
+import { framed, pictureAspect, reframeAt } from "@/lib/tools/video/reframe";
+import { scanMotionTrack } from "@/lib/tools/video/engine";
 import { DEFAULT_EXPORT, NEUTRAL_GRADE, NEUTRAL_TRANSFORM, TITLE_ALIGNS, TITLE_FAMILIES, TITLE_FONTS, TITLE_POSITIONS, TITLE_SHADOWS, TITLE_WEIGHTS, TRANSITIONS, addTransitionAt, appendMusic, applyAudioTo, applyGradeTo, applyTransitionToAll, clipAt, crossfades, dbToGain, effectiveMusicEnd, estimateExport, exportRange, fmtTime, musicGainAt, musicLength, newId, newProject, newTitle, orderRecordings, placeClips, planExport, removeRange, reorderMusic, setTransition, splitClip, timelineDuration, titleLanes, transitionAt, transitionWindows, CLIP_SPEEDS, canMergeWithNext, clipLength, clipSpeed, groupOf, sourceTimeAt, mergeWithNext, moveClip, unjoin, updateClip, visibleCuts, type Clip, type MediaRef, type MusicTrack, type Project, type ProxyHeight, type Title, type TitleFont, isFileLutKind, FILE_LUT_KINDS, type FileLutKind, type LutKind, type MathLutKind, type TitleAlign, type TitlePosition, type TitleShadow, type Transition, type TransitionKind, type ExportTags, type IntroSettings, type IntroCard, DEFAULT_CARD, cardSettings, hasCard, reorderClip, parseTime, type SteadyLights, STEADY_FRAMES, clampMusicStart, musicUnused, shuffleFillMusic, describeWhere, nameSome, whereSummary, type MediaWhere, exportFingerprint, SOUND_MODES, SOUND_LABELS, soundLevels, applySoundLevels, soundState, type SoundMode, type SoundLevels, FRAMES, FRAME_LABELS, MAX_REFRAME_ZOOM, MIN_CLIP_SPEED, MAX_CLIP_SPEED, type Frame, type Layout, type ReframeKey } from "@/lib/tools/video/project";
 import { gainToReach, YOUTUBE_LUFS, type Loudness } from "@/lib/tools/video/loudness";
 import { drawTransition } from "@/lib/tools/video/transitions";
@@ -134,6 +138,8 @@ const SHORTCUTS: [string, string][] = [
   ["N", "A new short at the playhead"],
   ["L", "Loop the short in Short mode, else the export range or the whole timeline"],
   [", / .", "Short mode: the short's start a frame earlier or later (⇧ for its end, ⌥ for a second)"],
+  ["K", "Key the window here (⇧K deletes the key here)"],
+  ["⌥ ← / →", "The previous or next window key"],
   ["M", "Mute the preview"],
   ["S", "Save a thumbnail of the frame (⇧S full-size JPEG, ⌥S PNG)"],
   ["⌫", "Delete the selected clip or transition"],
@@ -423,6 +429,12 @@ export function VideoEditorWidget() {
   const [withoutMusic, setWithoutMusic] = useState(false);
   const [ghost, setGhost] = useState(true);
   const [seam, setSeam] = useState<SeamState | null>(null);
+  // The window on the frame: the whole-picture view with the window drawn over it, a drag in progress, the key actions.
+  const [windowView, setWindowView] = useState(false);
+  const [dragKey, setDragKey] = useState<ReframeKey | null>(null);
+  const windowDragRef = useRef<{ startX: number; startY: number; key: ReframeKey; clipId: string; moved: boolean } | null>(null);
+  const windowOverlayRef = useRef<HTMLDivElement>(null);
+  const windowActionsRef = useRef<{ keyHere: () => void; removeKey: () => void; jumpKey: (dir: -1 | 1) => void }>({ keyHere: () => undefined, removeKey: () => undefined, jumpKey: () => undefined });
   const shortActionsRef = useRef<{ markIn: () => void; markOut: () => void; newAt: () => void; nudge: (end: "from" | "to", delta: number) => void }>({ markIn: () => undefined, markOut: () => undefined, newAt: () => undefined, nudge: () => undefined });
   const [previewMuted, setPreviewMuted] = useState(false);
   const loopRef = useRef(false);
@@ -678,6 +690,11 @@ export function VideoEditorWidget() {
   const view = useMemo(() => viewFor(project, shortMode ? activeShort : null), [project, shortMode, activeShort]);
   /** What the landscape export renders: never a short's titles. */
   const landscape = useMemo(() => viewFor(project, null), [project]);
+  /** The frame the preview composes: the phone's in Short mode, else the export's. */
+  const previewFrame = shortMode ? "9:16" : project.export.frame;
+  const framedPreview = framed(previewFrame);
+  /** The whole-picture view: the clip's own picture with the frame's window drawn over it, to place by hand. */
+  const pictureView = windowView && framedPreview;
   const spans = useMemo(() => planExport(landscape), [landscape]);
   const range = useMemo(() => exportRange(project), [project]);
   const rangeRef = useRef<{ from: number; to: number } | null>(null);
@@ -1519,8 +1536,8 @@ export function VideoEditorWidget() {
       } else if (!inField(e) && !e.metaKey && !e.ctrlKey) {
         const t = playheadRef.current, frame = 1 / fpsRef.current;
         const cuts = visibleCuts(placeClips(project.clips));
-        if (e.key === "ArrowLeft") stepTo(t - (e.shiftKey ? 1 : frame));
-        else if (e.key === "ArrowRight") stepTo(t + (e.shiftKey ? 1 : frame));
+        if (e.key === "ArrowLeft") { if (e.altKey) windowActionsRef.current.jumpKey(-1); else stepTo(t - (e.shiftKey ? 1 : frame)); }
+        else if (e.key === "ArrowRight") { if (e.altKey) windowActionsRef.current.jumpKey(1); else stepTo(t + (e.shiftKey ? 1 : frame)); }
         else if (e.key === "Home") stepTo(0);
         else if (e.key === "End") stepTo(durationRef.current);
         else if (e.key === "ArrowUp") stepTo([...cuts].reverse().find((c) => c < t - 0.01) ?? 0);
@@ -1544,6 +1561,7 @@ export function VideoEditorWidget() {
         else if (e.key === "o" || e.key === "O") { if (!e.repeat) shortActionsRef.current.markOut(); }
         else if (e.key === "n" || e.key === "N") { if (!e.repeat) shortActionsRef.current.newAt(); }
         else if (e.code === "Comma" || e.code === "Period") shortActionsRef.current.nudge(e.shiftKey ? "to" : "from", (e.altKey ? 1 : frame) * (e.code === "Comma" ? -1 : 1));
+        else if (e.key === "k" || e.key === "K") { if (!e.repeat) (e.shiftKey ? windowActionsRef.current.removeKey : windowActionsRef.current.keyHere)(); }
         else return;
         e.preventDefault();
       }
@@ -1899,6 +1917,10 @@ export function VideoEditorWidget() {
 
   // Preview: proxy video element (or source file when no proxy) drawn through the grader.
   const under = useMemo(() => clipAt(project.clips, Math.max(0, Math.min(playhead, Math.max(0, duration - 0.001)))), [project.clips, playhead, duration]);
+  const underRef = useRef(under);
+  useEffect(() => {
+    underRef.current = under;
+  }, [under]);
   const [previewSrc, setPreviewSrc] = useState<string | null>(null);
   useEffect(() => {
     let active = true;
@@ -2040,9 +2062,9 @@ export function VideoEditorWidget() {
         const w = c.width, h = c.height;
         try {
           // The composer is the export's: the frame's shape, the layout and each clip's window, from the proxy or the file.
-          const previewFrame = shortMode ? "9:16" : project.export.frame;
-          const frameKey = `${w}x${h}:${previewFrame ?? "source"}:${layoutChoice(project.layout)}`;
-          if (!graderRef.current || graderRef.current.key !== frameKey) graderRef.current = { key: frameKey, composer: new FrameComposer(w, h, previewFrame, project.layout) };
+          const composeFrame = pictureView ? "source" : previewFrame;
+          const frameKey = `${w}x${h}:${composeFrame ?? "source"}:${layoutChoice(project.layout)}`;
+          if (!graderRef.current || graderRef.current.key !== frameKey) graderRef.current = { key: frameKey, composer: new FrameComposer(w, h, composeFrame, project.layout) };
           const grader = graderRef.current.composer;
           grader.setCustomLut(customLut);
           if (fileLuts) for (const [k, l] of Object.entries(fileLuts)) if (l) grader.provideLut(k as LutKind, l);
@@ -2098,7 +2120,7 @@ export function VideoEditorWidget() {
             if (!fxScratchRef.current || fxScratchRef.current.w !== w || fxScratchRef.current.h !== h) fxScratchRef.current = { a: new OffscreenCanvas(w, h), b: new OffscreenCanvas(w, h), w, h };
             drawIntroFx(ctx, w, h, intro, project, fxScratchRef.current, introBlendAt(project, placed, tr, playhead));
           }
-          drawOverlays(ctx as unknown as OffscreenCanvasRenderingContext2D, w, h, playhead, view, logo);
+          if (!pictureView) drawOverlays(ctx as unknown as OffscreenCanvasRenderingContext2D, w, h, playhead, view, logo);
           // Steady lights, as the export will do it: only while playing, when frames arrive in order.
           const steadyFrames = STEADY_FRAMES[project.export.steadyLights ?? "off"];
           if (steadyFrames && playing) {
@@ -2119,7 +2141,7 @@ export function VideoEditorWidget() {
     };
     raf = requestAnimationFrame(draw);
     return () => cancelAnimationFrame(raf);
-  }, [under, playhead, project, view, shortMode, placed, logo, duration, windows, playing, rate, previewUrlFor, customLut, fileLuts]);
+  }, [under, playhead, project, view, shortMode, pictureView, previewFrame, placed, logo, duration, windows, playing, rate, previewUrlFor, customLut, fileLuts]);
 
   // Grade, crop and audio changes reach every clip of a joined run, so a hidden cut stays invisible.
   const update = (id: string, patch: Partial<Clip>) => setProject((p) => ({ ...p, clips: updateClip(p.clips, id, patch) }));
@@ -2450,6 +2472,10 @@ export function VideoEditorWidget() {
       findSeam,
       suggestShorts,
       saveShortCover,
+      setWindowView: (v: boolean) => setWindowView(v),
+      trackWindow: (how: "track" | "road") => trackWindow(how),
+      getWindowRect: () => windowRect,
+      windowKeys: () => under?.clip.reframe?.keys ?? [],
       getPlayhead: () => playhead,
       stepTo,
       getDone: () => done,
@@ -2556,6 +2582,138 @@ export function VideoEditorWidget() {
     }
   };
   /** Export, through the checklist unless it is off or already ticked for this state of the project. */
+  /* ------------------------------------------------------------ the window's keys */
+  /** One key written on a clip (and along its joined run): the key at that instant replaced, or added in order. */
+  const writeWindowKey = (clipId: string, key: ReframeKey) => setProject((p) => ({ ...p, clips: updateClip(p.clips, clipId, { reframe: { keys: setKey(p.clips.find((c) => c.id === clipId)?.reframe?.keys, key) } }) }));
+  const windowKeyHere = () => {
+    if (!under || !framedPreview) return;
+    writeWindowKey(under.clip.id, keyFor(under.clip.reframe?.keys, under.sourceTime));
+  };
+  const removeWindowKeyHere = () => {
+    if (!under) return;
+    const keys = removeKeyAt(under.clip.reframe?.keys, under.sourceTime);
+    update(under.clip.id, { reframe: keys.length ? { keys } : undefined });
+  };
+  const jumpWindowKey = (dir: -1 | 1) => {
+    if (!under) return;
+    const k = keyAround(under.clip.reframe?.keys, under.sourceTime, dir);
+    if (k) stepTo(under.clip.start + (k.t - under.clip.in) / clipSpeed(under.clip));
+  };
+  const windowActions = { keyHere: windowKeyHere, removeKey: removeWindowKeyHere, jumpKey: jumpWindowKey };
+  useEffect(() => {
+    windowActionsRef.current = windowActions;
+  });
+  /** A drag on the picture moves the window; a click centres it there; the key at the playhead takes the result. */
+  const onWindowPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0 || !under) return;
+    e.preventDefault();
+    e.currentTarget.setPointerCapture(e.pointerId);
+    const key = keyFor(under.clip.reframe?.keys, under.sourceTime);
+    windowDragRef.current = { startX: e.clientX, startY: e.clientY, key, clipId: under.clip.id, moved: false };
+    setDragKey(key);
+  };
+  const onWindowPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    const d = windowDragRef.current;
+    if (!d) return;
+    const r = e.currentTarget.getBoundingClientRect();
+    const dx = (e.clientX - d.startX) / r.width, dy = (e.clientY - d.startY) / r.height;
+    if (!d.moved && Math.hypot(e.clientX - d.startX, e.clientY - d.startY) < 3) return;
+    d.moved = true;
+    setDragKey(movedKey(d.key, dx, dy));
+  };
+  const onWindowPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    const d = windowDragRef.current;
+    if (!d) return;
+    windowDragRef.current = null;
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
+    const r = e.currentTarget.getBoundingClientRect();
+    if (d.moved) writeWindowKey(d.clipId, movedKey(d.key, (e.clientX - d.startX) / r.width, (e.clientY - d.startY) / r.height));
+    else writeWindowKey(d.clipId, { ...d.key, cx: (e.clientX - r.left) / r.width, cy: (e.clientY - r.top) / r.height });
+    setDragKey(null);
+  };
+  // The wheel zooms the window; a native listener, so the page does not scroll under it.
+  useEffect(() => {
+    const el = windowOverlayRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const u = underRef.current;
+      if (!u) return;
+      writeWindowKey(u.clip.id, zoomedKey(keyFor(u.clip.reframe?.keys, u.sourceTime), e.deltaY < 0 ? 1.08 : 1 / 1.08));
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pictureView, under]);
+  const copyKeysToNext = () => {
+    if (!current?.reframe?.keys.length) return;
+    const i = placed.findIndex((c) => c.id === current.id);
+    const next = placed[i + 1];
+    if (!next) return;
+    update(next.id, { reframe: { keys: carryKeys(current.reframe.keys, current.in, next.in, next.out) } });
+    setStatus(`${current.reframe.keys.length} key${current.reframe.keys.length === 1 ? "" : "s"} carried to the next clip at the same offsets`);
+  };
+  /**
+   * Keys written for the clip from the footage: Track puts the window on where the picture moves at each instant;
+   * Road (experimental) on where the lane edges meet, falling back to the motion where it is unsure. The span is the
+   * short's part of the clip in Short mode, else the whole clip; the keys are smoothed and thinned.
+   */
+  const trackWindow = async (how: "track" | "road") => {
+    const clip = current;
+    const pc = clip ? placed.find((c) => c.id === clip.id) : null;
+    if (!clip || !pc || job) return;
+    const speed = clipSpeed(clip);
+    let from = clip.in, to = clip.out;
+    if (shortMode && activeShort) {
+      const a = Math.max(pc.start, activeShort.from), b = Math.min(pc.end, activeShort.to);
+      if (b > a) {
+        from = sourceTimeAt(pc, a);
+        to = sourceTimeAt(pc, b);
+      }
+    }
+    const step = Math.max(0.25, Math.min(1, (to - from) / 24));
+    const times: number[] = [];
+    for (let t = from; t <= to - step / 2; t += step) times.push(Math.round(t * 1e3) / 1e3);
+    times.push(Math.round(Math.max(from, to - 0.15) * 1e3) / 1e3);
+    const abort = new AbortController();
+    setJob({ kind: "shorts", label: how === "road" ? "Following the road" : "Following the motion", fraction: 0, abort });
+    try {
+      const file = await fileForIntro(clip.media);
+      if (!file) throw new Error("The recording is not at hand.");
+      const motion = await scanMotionTrack(file, times, abort.signal);
+      let samples = motion.map((m) => ({ t: m.t, cx: m.cx, cy: m.cy }));
+      let sure = 0;
+      if (how === "road") {
+        const plain: Project = { ...landscape, export: { ...project.export, frame: "source" }, titles: [], watermark: { ...project.watermark, media: null } };
+        const out: { t: number; cx: number; cy: number }[] = [];
+        for (let i = 0; i < times.length; i++) {
+          if (abort.signal.aborted) throw new DOMException("Cancelled", "AbortError");
+          const t = times[i];
+          const f = await renderFrame({ project: plain, getFile: fileForIntro, logo: null, t: pc.start + (t - clip.in) / speed, height: 180, type: "image/jpeg", quality: 0.85 });
+          const bmp = await createImageBitmap(f.blob);
+          const c = new OffscreenCanvas(bmp.width, bmp.height);
+          const ctx = c.getContext("2d", { willReadFrequently: true })!;
+          ctx.drawImage(bmp, 0, 0);
+          const vp = vanishingPoint(greyOf(ctx.getImageData(0, 0, c.width, c.height).data, c.width, c.height), c.width, c.height);
+          const m = samples.find((x) => x.t === t) ?? { cx: 0.5, cy: 0.5 };
+          if (vp.confidence >= ROAD_CONFIDENCE) {
+            sure++;
+            out.push({ t, cx: vp.x, cy: vp.y });
+          } else out.push({ t, cx: m.cx, cy: m.cy });
+          setJob((j) => (j ? { ...j, fraction: (i + 1) / times.length, message: `${i + 1} of ${times.length} frames` } : j));
+        }
+        samples = out;
+      }
+      const zoom = keyFor(clip.reframe?.keys, from).zoom;
+      const keys = thinKeys(smoothKeys(keysFromSamples(samples, zoom), 2), 0.01);
+      update(clip.id, { reframe: { keys } });
+      setStatus(how === "road" ? `Road: ${sure} of ${times.length} frames showed the lane edges meeting; ${times.length - sure ? `the rest follow the motion; ` : ""}${keys.length} key${keys.length === 1 ? "" : "s"} written — Smooth or drag any of them` : `Track: the window follows where the picture moves, ${keys.length} key${keys.length === 1 ? "" : "s"} over ${(to - from).toFixed(1)} s`);
+    } catch (e) {
+      if ((e as DOMException).name !== "AbortError") setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setJob(null);
+    }
+  };
   /* ------------------------------------------------------------ Short mode: export, cover, seam, suggestions */
   /** One short's file into the shorts folder, then the doctor's quick look at it. */
   const exportShort = async (x: Short, index: number, noMusic: boolean, signal: AbortSignal) => {
@@ -3245,7 +3403,14 @@ export function VideoEditorWidget() {
   const first = project.media[project.clips[0]?.media ?? ""];
   const sourceAspect = first?.width && first.height ? first.width / first.height : 16 / 9;
   // The preview takes the export frame's shape, so a vertical cut is seen as it will come out.
-  const previewAspect = frameAspect(shortMode ? "9:16" : project.export.frame, first?.width || 16, first?.height || 9);
+  const underMedia = under ? project.media[under.clip.media] : null;
+  const previewAspect = pictureView && under && underMedia?.width && underMedia.height ? pictureAspect(under.clip.transform, underMedia.width, underMedia.height) : frameAspect(previewFrame, first?.width || 16, first?.height || 9);
+  /** The window on the clip under the playhead, as fractions of its picture: the overlay of the picture view (a drag shows where it is going). */
+  const windowRect = useMemo(() => {
+    if (!under || !framedPreview || !underMedia?.width || !underMedia.height) return null;
+    const key = dragKey ?? reframeAt(under.clip.reframe?.keys, under.sourceTime);
+    return windowInPicture(under.clip.transform.crop, key, frameAspect(previewFrame, underMedia.width, underMedia.height), underMedia.width, underMedia.height, under.clip.transform.rotate % 2 === 1);
+  }, [under, framedPreview, underMedia, dragKey, previewFrame]);
   const thumbH = Math.min(THUMB_HEIGHT, first?.height ?? THUMB_HEIGHT);
   const thumbSize = `${Math.round((sourceAspect * thumbH) / 2) * 2}×${thumbH}`;
 
@@ -3331,6 +3496,11 @@ export function VideoEditorWidget() {
                     data-joined={c.joinedToPrevious ? "true" : undefined}
                     data-intro-clip={c.introRole}
                   >
+                    {c.reframe?.keys.map((k) => {
+                      const at = c.start + (k.t - c.in) / clipSpeed(c);
+                      if (at < c.start - 1e-6 || at > c.end + 1e-6) return null;
+                      return <span key={k.t} className={cn("pointer-events-none absolute bottom-0.5 h-2 w-2 rotate-45 border border-white/80", k.hold ? "bg-warn" : "bg-accent")} style={{ left: (at - c.start) * pxPerSec - 4 }} title={`Window key at ${fmtTime(at)}${k.hold ? " (held)" : ""}`} data-key-mark={k.t} />;
+                    })}
                     {!c.joinedToPrevious && (
                       <>
                         <span className="block truncate font-medium">
@@ -3632,9 +3802,17 @@ export function VideoEditorWidget() {
             <video ref={videoRef} playsInline className="absolute inset-0 h-full w-full object-contain opacity-0" />
             <video ref={altRef} muted playsInline className="pointer-events-none absolute inset-0 h-full w-full object-contain opacity-0" />
             <canvas ref={canvasRef} width={previewAspect >= 1 ? 1280 : Math.round(1280 * previewAspect)} height={previewAspect >= 1 ? Math.round(1280 / previewAspect) : 1280} className="absolute inset-0 h-full w-full object-contain" data-preview-canvas />
+            {pictureView && windowRect && (
+              <div ref={windowOverlayRef} className="absolute inset-0 cursor-move touch-none select-none" data-window-view onPointerDown={onWindowPointerDown} onPointerMove={onWindowPointerMove} onPointerUp={onWindowPointerUp} onPointerCancel={onWindowPointerUp}>
+                <div className="pointer-events-none absolute rounded-[2px] border-2 border-accent shadow-[0_0_0_9999px_rgba(0,0,0,0.55)]" style={{ left: `${windowRect.x * 100}%`, top: `${windowRect.y * 100}%`, width: `${windowRect.w * 100}%`, height: `${windowRect.h * 100}%` }} data-window-rect />
+                <div className="pointer-events-none absolute right-2 bottom-2 rounded bg-black/60 px-2 py-0.5 text-[11px] text-white" data-window-hint>
+                  drag to place the window · wheel to zoom · click to centre it there · K keys it here
+                </div>
+              </div>
+            )}
             {shortMode && activeShort && (
               <>
-                {ghost && view.safeArea && <SafeGhost safe={view.safeArea} />}
+                {ghost && !pictureView && view.safeArea && <SafeGhost safe={view.safeArea} />}
                 <div className="pointer-events-none absolute bottom-2 left-2 rounded-[var(--radius-sm)] bg-black/60 px-2 py-0.5 font-mono text-[11px] text-white tabular" data-short-clock>
                   {fmtTime(Math.max(0, playhead - activeShort.from), first?.fps)} / {fmtTime(activeShort.to - activeShort.from)} · {String(shortIndex).padStart(2, "0")} {activeShort.name}
                 </div>
@@ -4347,29 +4525,72 @@ export function VideoEditorWidget() {
                     <Slider key={k} label={{ x: "Crop left", y: "Crop top", w: "Crop width", h: "Crop height" }[k]} value={current.transform.crop[k]} min={k === "w" || k === "h" ? 0.1 : 0} max={1} step={0.005} onChange={(v) => update(current.id, { transform: { ...current.transform, crop: { ...current.transform.crop, [k]: v } } })} format={(v) => `${Math.round(v * 100)}%`} />
                   ))}
                 </div>
-                {(frameChosen !== "source" || current.reframe) &&
+                {(frameChosen !== "source" || shortMode || current.reframe) &&
                   (() => {
                     const keys = current.reframe?.keys ?? [];
-                    const key: ReframeKey = keys[0] ?? { t: 0, cx: 0.5, cy: 0.5, zoom: 1 };
-                    const setKey = (patch: Partial<ReframeKey>) => update(current.id, { reframe: { keys: [{ ...key, ...patch }] } });
+                    const here = under?.clip.id === current.id ? under.sourceTime : current.in;
+                    const key = keyFor(keys, here);
+                    const onKey = keyIndexAt(keys, here) >= 0;
+                    const setHere = (patch: Partial<ReframeKey>) => writeWindowKey(current.id, { ...key, ...patch });
+                    const nextClip = placed[placed.findIndex((c) => c.id === current.id) + 1];
+                    const frameName = FRAME_LABELS[frameChosen === "source" ? "9:16" : frameChosen];
                     return (
                       <div className="space-y-2 rounded-[var(--radius-sm)] border border-edge p-2" data-reframe>
                         <div className="flex flex-wrap items-center justify-between gap-2">
-                          <span className="text-[12.5px] text-ink" title="A frame narrower than the recording shows a window of it; the window is as tall as the picture allows at zoom 1 and moves across it">
-                            Window — where the {FRAME_LABELS[frameChosen]} frame looks
+                          <span className="text-[12.5px] text-ink" title="A frame narrower than the recording shows a window of it; a key says where the window sits at an instant, and it eases between keys">
+                            Window — where the {frameName} frame looks
                           </span>
-                          {keys.length > 1 ? <span className="text-[12px] text-faint">moves over the clip ({keys.length} keys)</span> : null}
-                          <button type="button" onClick={() => update(current.id, { reframe: undefined })} className={cn(GHOST, "h-6 px-2 text-[12px]")} data-reframe-reset>
+                          <span className="text-[12px] text-faint" data-keys-summary>
+                            {describeKeys(keys)}
+                            {keys.length ? (onKey ? " · on a key" : " · between keys") : ""}
+                          </span>
+                        </div>
+                        <div className="grid grid-cols-3 gap-2">
+                          <Slider label="Across" value={key.cx} min={0} max={1} step={0.005} onChange={(v) => setHere({ cx: v })} format={(v) => `${v === 0.5 ? "centre" : `${Math.round((v - 0.5) * 200)}%`}`} />
+                          <Slider label="Up / down" value={key.cy} min={0} max={1} step={0.005} onChange={(v) => setHere({ cy: v })} format={(v) => `${v === 0.5 ? "centre" : `${Math.round((v - 0.5) * 200)}%`}`} />
+                          <Slider label="Zoom" value={key.zoom} min={1} max={MAX_REFRAME_ZOOM} step={0.05} onChange={(v) => setHere({ zoom: v })} format={(v) => `${v.toFixed(2)}×`} />
+                        </div>
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <button type="button" onClick={windowKeyHere} className={cn(GHOST, "h-7 text-[12px]")} title="Write the window as it is here as a key at this frame (K)" data-key-here>
+                            Key here
+                          </button>
+                          <button type="button" onClick={removeWindowKeyHere} disabled={!onKey} className={cn(GHOST, "h-7 text-[12px]")} title="Delete the key at this frame (⇧K)" data-key-remove>
+                            Delete key
+                          </button>
+                          <label className="flex items-center gap-1 text-[12px] text-muted" title="Hold this window until the next key instead of easing towards it">
+                            <input type="checkbox" checked={!!key.hold} onChange={(e) => setHere({ hold: e.target.checked })} className="accent-[var(--accent)]" data-key-hold /> hold
+                          </label>
+                          <button type="button" onClick={() => jumpWindowKey(-1)} disabled={!keyAround(keys, here, -1)} className={cn(GHOST, "h-7 px-1.5 text-[12px]")} title="The previous key (⌥←)" data-key-prev>
+                            ‹ key
+                          </button>
+                          <button type="button" onClick={() => jumpWindowKey(1)} disabled={!keyAround(keys, here, 1)} className={cn(GHOST, "h-7 px-1.5 text-[12px]")} title="The next key (⌥→)" data-key-next>
+                            key ›
+                          </button>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <button type="button" onClick={() => setWindowView((v) => !v)} aria-pressed={windowView} className={cn(GHOST, "h-7 text-[12px]", windowView && "border-accent text-accent")} title="The whole picture with the window drawn over it: drag it, click where the road goes, wheel to zoom" data-window-view-toggle>
+                            {windowView ? "Show the frame" : "Show the whole picture"}
+                          </button>
+                          <button type="button" onClick={() => void trackWindow("track")} disabled={!!job} className={cn(GHOST, "h-7 text-[12px]")} title="Keys on where the picture moves at each instant" data-track>
+                            Track
+                          </button>
+                          <button type="button" onClick={() => void trackWindow("road")} disabled={!!job} className={cn(GHOST, "h-7 text-[12px]")} title="Experimental: keys on where the lane edges meet, the motion where it is unsure" data-road>
+                            Road
+                          </button>
+                          <button type="button" onClick={() => update(current.id, { reframe: { keys: smoothKeys(keys) } })} disabled={keys.length < 3} className={cn(GHOST, "h-7 text-[12px]")} title="Each key averaged with its neighbours" data-keys-smooth>
+                            Smooth
+                          </button>
+                          <button type="button" onClick={() => update(current.id, { reframe: { keys: thinKeys(keys) } })} disabled={keys.length < 3} className={cn(GHOST, "h-7 text-[12px]")} title="Keys the eased path already passes are dropped" data-keys-thin>
+                            Thin
+                          </button>
+                          <button type="button" onClick={copyKeysToNext} disabled={!keys.length || !nextClip} className={cn(GHOST, "h-7 text-[12px]")} title="The same windows at the same offsets on the next clip" data-keys-copy>
+                            Copy to next clip
+                          </button>
+                          <button type="button" onClick={() => update(current.id, { reframe: undefined })} disabled={!keys.length} className={cn(GHOST, "h-7 text-[12px]")} data-reframe-reset>
                             Centre
                           </button>
                         </div>
-                        {keys.length <= 1 && (
-                          <div className="grid grid-cols-3 gap-2">
-                            <Slider label="Across" value={key.cx} min={0} max={1} step={0.005} onChange={(v) => setKey({ cx: v })} format={(v) => `${v === 0.5 ? "centre" : `${Math.round((v - 0.5) * 200)}%`}`} />
-                            <Slider label="Up / down" value={key.cy} min={0} max={1} step={0.005} onChange={(v) => setKey({ cy: v })} format={(v) => `${v === 0.5 ? "centre" : `${Math.round((v - 0.5) * 200)}%`}`} />
-                            <Slider label="Zoom" value={key.zoom} min={1} max={MAX_REFRAME_ZOOM} step={0.05} onChange={(v) => setKey({ zoom: v })} format={(v) => `${v.toFixed(2)}×`} />
-                          </div>
-                        )}
+                        <p className="text-[12px] text-faint">Follow by hand: show the whole picture, step with ← and →, and click where the road goes at a few frames — the window eases between. Track keys the window on where the picture moves; Road (experimental) on where the lane edges meet, falling back to Track where it is unsure.</p>
                       </div>
                     );
                   })()}

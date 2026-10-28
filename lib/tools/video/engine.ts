@@ -2817,6 +2817,47 @@ export async function scanMotionColumns(file: File, times: number[], signal?: Ab
 }
 
 /**
+ * Where the picture moves at each of several instants: for every time, the centre of the change between a 64×36
+ * frame there and one a tenth of a second on — as fractions of the width and height — and how much changed (0–1).
+ * Proxies make this many times faster than 8K.
+ */
+export async function scanMotionTrack(file: File, times: number[], signal?: AbortSignal, gap = 0.1): Promise<{ t: number; cx: number; cy: number; amount: number }[]> {
+  const input = new Input({ source: new BlobSource(file), formats: ALL_FORMATS });
+  const track = await input.getPrimaryVideoTrack();
+  if (!track) throw new Error("No video track in this file.");
+  const W = 64, H = 36;
+  const canvas = new OffscreenCanvas(W, H);
+  const ctx = canvas.getContext("2d", { willReadFrequently: true })!;
+  const sink = new VideoSampleSink(track);
+  const luma = async (t: number): Promise<Float32Array | null> => {
+    const sample = await sink.getSample(t);
+    if (!sample) return null;
+    ctx.drawImage(sample.toCanvasImageSource(), 0, 0, W, H);
+    sample.close();
+    const d = ctx.getImageData(0, 0, W, H).data;
+    const l = new Float32Array(W * H);
+    for (let i = 0; i < W * H; i++) l[i] = 0.299 * d[i * 4] + 0.587 * d[i * 4 + 1] + 0.114 * d[i * 4 + 2];
+    return l;
+  };
+  const out: { t: number; cx: number; cy: number; amount: number }[] = [];
+  for (const t of [...times].sort((a, b) => a - b)) {
+    if (signal?.aborted) throw new DOMException("Cancelled", "AbortError");
+    const a = await luma(t), b = await luma(t + gap);
+    if (!a || !b) continue;
+    let total = 0, mx = 0, my = 0;
+    for (let y = 0; y < H; y++)
+      for (let x = 0; x < W; x++) {
+        const d = Math.abs(a[y * W + x] - b[y * W + x]);
+        total += d;
+        mx += d * (x + 0.5);
+        my += d * (y + 0.5);
+      }
+    out.push(total > 0 ? { t, cx: mx / total / W, cy: my / total / H, amount: Math.min(1, total / (W * H * 255)) } : { t, cx: 0.5, cy: 0.5, amount: 0 });
+  }
+  return out;
+}
+
+/**
  * How much the picture changes through a recording: the mean absolute luma difference between 64×36 frames taken every
  * `step` seconds, 0–1. Every frame is decoded (the sink runs in order), so proxies make this many times faster than 8K.
  */

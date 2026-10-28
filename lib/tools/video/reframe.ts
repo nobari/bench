@@ -46,6 +46,7 @@ export function reframeAt(keys: ReframeKey[] | undefined, t: number): ReframeKey
   let i = 1;
   while (sorted[i].t < t) i++;
   const a = sorted[i - 1], b = sorted[i];
+  if (a.hold) return { t, cx: a.cx, cy: a.cy, zoom: a.zoom };
   const u = b.t > a.t ? smooth((t - a.t) / (b.t - a.t)) : 1;
   return { t, cx: a.cx + (b.cx - a.cx) * u, cy: a.cy + (b.cy - a.cy) * u, zoom: a.zoom + (b.zoom - a.zoom) * u };
 }
