@@ -180,6 +180,7 @@ const WIDGETS: Record<WidgetKey, React.ComponentType<Record<string, unknown>>> =
   "video-converter": dynamic(() => import("@/components/widgets/video-converter").then((m) => m.VideoConverterWidget), { ssr: false, loading: Skeleton }),
   "video-doctor": dynamic(() => import("@/components/widgets/video-doctor").then((m) => m.VideoDoctorWidget), { ssr: false, loading: Skeleton }),
   "storage-doctor": dynamic(() => import("@/components/widgets/storage-doctor").then((m) => m.StorageDoctorWidget), { ssr: false, loading: Skeleton }),
+  "pdf-studio": dynamic(() => import("@/components/widgets/pdf-studio").then((m) => m.PdfStudioWidget), { ssr: false, loading: Skeleton }),
 };
 
 export function ToolMount({

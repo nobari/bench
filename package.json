@@ -1,6 +1,6 @@
 {
   "name": "bench",
-  "version": "1.88.2",
+  "version": "1.89.0",
   "private": true,
   "description": "A precision toolkit for the web — fast, private, client-side developer utilities.",
   "license": "MIT",
@@ -19,6 +19,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@cantoo/pdf-lib": "2.11.1",
     "@codemirror/autocomplete": "^6.20.3",
     "@codemirror/commands": "^6.11.1",
     "@codemirror/language": "^6.13.1",
@@ -64,6 +65,7 @@
     "motion": "^12.40.0",
     "next": "16.2.9",
     "nuqs": "^2.8.9",
+    "pdfjs-dist": "6.4.299",
     "prettier": "^3.9.10",
     "qr-code-styling": "^1.9.2",
     "qrcode": "^1.5.4",

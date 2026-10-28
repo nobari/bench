@@ -870,3 +870,60 @@ html[data-nav="hidden"] .tool-nav {
 :root[data-focus="on"] [data-tool-mount] [data-split] > [data-split-second] > .panel {
   height: 100%;
 }
+
+/* PDF Studio (components/widgets/pdf-studio.tsx). pdf.js's own viewer stylesheet is loaded by a link
+   (/vendor/pdfjs/pdf_viewer.css); these settle it into the themes and supply the icons it expects as files. */
+:root[data-focus="on"] [data-pdf-studio] {
+  height: 100%;
+  min-height: 0;
+}
+[data-pdf-studio] {
+  --comment-edit-button-icon: url("data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z'/%3E%3Cline x1='12' y1='7' x2='12' y2='13'/%3E%3Cline x1='9' y1='10' x2='15' y2='10'/%3E%3C/svg%3E");
+}
+[data-pdf-studio] [data-pdf-container] .annotationEditorLayer .editToolbar,
+[data-pdf-studio] [data-pdf-container] .textLayer .editToolbar {
+  --editor-toolbar-delete-image: url("data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 6h18'/%3E%3Cpath d='M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6'/%3E%3Cpath d='M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2'/%3E%3Cline x1='10' y1='11' x2='10' y2='17'/%3E%3Cline x1='14' y1='11' x2='14' y2='17'/%3E%3C/svg%3E");
+  --editor-toolbar-highlight-image: url("data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m9 11-6 6v3h9l3-3'/%3E%3Cpath d='m22 12-4.6 4.6a2 2 0 0 1-2.8 0l-5.2-5.2a2 2 0 0 1 0-2.8L14 4'/%3E%3C/svg%3E");
+  --editor-toolbar-bg-color: var(--color-base);
+  --editor-toolbar-fg-color: var(--color-ink);
+  --editor-toolbar-border-color: var(--color-edge);
+  --editor-toolbar-hover-bg-color: var(--color-raised);
+  --editor-toolbar-hover-fg-color: var(--color-ink);
+  --editor-toolbar-focus-outline-color: var(--accent);
+  --editor-toolbar-shadow: var(--shadow-pop);
+  font-family: var(--font-sans);
+}
+[data-pdf-studio] .annotationEditorLayer {
+  --editorInk-editing-cursor: crosshair;
+  --editorHighlight-editing-cursor: text;
+  --editorFreeHighlight-editing-cursor: crosshair;
+  --editorFreeText-editing-cursor: text;
+}
+[data-pdf-studio] [data-pdf-container] {
+  background-color: var(--color-canvas);
+}
+[data-pdf-studio] .pdfViewer .page {
+  box-shadow:
+    0 1px 4px rgba(0, 0, 0, 0.22),
+    0 0 0 1px rgba(0, 0, 0, 0.06);
+}
+[data-pdf-viewer][data-tool="note"] .page,
+[data-pdf-viewer][data-tool="note"] .textLayer,
+[data-pdf-viewer][data-tool="note"] .textLayer span {
+  cursor: copy;
+}
+[data-pdf-studio] .bench-flash {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+  border-radius: 2px;
+  animation: bench-pdf-flash 1.6s ease-out forwards;
+}
+@keyframes bench-pdf-flash {
+  0%,
+  55% {
+    outline-color: var(--accent);
+  }
+  100% {
+    outline-color: transparent;
+  }
+}

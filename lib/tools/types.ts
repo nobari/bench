@@ -107,7 +107,8 @@ export type WidgetKey =
   | "track-changes"
   | "video-converter"
   | "video-doctor"
-  | "storage-doctor";
+  | "storage-doctor"
+  | "pdf-studio";
 
 /**
  * The unit of expansion. Adding a tool = appending one of these to the registry.

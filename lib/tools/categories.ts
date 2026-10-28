@@ -57,11 +57,11 @@ export const CATEGORIES: Category[] = [
   },
   {
     slug: "files",
-    groups: [{ id: "archives", name: "Archives" }, { id: "readers", name: "Readers" }, { id: "storage", name: "Storage" }],
+    groups: [{ id: "archives", name: "Archives" }, { id: "readers", name: "Readers" }, { id: "documents", name: "Documents" }, { id: "storage", name: "Storage" }],
     name: "Files & Archives",
-    tagline: "Pack, unpack and read archives",
+    tagline: "Pack, unpack and read archives, work on PDFs",
     description:
-      "Create ZIP and TAR archives, extract ZIP, RAR, 7z and TAR files, and read comic book archives — all unpacked locally in your browser with WebAssembly, no uploads.",
+      "Create ZIP and TAR archives, extract ZIP, RAR, 7z and TAR files, read comic book archives, and view, comment on, fill and reorganise PDFs — all handled locally in your browser, no uploads.",
     icon: Archive,
     accentVar: "--cat-files",
   },

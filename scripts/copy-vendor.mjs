@@ -2,7 +2,7 @@
 // binaries from a CDN or relative to the bundle by default, but Bench serves
 // everything from its own origin. Runs on postinstall; widgets point at
 // /vendor/... URLs. public/vendor/ is gitignored — this script is its source.
-import { copyFileSync, existsSync, mkdirSync } from "node:fs";
+import { copyFileSync, cpSync, existsSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -18,16 +18,41 @@ const FILES = [
   ["libarchive.js/dist/libarchive.wasm", "libarchive/libarchive.wasm"],
   // c2pa-web (Content Credentials reader/signer) — the widget passes wasmSrc: /vendor/c2pa/c2pa_bg.wasm
   ["@contentauth/c2pa-web/dist/resources/c2pa_bg.wasm", "c2pa/c2pa_bg.wasm"],
+  // pdf.js (PDF Studio) — the worker is loaded by URL and the viewer stylesheet by a <link>: it names icons the
+  // package does not ship, which a bundler would refuse to resolve (lib/tools/files/pdf/pdfjs.ts).
+  ["pdfjs-dist/build/pdf.worker.min.mjs", "pdfjs/pdf.worker.min.mjs"],
+  ["pdfjs-dist/web/pdf_viewer.css", "pdfjs/pdf_viewer.css"],
 ];
 
-for (const [from, to] of FILES) {
+/** Whole directories, copied recursively: pdf.js fetches these on demand by URL. */
+const DIRS = [
+  ["pdfjs-dist/cmaps", "pdfjs/cmaps"],
+  ["pdfjs-dist/standard_fonts", "pdfjs/standard_fonts"],
+  ["pdfjs-dist/wasm", "pdfjs/wasm"],
+  ["pdfjs-dist/iccs", "pdfjs/iccs"],
+  ["pdfjs-dist/web/images", "pdfjs/images"],
+];
+
+function source(from) {
   const src = join(root, "node_modules", from);
-  const dest = join(root, "public/vendor", to);
   if (!existsSync(src)) {
     console.error(`copy-vendor: ${from} not found — run pnpm install first`);
     process.exit(1);
   }
+  return src;
+}
+
+for (const [from, to] of FILES) {
+  const src = source(from);
+  const dest = join(root, "public/vendor", to);
   mkdirSync(dirname(dest), { recursive: true });
   copyFileSync(src, dest);
   console.log(`copy-vendor: ${from} -> public/vendor/${to}`);
+}
+
+for (const [from, to] of DIRS) {
+  const src = source(from);
+  const dest = join(root, "public/vendor", to);
+  cpSync(src, dest, { recursive: true });
+  console.log(`copy-vendor: ${from}/ -> public/vendor/${to}/`);
 }
