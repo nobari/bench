@@ -4415,6 +4415,12 @@ export function VideoEditorWidget() {
                         )}
                       </div>
                       <p className="text-[12px] text-faint">Export a part of the timeline to check a grade quickly or to cut one section for a short; the band on the timeline shows it.</p>
+                      <div className="flex flex-wrap items-center gap-2 text-[12px] text-muted">
+                        <Link href="/media/shorts?from=editor" className={cn(GHOST, "h-7 text-[12px]")} title="The Shorts & Reels Maker opens this project's footage, as trimmed and graded, and plans vertical shorts from it cut on the beat" data-make-shorts>
+                          <Clapperboard size={12} /> Make shorts from this project
+                        </Link>
+                        <span>Vertical shorts, planned from the liveliest moments and cut on the beat, in their own folder.</span>
+                      </div>
                     </Section>
                     <Section id="picture" title="Picture" summary={pictureLine} open={!!openSections.picture} onToggle={() => toggleSection("picture")} hook="export-picture">
                       <div className="grid grid-cols-2 gap-2">

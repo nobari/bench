@@ -77,6 +77,7 @@ export type WidgetKey =
   | "audio-units"
   | "slow-mo"
   | "video-editor"
+  | "shorts-maker"
   | "mp4-tags"
   | "diff-checker"
   | "regex-tester"

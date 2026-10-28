@@ -2624,6 +2624,46 @@ function stereoOf(sample: AudioSample): Float32Array {
   return out;
 }
 
+/** A file's sound track decoded to mono samples at its own rate, for the beat tracker (see beats.ts). */
+export async function decodeMono(file: File, opts: { signal?: AbortSignal; onProgress?: (done: number, total: number) => void; maxSeconds?: number } = {}): Promise<{ pcm: Float32Array; sampleRate: number; seconds: number }> {
+  const input = new Input({ source: new BlobSource(file), formats: ALL_FORMATS });
+  const audio = await input.getPrimaryAudioTrack();
+  if (!audio) throw new Error("The file has no sound track.");
+  const total = await input.computeDuration();
+  const limit = opts.maxSeconds ?? Infinity;
+  const chunks: Float32Array[] = [];
+  let frames = 0;
+  const sink = new AudioSampleSink(audio);
+  for await (const sample of sink.samples()) {
+    if (opts.signal?.aborted) {
+      sample.close();
+      throw new DOMException("Cancelled", "AbortError");
+    }
+    const n = sample.numberOfFrames, ch = sample.numberOfChannels;
+    const tmp = new Float32Array(n * ch);
+    sample.copyTo(tmp, { format: "f32", planeIndex: 0 });
+    const mono = new Float32Array(n);
+    for (let i = 0; i < n; i++) {
+      let s = 0;
+      for (let c = 0; c < ch; c++) s += tmp[i * ch + c];
+      mono[i] = s / ch;
+    }
+    chunks.push(mono);
+    frames += n;
+    opts.onProgress?.(Math.min(total, sample.timestamp), Math.min(total, limit));
+    const at = sample.timestamp;
+    sample.close();
+    if (at >= limit) break;
+  }
+  const pcm = new Float32Array(frames);
+  let at = 0;
+  for (const c of chunks) {
+    pcm.set(c, at);
+    at += c.length;
+  }
+  return { pcm, sampleRate: audio.sampleRate, seconds: frames / audio.sampleRate };
+}
+
 /** The loudness of a file's sound track (video files included): only the audio is decoded, so it is quick. */
 export async function measureFile(file: File, opts: { signal?: AbortSignal; onProgress?: (done: number, total: number) => void } = {}): Promise<Loudness> {
   const input = new Input({ source: new BlobSource(file), formats: ALL_FORMATS });
@@ -2741,6 +2781,40 @@ export async function fixLevel(opts: FixLevelOptions): Promise<{ bytes: number; 
 }
 
 export { EncodedPacketSink, EncodedVideoPacketSource };
+
+/**
+ * Where the action is across the picture: frames at the given source instants are compared column by column (64
+ * columns of a small luma frame) and the centre of the motion between them is returned as a fraction of the width,
+ * with the per-column profile. A few seeks, not a decode of the whole stretch.
+ */
+export async function scanMotionColumns(file: File, times: number[], signal?: AbortSignal): Promise<{ cx: number; profile: number[] }> {
+  const input = new Input({ source: new BlobSource(file), formats: ALL_FORMATS });
+  const track = await input.getPrimaryVideoTrack();
+  if (!track) throw new Error("No video track in this file.");
+  const W = 64, H = 36;
+  const canvas = new OffscreenCanvas(W, H);
+  const ctx = canvas.getContext("2d", { willReadFrequently: true })!;
+  const sink = new VideoSampleSink(track);
+  const profile = new Array<number>(W).fill(0);
+  let prev: Float32Array | null = null;
+  for (const t of [...times].sort((a, b) => a - b)) {
+    if (signal?.aborted) throw new DOMException("Cancelled", "AbortError");
+    const sample = await sink.getSample(t);
+    if (!sample) continue;
+    ctx.drawImage(sample.toCanvasImageSource(), 0, 0, W, H);
+    sample.close();
+    const d = ctx.getImageData(0, 0, W, H).data;
+    const l = new Float32Array(W * H);
+    for (let i = 0; i < W * H; i++) l[i] = 0.299 * d[i * 4] + 0.587 * d[i * 4 + 1] + 0.114 * d[i * 4 + 2];
+    if (prev) for (let x = 0; x < W; x++) for (let y = 0; y < H; y++) profile[x] += Math.abs(l[y * W + x] - prev[y * W + x]);
+    prev = l;
+  }
+  const total = profile.reduce((a, b) => a + b, 0);
+  if (total <= 0) return { cx: 0.5, profile };
+  let m = 0;
+  for (let x = 0; x < W; x++) m += ((x + 0.5) / W) * profile[x];
+  return { cx: m / total, profile: profile.map((v) => v / total) };
+}
 
 /**
  * How much the picture changes through a recording: the mean absolute luma difference between 64×36 frames taken every

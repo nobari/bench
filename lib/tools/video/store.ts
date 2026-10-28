@@ -53,6 +53,11 @@ async function dbSet(key: string, value: unknown): Promise<void> {
   });
 }
 
+/** Remember a folder under a key another tool reads — the Shorts Maker hands a short's folder to the editor this way. */
+export const rememberFolder = (key: string, dir: FileSystemDirectoryHandle) => dbSet(key, dir).catch(() => undefined);
+/** The folder remembered under a key, if the browser still has it (permission may still need asking). */
+export const rememberedFolder = (key: string) => dbGet<FileSystemDirectoryHandle>(key).catch(() => undefined);
+
 export class ProjectStore {
   private dir: FileSystemDirectoryHandle | null = null;
   /** Folders outside the project the user asked to remember, by key (persisted per project). */
@@ -62,8 +67,14 @@ export class ProjectStore {
   private pending: Project | null = null;
   private onStatus?: (s: string) => void;
 
-  constructor(onStatus?: (s: string) => void) {
+  /** The IndexedDB key the last folder is remembered under, and the picker's id (its own starting place) — each tool its own. */
+  private readonly lastKey: string;
+  private readonly pickerId: string;
+
+  constructor(onStatus?: (s: string) => void, opts: { lastKey?: string; pickerId?: string } = {}) {
     this.onStatus = onStatus;
+    this.lastKey = opts.lastKey ?? "lastFolder";
+    this.pickerId = opts.pickerId ?? "bench-video-project";
   }
 
   get folderName() {
@@ -80,15 +91,33 @@ export class ProjectStore {
 
   /** Ask for a project folder (readwrite) and remember it for next time. */
   async pickFolder(): Promise<FileSystemDirectoryHandle> {
-    const dir = await (window as unknown as Picker).showDirectoryPicker({ id: "bench-video-project", mode: "readwrite" });
+    const dir = await (window as unknown as Picker).showDirectoryPicker({ id: this.pickerId, mode: "readwrite" });
     this.dir = dir;
-    await dbSet("lastFolder", dir).catch(() => undefined);
+    await dbSet(this.lastKey, dir).catch(() => undefined);
     return dir;
+  }
+
+  /** Point the store at a folder already in hand (a sub-folder of another store's, say) and remember it as the last one. */
+  async adopt(dir: FileSystemDirectoryHandle, remember = true): Promise<void> {
+    this.dir = dir;
+    this.files.clear();
+    this.extra.clear();
+    if (remember) await dbSet(this.lastKey, dir).catch(() => undefined);
+  }
+
+  /** The folder handle itself, for another store to open a sub-folder of it. */
+  get directory(): FileSystemDirectoryHandle | null {
+    return this.dir;
+  }
+
+  /** Every file handle registered here, to hand to another store that shares the files. */
+  handles(): [string, FileSystemFileHandle | File][] {
+    return [...this.files.entries()];
   }
 
   /** Reopen the last folder if the browser still grants access (prompts once if needed). */
   async reopenLast(): Promise<boolean> {
-    const dir = await dbGet<FileSystemDirectoryHandle>("lastFolder").catch(() => undefined);
+    const dir = await dbGet<FileSystemDirectoryHandle>(this.lastKey).catch(() => undefined);
     if (!dir) return false;
     type Perm = { queryPermission(o: { mode: string }): Promise<string>; requestPermission(o: { mode: string }): Promise<string> };
     const h = dir as unknown as Perm;
@@ -163,7 +192,7 @@ export class ProjectStore {
     this.cancelAutosave();
     this.dir = null;
     this.files.clear();
-    await dbDelete("lastFolder").catch(() => undefined);
+    await dbDelete(this.lastKey).catch(() => undefined);
     if (projectId) await dbDelete(`files:${projectId}`).catch(() => undefined);
   }
 
