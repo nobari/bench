@@ -1,9 +1,9 @@
 "use client";
 
-import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import Link from "next/link";
 import { AlertTriangle, Camera, ChevronDown, ChevronRight, ChevronUp, Sparkles, Clapperboard, Crop, Download, FolderOpen, Gauge, Loader, Maximize2, Minimize2, Music, Pause, Play, Repeat, Save, Scissors, SkipBack, SkipForward, SlidersHorizontal, StepBack, StepForward, Trash2, Type, Upload, Volume2, VolumeX, Keyboard, Search, Shuffle, X } from "lucide-react";
-import { DEFAULT_EXPORT, NEUTRAL_GRADE, NEUTRAL_TRANSFORM, TITLE_ALIGNS, TITLE_FAMILIES, TITLE_FONTS, TITLE_POSITIONS, TITLE_SHADOWS, TITLE_WEIGHTS, TRANSITIONS, addTransitionAt, appendMusic, applyAudioTo, applyGradeTo, applyTransitionToAll, clipAt, crossfades, dbToGain, effectiveMusicEnd, estimateExport, exportRange, fmtTime, musicGainAt, musicLength, newId, newProject, newTitle, orderRecordings, placeClips, planExport, removeRange, reorderMusic, setTransition, splitClip, timelineDuration, titleLanes, transitionAt, transitionWindows, CLIP_SPEEDS, canMergeWithNext, clipLength, clipSpeed, groupOf, sourceTimeAt, mergeWithNext, moveClip, unjoin, updateClip, visibleCuts, type Clip, type MediaRef, type MusicTrack, type Project, type ProxyHeight, type Title, type TitleFont, isFileLutKind, FILE_LUT_KINDS, type FileLutKind, type LutKind, type MathLutKind, type TitleAlign, type TitlePosition, type TitleShadow, type Transition, type TransitionKind, type ExportTags, type IntroSettings, type IntroCard, DEFAULT_CARD, cardSettings, hasCard, reorderClip, parseTime, type SteadyLights, STEADY_FRAMES, clampMusicStart, musicUnused, shuffleFillMusic, describeWhere, nameSome, whereSummary, type MediaWhere, exportFingerprint, SOUND_MODES, SOUND_LABELS, soundLevels, applySoundLevels, soundState, type SoundMode, type SoundLevels, FRAMES, FRAME_LABELS, MAX_REFRAME_ZOOM, type Frame, type Layout, type ReframeKey } from "@/lib/tools/video/project";
+import { DEFAULT_EXPORT, NEUTRAL_GRADE, NEUTRAL_TRANSFORM, TITLE_ALIGNS, TITLE_FAMILIES, TITLE_FONTS, TITLE_POSITIONS, TITLE_SHADOWS, TITLE_WEIGHTS, TRANSITIONS, addTransitionAt, appendMusic, applyAudioTo, applyGradeTo, applyTransitionToAll, clipAt, crossfades, dbToGain, effectiveMusicEnd, estimateExport, exportRange, fmtTime, musicGainAt, musicLength, newId, newProject, newTitle, orderRecordings, placeClips, planExport, removeRange, reorderMusic, setTransition, splitClip, timelineDuration, titleLanes, transitionAt, transitionWindows, CLIP_SPEEDS, canMergeWithNext, clipLength, clipSpeed, groupOf, sourceTimeAt, mergeWithNext, moveClip, unjoin, updateClip, visibleCuts, type Clip, type MediaRef, type MusicTrack, type Project, type ProxyHeight, type Title, type TitleFont, isFileLutKind, FILE_LUT_KINDS, type FileLutKind, type LutKind, type MathLutKind, type TitleAlign, type TitlePosition, type TitleShadow, type Transition, type TransitionKind, type ExportTags, type IntroSettings, type IntroCard, DEFAULT_CARD, cardSettings, hasCard, reorderClip, parseTime, type SteadyLights, STEADY_FRAMES, clampMusicStart, musicUnused, shuffleFillMusic, describeWhere, nameSome, whereSummary, type MediaWhere, exportFingerprint, SOUND_MODES, SOUND_LABELS, soundLevels, applySoundLevels, soundState, type SoundMode, type SoundLevels, FRAMES, FRAME_LABELS, MAX_REFRAME_ZOOM, MIN_CLIP_SPEED, MAX_CLIP_SPEED, type Frame, type Layout, type ReframeKey } from "@/lib/tools/video/project";
 import { gainToReach, YOUTUBE_LUFS, type Loudness } from "@/lib/tools/video/loudness";
 import { drawTransition } from "@/lib/tools/video/transitions";
 import { LUT_OPTIONS, buildDlogLut, deriveLut, fetchOfficialLut, lutToCube, parseCube, type Lut3D } from "@/lib/tools/video/lut";
@@ -3073,13 +3073,13 @@ export function VideoEditorWidget() {
         </div>
         </div>
         <p className="mt-1.5 shrink-0 truncate text-[11.5px] text-faint">
-          Click the ruler to seek · Space plays, hold it for double speed · hold Control to skim the cuts · Q, W and C trim and split at the playhead · <kbd className="rounded border border-edge px-1 font-mono">?</kbd> lists every shortcut.
+          Click the ruler to seek · Space plays, hold it for double speed · hold Control to skim the cuts · Q, W and C trim and split at the playhead · S saves the frame (⇧S full-size JPEG, ⌥S PNG) · <kbd className="rounded border border-edge px-1 font-mono">?</kbd> lists every shortcut.
         </p>
       </div>
   );
 
   return (
-    <div ref={rootRef} className={cn("flex min-h-0 flex-col", focus ? "h-[calc(100dvh-16px)] gap-2" : "h-[calc(100dvh-var(--editor-top,240px))] gap-3")} data-video-editor data-focus-layout={focus ? "on" : "off"}>
+    <div ref={rootRef} className={cn("flex min-h-0 flex-col", focus ? "h-[calc(100dvh-16px)] gap-2" : "h-[calc(100dvh-var(--editor-top,240px))] gap-3")} style={{ "--rows-min": `${(job?.kind === "export" ? 0 : 260 + 12) + timelineFloor}px` } as CSSProperties} data-video-editor data-focus-layout={focus ? "on" : "off"}>
       {/* project bar */}
       <input ref={templateJsonInput} type="file" accept=".json,application/json" hidden onChange={(e) => e.target.files?.[0] && void importTemplateJson(e.target.files[0])} data-template-input />
       <input ref={relinkInput} type="file" accept="video/*,audio/*,.mp4,.mov,.mp3,.m4a,.wav,.aac,.flac,.ogg" multiple hidden onChange={(e) => e.target.files?.length && void linkFiles(Array.from(e.target.files))} data-relink-input />
@@ -3143,6 +3143,8 @@ export function VideoEditorWidget() {
       )}
       {job?.kind === "export" && <ExportRun job={job} events={events} skipped={skipped} liveRef={liveRef} liveAt={liveAt} onPause={() => setExportPaused(true)} onResume={() => setExportPaused(false)} onStop={() => job.abort.abort()} />}
       {done && job?.kind !== "export" && (
+        /* The result card never takes the preview's room: past two fifths of the editor it scrolls within itself. */
+        <div className="min-h-0 max-h-[42%] shrink-0 overflow-y-auto" data-done-scroll>
         <ExportDone
           done={done}
           busy={!!job}
@@ -3170,6 +3172,7 @@ export function VideoEditorWidget() {
             void fixByName(done.name);
           }}
         />
+        </div>
       )}
       {job && job.kind !== "export" && (
         <div className="panel flex items-center gap-3 p-2 text-[13px]">
@@ -3189,7 +3192,7 @@ export function VideoEditorWidget() {
       {/* preview + inspector — a split pane (the tools fold away to leave the picture and the timeline), hidden while an export runs */}
       {/* preview + tools over the timeline: a vertical split, the row's height yours to drag; while an export runs the row is
           kept mounted but out of sight (the run view stands in for it) and the timeline takes the room */}
-      <SplitPane id="video-editor-rows" direction="vertical" defaultRatio={0.64} minFirst={260} minSecond={timelineFloor} floor="second" collapsible="second" firstLabel="preview and tools" secondLabel="timeline" stackBelow="never" gap={12} className="min-h-0 flex-1" hidden={job?.kind === "export" ? "first" : null} first={
+      <SplitPane id="video-editor-rows" direction="vertical" defaultRatio={0.64} minFirst={260} minSecond={timelineFloor} floor="second" collapsible="second" firstLabel="preview and tools" secondLabel="timeline" stackBelow="never" gap={12} className="min-h-[var(--rows-min)] flex-1" hidden={job?.kind === "export" ? "first" : null} first={
       <SplitPane id="video-editor-main" direction="horizontal" defaultRatio={0.6} minFirst={320} minSecond={300} collapsible="both" firstLabel="preview" secondLabel="tools" className="h-full min-h-0 gap-0" first={<>
         <div className="panel flex h-full min-h-0 flex-col p-2">
           {/* The stage takes what the row leaves; the picture is the largest box of the video's shape that fits it. */}
@@ -3405,7 +3408,7 @@ export function VideoEditorWidget() {
                 }}
             >
                 <button type="button" onClick={() => void saveFrame("thumb")} disabled={!project.clips.length || !!job} className={cn(GHOST, "h-8 rounded-r-none text-[12px] whitespace-nowrap")} title={`Save this frame as a YouTube thumbnail: ${thumbSize} JPEG from the source, graded, through any transition, with titles — into the project's frames folder (S)`} data-save-frame>
-                  <Camera size={12} /> Save frame
+                  <Camera size={12} /> Save frame <Key k="S" />
                 </button>
                 <button type="button" onClick={() => setFrameMenu((v) => !v)} disabled={!project.clips.length || !!job} aria-haspopup="menu" aria-expanded={frameMenu} aria-label="Other frame sizes" className={cn(GHOST, "h-8 rounded-l-none border-l-0 px-1")} data-save-frame-menu>
                   <ChevronDown size={12} />
@@ -3528,12 +3531,35 @@ export function VideoEditorWidget() {
                   <label className="flex items-center gap-1.5 text-[12.5px] text-muted">
                     Speed
                     <select value={current ? clipSpeed(current) : 1} disabled={!current} onChange={(e) => current && update(current.id, { speed: Number(e.target.value) })} className={cn(SEL, "h-7 text-[12px]")} aria-label="Clip speed" title="Play this clip faster (time-lapse) or slower (slow motion); it gets shorter or longer on the timeline and the export follows">
-                      {CLIP_SPEEDS.map((v) => (
+                      {(current && !(CLIP_SPEEDS as readonly number[]).includes(clipSpeed(current)) ? [...CLIP_SPEEDS, clipSpeed(current)].sort((a, b) => a - b) : [...CLIP_SPEEDS]).map((v) => (
                         <option key={v} value={v}>
                           {v}×
                         </option>
                       ))}
                     </select>
+                  </label>
+                  <label className="flex items-center gap-1.5 text-[12.5px] text-muted" title={`Or type any speed from ${MIN_CLIP_SPEED}× to ${MAX_CLIP_SPEED}× — Enter or leaving the field applies it`}>
+                    or
+                    <input
+                      key={current ? `${current.id}:${clipSpeed(current)}` : "none"}
+                      type="number"
+                      min={MIN_CLIP_SPEED}
+                      max={MAX_CLIP_SPEED}
+                      step={0.05}
+                      defaultValue={current ? clipSpeed(current) : 1}
+                      disabled={!current}
+                      onBlur={(e) => {
+                        const v = Number(e.target.value);
+                        if (current && Number.isFinite(v) && v >= MIN_CLIP_SPEED && v <= MAX_CLIP_SPEED && v !== clipSpeed(current)) update(current.id, { speed: Math.round(v * 100) / 100 });
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") e.currentTarget.blur();
+                      }}
+                      className={cn(INPUT, "h-7 w-20 font-mono text-[12px]")}
+                      aria-label="Clip speed, typed"
+                      data-speed-input
+                    />
+                    ×
                   </label>
                   {current && clipSpeed(current) !== 1 && (
                     <span className="text-[12px] text-faint">

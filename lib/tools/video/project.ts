@@ -218,7 +218,7 @@ export interface IntroSettings {
 }
 export const DEFAULT_INTRO: IntroSettings = { style: "cinematic", sceneSeconds: null, card: { ...DEFAULT_CARD }, keepAudio: false, outro: "look" };
 
-export const CLIP_SPEEDS = [0.25, 0.5, 0.75, 1, 1.5, 2, 3, 4, 8, 16] as const;
+export const CLIP_SPEEDS = [0.25, 0.5, 0.75, 1, 1.1, 1.2, 1.25, 1.3, 1.4, 1.5, 1.6, 1.75, 1.8, 2, 3, 4, 8, 16] as const;
 export const MIN_CLIP_SPEED = 0.1, MAX_CLIP_SPEED = 16;
 /** A clip's speed, clamped; 1 when unset. */
 export const clipSpeed = (c: Pick<Clip, "speed">) => (c.speed && Number.isFinite(c.speed) ? Math.min(MAX_CLIP_SPEED, Math.max(MIN_CLIP_SPEED, c.speed)) : 1);
