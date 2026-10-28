@@ -65,6 +65,7 @@ import {
   type TransitionWindow,
   STEADY_FRAMES,
 } from "./project";
+import { splitWords, wordTimes } from "./title-tools";
 import { even, framed, framePanes, layoutBackdrop, outputSize, pictureAspect, transformAt } from "./reframe";
 import { drawTransition } from "./transitions";
 import {
@@ -778,6 +779,7 @@ function wrapText(ctx: OffscreenCanvasRenderingContext2D, text: string, maxWidth
  * One title (text + optional subtitle) at its anchor, with its colour, font, size and optional backing box, wrapped
  * to the frame and placed inside the safe area when the project has one; `enter` is how far in its entrance is.
  */
+
 function drawTitleBlock(
   ctx: OffscreenCanvasRenderingContext2D,
   w: number,
@@ -785,6 +787,8 @@ function drawTitleBlock(
   title: Title,
   safe?: SafeArea | null,
   enter = 1,
+  exit = 1,
+  local = 0,
 ) {
   const family = fontFamilyCss(title.font);
   const px = Math.max(8, Math.round(h * title.size));
@@ -795,60 +799,106 @@ function drawTitleBlock(
     inR = Math.max(pad, w * (s?.right ?? 0)),
     inT = Math.max(pad, h * (s?.top ?? 0)),
     inB = Math.max(pad, h * (s?.bottom ?? 0));
-  const style = (size: number, weight: number) =>
-    `${title.italic ? "italic " : ""}${weight} ${size}px ${family}`;
-  const c = ctx as OffscreenCanvasRenderingContext2D & {
-    letterSpacing?: string;
-  };
+  const style = (size: number, weight: number) => `${title.italic ? "italic " : ""}${weight} ${size}px ${family}`;
+  const c = ctx as OffscreenCanvasRenderingContext2D & { letterSpacing?: string; filter?: string };
   if ("letterSpacing" in c) c.letterSpacing = `${title.letterSpacing}em`;
-  // The box: padding, corners and a border, drawn without any text shadow.
   const bp = px * title.padding,
     bw = px * title.borderWidth;
   const maxW = Math.max(px, w - inL - inR - bp * 2);
-  const lines: { text: string; size: number; weight: number; alpha: number; gapBefore: number }[] = [];
+  // The text word by word, wrapped to the width: each word keeps its place, so it can have its own colour, its own
+  // time (word-by-word captions) or its own pop; the subtitle is plain lines.
+  const words = splitWords(title.text);
+  const perWord = title.kind === "words" || !!title.wordAt?.length || title.enter === "wordPop" || title.enter === "typewriter";
+  type Placed = { text: string; highlight: boolean; x: number; width: number; index: number };
+  type Line = { words: Placed[]; plain?: string; width: number; size: number; weight: number; alpha: number; gapBefore: number };
+  const lines: Line[] = [];
   ctx.font = style(px, title.weight);
-  for (const text of wrapText(ctx, title.text, maxW)) lines.push({ text, size: px, weight: title.weight, alpha: 1, gapBefore: lines.length ? px * 0.12 : 0 });
+  const space = ctx.measureText(" ").width;
+  {
+    let cur: Line = { words: [], width: 0, size: px, weight: title.weight, alpha: 1, gapBefore: 0 };
+    words.forEach((wd, index) => {
+      const width = ctx.measureText(wd.text).width;
+      if (cur.words.length && cur.width + space + width > maxW) {
+        lines.push(cur);
+        cur = { words: [], width: 0, size: px, weight: title.weight, alpha: 1, gapBefore: px * 0.12 };
+      }
+      const x = cur.words.length ? cur.width + space : 0;
+      cur.words.push({ ...wd, x, width, index });
+      cur.width = x + width;
+    });
+    if (cur.words.length || !lines.length) lines.push(cur);
+  }
   if (title.subtitle) {
     const size = Math.round(px * 0.5),
       weight = Math.max(300, title.weight - 200);
     ctx.font = style(size, weight);
     const first = lines.length;
-    for (const text of wrapText(ctx, title.subtitle, maxW)) lines.push({ text, size, weight, alpha: 0.85, gapBefore: lines.length === first ? px * 0.35 : size * 0.12 });
+    for (const text of wrapText(ctx, title.subtitle, maxW)) lines.push({ words: [], plain: text, width: ctx.measureText(text).width, size, weight, alpha: 0.85, gapBefore: lines.length === first ? px * 0.35 : size * 0.12 });
   }
-  const widths = lines.map((l) => {
-    ctx.font = style(l.size, l.weight);
-    return ctx.measureText(l.text).width;
-  });
-  const blockW = Math.max(...widths),
+  const blockW = Math.max(...lines.map((l) => l.width)),
     blockH = lines.reduce((a, l) => a + l.size + l.gapBefore, 0);
   const row = title.position[0],
     col = title.position[1];
-  const x =
-    col === "l" ? inL : col === "r" ? w - inR - blockW : inL + (w - inL - inR - blockW) / 2;
-  const y =
-    row === "t" ? inT : row === "b" ? h - inB - blockH : inT + (h - inT - inB - blockH) / 2;
-  // The entrance: the block pops up from slightly smaller, or rises a little, as it fades in.
-  if (enter < 1 && title.enter && title.enter !== "fade") {
-    const cxB = x + blockW / 2,
-      cyB = y + blockH / 2;
-    if (title.enter === "pop") {
-      const k = 0.92 + 0.08 * enter;
-      ctx.translate(cxB, cyB);
-      ctx.scale(k, k);
-      ctx.translate(-cxB, -cyB);
-    } else ctx.translate(0, (1 - enter) * h * 0.02);
+  const x = col === "l" ? inL : col === "r" ? w - inR - blockW : inL + (w - inL - inR - blockW) / 2;
+  const y = row === "t" ? inT : row === "b" ? h - inB - blockH : inT + (h - inT - inB - blockH) / 2;
+  // The entrance over the fade-in and the exit over the fade-out: the block moves, scales or blurs as a whole.
+  const cxB = x + blockW / 2,
+    cyB = y + blockH / 2;
+  const scaleAt = (k: number) => {
+    ctx.translate(cxB, cyB);
+    ctx.scale(k, k);
+    ctx.translate(-cxB, -cyB);
+  };
+  if (enter < 1) {
+    switch (title.enter) {
+      case "pop":
+        scaleAt(0.92 + 0.08 * enter);
+        break;
+      case "rise":
+        ctx.translate(0, (1 - enter) * h * 0.02);
+        break;
+      case "slideLeft":
+        ctx.translate(-(1 - enter) * w * 0.12, 0);
+        break;
+      case "slideRight":
+        ctx.translate((1 - enter) * w * 0.12, 0);
+        break;
+      case "slideUp":
+        ctx.translate(0, (1 - enter) * h * 0.08);
+        break;
+      case "slideDown":
+        ctx.translate(0, -(1 - enter) * h * 0.08);
+        break;
+      case "zoomOut":
+        scaleAt(1 + 0.35 * (1 - enter));
+        break;
+      case "blur":
+        if ("filter" in c) c.filter = `blur(${((1 - enter) * px * 0.35).toFixed(1)}px)`;
+        break;
+      default:
+        break;
+    }
+  }
+  if (exit < 1) {
+    switch (title.exit) {
+      case "popOut":
+        scaleAt(1 - 0.08 * (1 - exit));
+        break;
+      case "slideOut":
+        ctx.translate((1 - exit) * w * 0.12, 0);
+        break;
+      case "drop":
+        ctx.translate(0, (1 - exit) * h * 0.06);
+        break;
+      default:
+        break;
+    }
   }
   const base = ctx.globalAlpha;
   if (title.background || bw > 0) {
     ctx.shadowColor = "transparent";
     ctx.beginPath();
-    ctx.roundRect(
-      x - bp,
-      y - bp,
-      blockW + bp * 2,
-      blockH + bp * 2,
-      px * title.radius,
-    );
+    ctx.roundRect(x - bp, y - bp, blockW + bp * 2, blockH + bp * 2, px * title.radius);
     if (title.background) {
       ctx.fillStyle = title.background;
       ctx.fill();
@@ -874,33 +924,75 @@ function drawTitleBlock(
     ctx.shadowOffsetY = px * 0.06;
   }
   ctx.textBaseline = "top";
-  const align =
-    title.align === "auto"
-      ? col === "l"
-        ? "left"
-        : col === "r"
-          ? "right"
-          : "center"
-      : title.align;
-  ctx.textAlign = align;
-  const tx =
-    align === "left" ? x : align === "right" ? x + blockW : x + blockW / 2;
+  ctx.textAlign = "left";
+  const align = title.align === "auto" ? (col === "l" ? "left" : col === "r" ? "right" : "center") : title.align;
   ctx.lineJoin = "round";
+  // Word by word: when each word is shown, the typewriter's count of letters, the highlight colour.
+  const timed = title.kind === "words" || !!title.wordAt?.length;
+  const times = timed ? wordTimes(title) : null;
+  const totalChars = words.reduce((a, wd) => a + wd.text.length + 1, 0) - 1;
+  const shownChars = Math.ceil(totalChars * enter);
+  const highlight = title.highlight ?? "#ffd60a";
+  const drawText = (text: string, tx: number, ty: number, size: number, color: string) => {
+    if (title.shadow === "outline") {
+      ctx.lineWidth = Math.max(1, size * 0.1);
+      ctx.strokeStyle = title.shadowColor;
+      ctx.strokeText(text, tx, ty);
+    }
+    ctx.fillStyle = color;
+    ctx.fillText(text, tx, ty);
+  };
   let cy = y;
   for (const l of lines) {
     cy += l.gapBefore;
     ctx.font = style(l.size, l.weight);
-    ctx.globalAlpha = base * l.alpha;
-    if (title.shadow === "outline") {
-      ctx.lineWidth = Math.max(1, l.size * 0.1);
-      ctx.strokeStyle = title.shadowColor;
-      ctx.strokeText(l.text, tx, cy);
+    const lineX = align === "left" ? x : align === "right" ? x + blockW - l.width : x + (blockW - l.width) / 2;
+    if (l.plain !== undefined) {
+      ctx.globalAlpha = base * l.alpha;
+      drawText(l.plain, lineX, cy, l.size, title.color);
+    } else {
+      for (const wd of l.words) {
+        let text = wd.text,
+          alpha = 1,
+          scale = 1;
+        if (perWord) {
+          if (title.enter === "typewriter") {
+            const before = words.slice(0, wd.index).reduce((a, x) => a + x.text.length + 1, 0);
+            const left = shownChars - before;
+            if (left <= 0) continue;
+            if (left < text.length) text = text.slice(0, left);
+          } else if (title.enter === "wordPop" && !timed) {
+            const at = wd.index / words.length,
+              next = (wd.index + 1) / words.length;
+            if (enter < at + 1e-9) continue;
+            const p = Math.min(1, (enter - at) / Math.max(1e-6, next - at));
+            alpha = p;
+            scale = 0.85 + 0.15 * p;
+          }
+          if (times) {
+            const t0 = times[wd.index] ?? 0;
+            if (local < t0) continue;
+            const p = Math.min(1, (local - t0) / 0.15);
+            alpha = Math.min(alpha, p);
+            scale = Math.min(scale, 0.85 + 0.15 * p);
+          }
+        }
+        ctx.globalAlpha = base * l.alpha * alpha;
+        const wx = lineX + wd.x;
+        ctx.save();
+        if (scale !== 1) {
+          ctx.translate(wx + wd.width / 2, cy + l.size / 2);
+          ctx.scale(scale, scale);
+          ctx.translate(-(wx + wd.width / 2), -(cy + l.size / 2));
+        }
+        drawText(text, wx, cy, l.size, wd.highlight ? highlight : title.color);
+        ctx.restore();
+      }
     }
-    ctx.fillStyle = title.color;
-    ctx.fillText(l.text, tx, cy);
     cy += l.size;
   }
   if ("letterSpacing" in c) c.letterSpacing = "0px";
+  if ("filter" in c) c.filter = "none";
   ctx.shadowColor = "transparent";
 }
 
@@ -917,10 +1009,8 @@ export function drawOverlays(
     if (t < title.start || t > title.start + title.duration) continue;
     const local = t - title.start;
     const fadeIn = title.fade > 0 ? Math.min(1, local / title.fade) : 1;
-    const fadeOut =
-      title.fade > 0
-        ? Math.min(1, (title.start + title.duration - t) / title.fade)
-        : 1;
+    // The exit over the last fade's worth; "none" is a hard cut at the end.
+    const fadeOut = title.exit === "none" ? 1 : title.fade > 0 ? Math.min(1, (title.start + title.duration - t) / title.fade) : 1;
     const alpha = Math.min(fadeIn, fadeOut);
     ctx.save();
     if (title.kind === "intro") {
@@ -928,7 +1018,7 @@ export function drawOverlays(
       ctx.fillRect(0, 0, w, h);
     }
     ctx.globalAlpha = alpha;
-    drawTitleBlock(ctx, w, h, title, project.safeArea, fadeIn);
+    drawTitleBlock(ctx, w, h, title, project.safeArea, fadeIn, fadeOut, local);
     ctx.restore();
   }
   if (logo && project.watermark.media) {

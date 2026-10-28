@@ -11,6 +11,7 @@ import { GLIMPSE_SECONDS, clipSpeed, musicLength, newId, newShort, placeClips, t
 import { PLATFORMS, lengthFor, postCopy, safeAreaFor, shortLimits, type PlatformId, type ShortEnv } from "./shorts";
 import { candidatesIn, stretches } from "./shortplan";
 import { shortFolderName } from "./shortset";
+import { fillTitles, placeholdersFor } from "./title-tools";
 
 /** The sub-folder of the project folder the shorts' files go into. */
 export const SHORTS_FOLDER = "shorts";
@@ -40,8 +41,11 @@ export const titlesOf = (titles: Title[], shortId: string) => titles.filter((t) 
  * at their timeline places (the preview plays the timeline itself), with the short's safe area.
  */
 export function viewFor(project: Project, short: Short | null): Project {
-  if (!short) return project.titles.some((t) => t.short) ? { ...project, titles: landscapeTitles(project.titles) } : project;
-  return { ...project, titles: titlesOf(project.titles, short.id), safeArea: safeAreaFor(short.targets as PlatformId[]) };
+  if (!short) {
+    const titles = fillTitles(landscapeTitles(project.titles), placeholdersFor(project, null));
+    return titles.length === project.titles.length && titles.every((t, i) => t === project.titles[i]) ? project : { ...project, titles };
+  }
+  return { ...project, titles: fillTitles(titlesOf(project.titles, short.id), placeholdersFor(project, short)), safeArea: safeAreaFor(short.targets as PlatformId[]) };
 }
 
 /** The timeline's clips between two instants, trimmed at both ends; the first loses its incoming transition. */
@@ -130,7 +134,7 @@ export function shortProject(project: Project, short: Short): Project {
     id: s.id,
     name: s.name,
     clips,
-    titles: titlesBetween(titlesOf(project.titles, s.id), s.from, s.to),
+    titles: fillTitles(titlesBetween(titlesOf(project.titles, s.id), s.from, s.to), placeholdersFor(project, s)),
     music,
     media,
     export: { ...applyPreset(project.export, preset), frame: "9:16", range: null, smartCopy: false, review: "off", check: "quick", tags: { ...project.export.tags, title: s.name } },

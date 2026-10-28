@@ -29,7 +29,13 @@ export interface SeamState {
 
 const BAND_CLASS = { short: "text-warn", sweet: "text-positive", ok: "text-muted", over: "text-danger" } as const;
 
-export function ShortsPanel({ shorts, current, duration, fps, playhead, busy, titlesCount, checks, seam, withoutMusic, loop, postText, onSelect, onChange, onAdd, onRemove, onDuplicate, onMove, onJump, onMarkIn, onMarkOut, onNudge, onLength, onLoopToggle, onFindSeam, onSuggest, onExport, onWithoutMusic, onSaveCover, onCopyPost, onTitles, onAction }: {
+export function ShortsPanel({ shorts, current, duration, fps, playhead, busy, titlesCount, checks, seam, withoutMusic, loop, postText, beats, hasMusic, onAnalyseBeats, onCutToBeats, onPunchIns, onSlowHalf, onSelect, onChange, onAdd, onRemove, onDuplicate, onMove, onJump, onMarkIn, onMarkOut, onNudge, onLength, onLoopToggle, onFindSeam, onSuggest, onExport, onWithoutMusic, onSaveCover, onCopyPost, onTitles, onAction }: {
+  beats: { bpm: number; count: number } | null;
+  hasMusic: boolean;
+  onAnalyseBeats: () => void;
+  onCutToBeats: (every: 1 | 2 | 4) => void;
+  onPunchIns: (every: 1 | 2 | 4) => void;
+  onSlowHalf: () => void;
   shorts: Short[];
   current: Short | null;
   duration: number;
@@ -200,6 +206,39 @@ export function ShortsPanel({ shorts, current, duration, fps, playhead, busy, ti
               </span>
             </div>
           )}
+          <div className="flex flex-wrap items-center gap-1.5" data-beat-tools>
+            <span className="text-muted">Beat</span>
+            {beats ? (
+              <>
+                <span className="font-mono text-[11px] text-faint tabular" data-beat-info>
+                  {beats.bpm} BPM · {beats.count} on the timeline
+                </span>
+                <span className="flex items-center gap-1" role="group" aria-label="Cut on the beat">
+                  <span className="text-[11.5px] text-muted">cut every</span>
+                  {([1, 2, 4] as const).map((n) => (
+                    <button key={n} type="button" onClick={() => onCutToBeats(n)} disabled={busy} className={cn(GHOST, "h-6 px-1.5 font-mono text-[11px]")} title={`A cut on every ${n === 1 ? "beat" : `${n} beats`} inside the short`} data-cut-beats={n}>
+                      {n}
+                    </button>
+                  ))}
+                </span>
+                <span className="flex items-center gap-1" role="group" aria-label="Punch in on the beat">
+                  <span className="text-[11.5px] text-muted">punch in every</span>
+                  {([1, 2, 4] as const).map((n) => (
+                    <button key={n} type="button" onClick={() => onPunchIns(n)} disabled={busy} className={cn(GHOST, "h-6 px-1.5 font-mono text-[11px]")} title={`A small zoom on every ${n === 1 ? "beat" : `${n} beats`}, as window keys`} data-punch-beats={n}>
+                      {n}
+                    </button>
+                  ))}
+                </span>
+              </>
+            ) : (
+              <button type="button" onClick={onAnalyseBeats} disabled={busy || !hasMusic} className={cn(GHOST, "h-6 text-[11.5px]")} title={hasMusic ? "Find the music's tempo and beats, for ticks, snapping, cuts and punch-ins" : "Add music in the Audio tab first"} data-analyse-beats-short>
+                {hasMusic ? "Analyse the music's beat" : "No music yet"}
+              </button>
+            )}
+            <button type="button" onClick={onSlowHalf} disabled={busy} className={cn(GHOST, "h-6 text-[11.5px]")} title="The short's stretch at half speed; the short grows with it" data-slow-half>
+              Slow ½×
+            </button>
+          </div>
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-muted">For</span>
             <PlatformChips chosen={current.targets as PlatformId[]} onToggle={(id) => onChange(current.id, { targets: (current.targets.includes(id as ShortTarget) ? current.targets.filter((t) => t !== id) : [...current.targets, id as ShortTarget]) as ShortTarget[] })} />

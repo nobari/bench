@@ -12,6 +12,11 @@ import { carryKeys, describeKeys, keyAround, keyFor, keyIndexAt, keysFromSamples
 import { ROAD_CONFIDENCE, greyOf, vanishingPoint } from "@/lib/tools/video/road";
 import { framed, pictureAspect, reframeAt } from "@/lib/tools/video/reframe";
 import { scanMotionTrack } from "@/lib/tools/video/engine";
+import { TITLE_ENTER_NAMES, TITLE_ENTERS, TITLE_EXIT_NAMES, TITLE_EXITS, type TitleEnter, type TitleExit } from "@/lib/tools/video/project";
+import { TITLE_PRESETS, applyTitlePreset, copyTitlesToShorts } from "@/lib/tools/video/title-tools";
+import { beatPeriod, cutToBeats, nearestBeat, punchIns, slowStretch, timelineBeats } from "@/lib/tools/video/beat-tools";
+import { analyseBeats } from "@/lib/tools/video/beats";
+import { decodeMono } from "@/lib/tools/video/engine";
 import { DEFAULT_EXPORT, NEUTRAL_GRADE, NEUTRAL_TRANSFORM, TITLE_ALIGNS, TITLE_FAMILIES, TITLE_FONTS, TITLE_POSITIONS, TITLE_SHADOWS, TITLE_WEIGHTS, TRANSITIONS, addTransitionAt, appendMusic, applyAudioTo, applyGradeTo, applyTransitionToAll, clipAt, crossfades, dbToGain, effectiveMusicEnd, estimateExport, exportRange, fmtTime, musicGainAt, musicLength, newId, newProject, newTitle, orderRecordings, placeClips, planExport, removeRange, reorderMusic, setTransition, splitClip, timelineDuration, titleLanes, transitionAt, transitionWindows, CLIP_SPEEDS, canMergeWithNext, clipLength, clipSpeed, groupOf, sourceTimeAt, mergeWithNext, moveClip, unjoin, updateClip, visibleCuts, type Clip, type MediaRef, type MusicTrack, type Project, type ProxyHeight, type Title, type TitleFont, isFileLutKind, FILE_LUT_KINDS, type FileLutKind, type LutKind, type MathLutKind, type TitleAlign, type TitlePosition, type TitleShadow, type Transition, type TransitionKind, type ExportTags, type IntroSettings, type IntroCard, DEFAULT_CARD, cardSettings, hasCard, reorderClip, parseTime, type SteadyLights, STEADY_FRAMES, clampMusicStart, musicUnused, shuffleFillMusic, describeWhere, nameSome, whereSummary, type MediaWhere, exportFingerprint, SOUND_MODES, SOUND_LABELS, soundLevels, applySoundLevels, soundState, type SoundMode, type SoundLevels, FRAMES, FRAME_LABELS, MAX_REFRAME_ZOOM, MIN_CLIP_SPEED, MAX_CLIP_SPEED, type Frame, type Layout, type ReframeKey } from "@/lib/tools/video/project";
 import { gainToReach, YOUTUBE_LUFS, type Loudness } from "@/lib/tools/video/loudness";
 import { drawTransition } from "@/lib/tools/video/transitions";
@@ -45,7 +50,7 @@ import { defaultSpeeds } from "@/lib/tools/video/progress";
 const Key = ({ k }: { k: string }) => <kbd className="ml-auto rounded border border-edge px-1 font-mono text-[10px] leading-4 text-faint max-sm:hidden">{k}</kbd>;
 const LANE_COLORS = ["#8a8f99", "#5ab3d6", "#d9a400"];
 const POSITION_NAMES: Record<TitlePosition, string> = { tl: "Top left", tc: "Top centre", tr: "Top right", ml: "Middle left", mc: "Centre", mr: "Middle right", bl: "Bottom left", bc: "Bottom centre", br: "Bottom right" };
-const KIND_LABELS: Record<Title["kind"], string> = { intro: "Intro", title: "Title", lowerThird: "Lower third", hook: "Hook", caption: "Caption" };
+const KIND_LABELS: Record<Title["kind"], string> = { intro: "Intro", title: "Title", lowerThird: "Lower third", hook: "Hook", caption: "Caption", words: "Word by word", badge: "Part badge", place: "Place & date", cta: "Call to action", counter: "Counter" };
 /** The Picture section's one layout control: which panes fill a vertical, square or portrait frame. */
 const LAYOUT_CHOICES: { id: string; label: string; layout: Layout | null }[] = [
   { id: "fill", label: "The window fills the frame", layout: null },
@@ -86,7 +91,7 @@ const TABS: [Tab, string, typeof Scissors][] = [
 
 /** A running job; the export fields (progress, output, pause, faults, parts) are what the run view shows. */
 interface Job extends ExportJobView {
-  kind: "proxy" | "export" | "frame" | "intro" | "stops" | "loudness" | "fix" | "check" | "shorts";
+  kind: "proxy" | "export" | "frame" | "intro" | "stops" | "loudness" | "fix" | "check" | "shorts" | "beats";
   fraction: number;
   message?: string;
   abort: AbortController;
@@ -241,6 +246,7 @@ const JOB_WORK: Record<Job["kind"], string> = {
   fix: "A fixed copy of a file is being written in the video editor; leaving now would abandon it.",
   check: "A file's index is being checked or repaired in the video editor.",
   shorts: "Shorts are being planned in the video editor; leaving now would abandon it.",
+  beats: "The music's beats are being analysed in the video editor; leaving now would abandon it.",
 };
 /** Which export sections are open, remembered per browser. */
 const SECTIONS_KEY = "bench:video:export-sections";
@@ -431,6 +437,7 @@ export function VideoEditorWidget() {
   const [seam, setSeam] = useState<SeamState | null>(null);
   // The window on the frame: the whole-picture view with the window drawn over it, a drag in progress, the key actions.
   const [windowView, setWindowView] = useState(false);
+  const [snapBeats, setSnapBeats] = useState(true);
   const [dragKey, setDragKey] = useState<ReframeKey | null>(null);
   const windowDragRef = useRef<{ startX: number; startY: number; key: ReframeKey; clipId: string; moved: boolean } | null>(null);
   const windowOverlayRef = useRef<HTMLDivElement>(null);
@@ -2205,8 +2212,12 @@ export function VideoEditorWidget() {
     void short;
     return rest;
   };
-  const addTitle = (kind: Title["kind"]) => {
-    const t = tagForShort(newTitle(kind, kind === "intro" && !shortMode ? 0 : titleAt(), kind === "intro" ? project.name : kind === "lowerThird" ? "Location" : kind === "hook" ? "Wait for it" : kind === "caption" ? "Caption" : "Title", kind === "intro" ? new Date().toLocaleDateString() : ""));
+  const parseWordAt = (s: string) => {
+    const list = s.split(/[\s,;]+/).map(Number).filter((v) => Number.isFinite(v) && v >= 0);
+    return list.length ? list : undefined;
+  };
+  const addTitle = (kind: Title["kind"], text?: string, subtitle?: string) => {
+    const t = tagForShort(newTitle(kind, kind === "intro" && !shortMode ? 0 : titleAt(), text ?? ( kind === "intro" ? project.name : kind === "lowerThird" ? "Location" : kind === "hook" ? "Wait for it" : kind === "caption" ? "Caption" : "Title"), subtitle ?? (kind === "intro" ? new Date().toLocaleDateString() : "")));
     setProject((p) => ({ ...p, titles: [...p.titles, t] }));
     focusTitle(t);
   };
@@ -2476,6 +2487,13 @@ export function VideoEditorWidget() {
       trackWindow: (how: "track" | "road") => trackWindow(how),
       getWindowRect: () => windowRect,
       windowKeys: () => under?.clip.reframe?.keys ?? [],
+      analyseTrackBeats,
+      getBeats: () => beats,
+      cutShortToBeats,
+      punchShort,
+      slowShort,
+      setSnapBeats: (v: boolean) => setSnapBeats(v),
+      patchTitle,
       getPlayhead: () => playhead,
       stepTo,
       getDone: () => done,
@@ -2713,6 +2731,56 @@ export function VideoEditorWidget() {
     } finally {
       setJob(null);
     }
+  };
+  /* ------------------------------------------------------------ the beat */
+  /** The track's beats from its samples: tempo, grid, downbeats, drop (beats.ts), kept on the track. */
+  const analyseTrackBeats = async (id: string) => {
+    const m = projectRef.current?.music.find((x) => x.id === id);
+    if (!m || job) return;
+    const file = await store.getFile(m.media);
+    if (!file) return setError("The music file is not at hand — Locate it in the missing-files notice first.");
+    const abort = new AbortController();
+    setJob({ kind: "beats", label: "Listening for the beat", fraction: 0, abort });
+    try {
+      const { pcm, sampleRate } = await decodeMono(file, { signal: abort.signal, onProgress: (d, t) => setJob((j) => (j ? { ...j, fraction: d / Math.max(1, t) } : j)) });
+      const grid = analyseBeats(pcm, sampleRate);
+      updateMusic(id, { beats: grid });
+      setStatus(`${grid.bpm} BPM, ${grid.beats.length} beats${grid.drop !== null ? `, the drop at ${fmtTime(grid.drop)} of the track` : ""} — ticks on the ruler, snapping on, cuts and punch-ins on the beat in the Shorts tab`);
+    } catch (e) {
+      if ((e as DOMException).name !== "AbortError") setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setJob(null);
+    }
+  };
+  /** The short's clips cut on every n-th beat inside it. */
+  const cutShortToBeats = (every: 1 | 2 | 4) => {
+    const x = activeShort;
+    if (!x || !beats.length) return;
+    const r = cutToBeats(project.clips, beats, x.from, x.to, every);
+    setProject((p) => ({ ...p, clips: r.clips }));
+    setStatus(r.cuts ? `${r.cuts} cut${r.cuts === 1 ? "" : "s"} on the beat inside ${x.name}` : "No beat falls inside the short's clips away from a cut");
+  };
+  /** A small zoom on every n-th beat inside the short, as window keys. */
+  const punchShort = (every: 1 | 2 | 4) => {
+    const x = activeShort;
+    if (!x || !beats.length) return;
+    const r = punchIns(project.clips, beats, x.from, x.to, every, beatPeriod(project.music) ?? 0.5);
+    setProject((p) => ({ ...p, clips: r.clips }));
+    setStatus(r.punches ? `${r.punches} punch-in${r.punches === 1 ? "" : "s"} on the beat inside ${x.name} — window keys, in the Crop tab` : "No beat inside the short");
+  };
+  /** The short's stretch at half speed: the timeline grows, the short and everything after it move with it. */
+  const slowShort = () => {
+    const x = activeShort;
+    if (!x) return;
+    const r = slowStretch(project.clips, x.from, x.to, 0.5);
+    if (!r.added) return setStatus("Nothing to slow there");
+    setProject((p) => ({
+      ...p,
+      clips: r.clips,
+      shorts: (p.shorts ?? []).map((s) => (s.id === x.id ? { ...s, to: s.to + r.added } : s.from >= x.to - 1e-6 ? { ...s, from: s.from + r.added, to: s.to + r.added } : s)),
+      titles: p.titles.map((t) => (t.short === x.id ? t : t.start >= x.to - 1e-6 ? { ...t, start: t.start + r.added } : t)),
+    }));
+    setStatus(`${x.name} plays at half speed: ${fmtTime(x.to - x.from)} of footage over ${fmtTime(x.to - x.from + r.added)}; the shorts after it moved on by ${r.added.toFixed(2)} s`);
   };
   /* ------------------------------------------------------------ Short mode: export, cover, seam, suggestions */
   /** One short's file into the shorts folder, then the doctor's quick look at it. */
@@ -3168,6 +3236,15 @@ export function VideoEditorWidget() {
   }, [seekToken, rendered]);
 
   const pxPerSec = (timelineWidth / Math.max(10, duration)) * zoom;
+  /** The analysed music's beats as timeline instants; the ruler shows them when they are at least six pixels apart, else the downbeats. */
+  const beats = useMemo(() => timelineBeats(project.music, duration), [project.music, duration]);
+  const beatTicks = useMemo(() => {
+    const period = beatPeriod(project.music);
+    if (!period) return [] as number[];
+    if (period * pxPerSec >= 6) return beats;
+    if (period * 4 * pxPerSec >= 6) return timelineBeats(project.music, duration, true);
+    return [] as number[];
+  }, [project.music, duration, pxPerSec, beats]);
   useEffect(() => {
     pxRef.current = pxPerSec;
   }, [pxPerSec]);
@@ -3182,11 +3259,17 @@ export function VideoEditorWidget() {
     const r = el.getBoundingClientRect();
     let t = Math.max(0, Math.min(duration, (clientX - r.left + el.scrollLeft) / pxPerSec));
     if (snap) {
+      let snapped = false;
       for (const c of visibleCuts(placed)) {
         if (Math.abs(c - t) * pxPerSec <= SNAP_PX) {
           t = c;
+          snapped = true;
           break;
         }
+      }
+      if (!snapped && snapBeats && beats.length) {
+        const b = nearestBeat(beats, t, SNAP_PX / pxPerSec);
+        if (b !== null) t = b;
       }
     }
     return t;
@@ -3460,6 +3543,9 @@ export function VideoEditorWidget() {
                 <span key={t} className="absolute top-0" style={{ left: t * pxPerSec }}>
                   {fmtTime(t)}
                 </span>
+              ))}
+              {beatTicks.map((t) => (
+                <span key={t} className="pointer-events-none absolute bottom-0 h-1.5 w-px bg-accent/70" style={{ left: t * pxPerSec }} data-beat-tick={t} />
               ))}
             </div>
             {/* video lane */}
@@ -4777,6 +4863,15 @@ export function VideoEditorWidget() {
                       <Slider label="Fade in" value={currentMusic.fadeIn} min={0} max={15} step={0.5} onChange={(v) => updateMusic(currentMusic.id, { fadeIn: v })} format={(v) => `${v} s`} />
                       <Slider label="Fade out" value={currentMusic.fadeOut} min={0} max={15} step={0.5} onChange={(v) => updateMusic(currentMusic.id, { fadeOut: v })} format={(v) => `${v} s`} />
                     </div>
+                    <div className="flex flex-wrap items-center gap-2 text-[12px] text-muted" data-beats-row>
+                      <button type="button" onClick={() => void analyseTrackBeats(currentMusic.id)} disabled={!!job} className={cn(GHOST, "h-7 text-[12px]")} title="Find the track's tempo, beats, downbeats and drop from its samples" data-analyse-beats>
+                        {currentMusic.beats ? "Analyse the beat again" : "Analyse the beat"}
+                      </button>
+                      <span data-beats-info>{currentMusic.beats ? `${currentMusic.beats.bpm} BPM · ${currentMusic.beats.beats.length} beats${currentMusic.beats.drop !== null ? ` · drop at ${fmtTime(currentMusic.beats.drop)}` : ""}` : "no beats yet"}</span>
+                      <label className="flex items-center gap-1" title="Scrubbing, the shorts' ends and the title starts land on the nearest beat">
+                        <input type="checkbox" checked={snapBeats} onChange={(e) => setSnapBeats(e.target.checked)} className="accent-[var(--accent)]" data-snap-beats /> snap to beats
+                      </label>
+                    </div>
                     <label className="flex items-center gap-1 text-muted">
                       <input type="checkbox" checked={currentMusic.muted} onChange={(e) => updateMusic(currentMusic.id, { muted: e.target.checked })} className="accent-[var(--accent)]" /> mute
                     </label>
@@ -4827,6 +4922,21 @@ export function VideoEditorWidget() {
                   <button type="button" onClick={() => addTitle("caption")} className={GHOST} title="A bold caption on a dark pill, wrapped to the frame and kept inside the platform's safe area" data-add-caption>
                     + Caption
                   </button>
+                  <button type="button" onClick={() => addTitle("words", "Wait *for* it")} className={GHOST} title="A caption whose words land one by one, big and outlined; *stars* mark the highlighted words" data-add-words>
+                    + Word by word
+                  </button>
+                  <button type="button" onClick={() => addTitle("badge", "Part {part} / {of}")} className={GHOST} title="A small badge in the corner; {part} and {of} are filled per short" data-add-badge>
+                    + Part badge
+                  </button>
+                  <button type="button" onClick={() => addTitle("place", "{name}", "{date}")} className={GHOST} title="Where and when, low in the frame; {name} is the project's, {date} the recording's" data-add-place>
+                    + Place &amp; date
+                  </button>
+                  <button type="button" onClick={() => addTitle("cta", "Follow for the next part")} className={GHOST} title="A call to action on a bright pill, sliding up into the safe area near the end" data-add-cta>
+                    + Call to action
+                  </button>
+                  <button type="button" onClick={() => addTitle("counter", "120 km/h")} className={GHOST} title="A big bare number that zooms in" data-add-counter>
+                    + Counter
+                  </button>
                   <input ref={logoInput} type="file" accept="image/png,image/svg+xml,image/webp" hidden onChange={(e) => e.target.files?.[0] && void addLogo(e.target.files[0])} />
                   <button type="button" onClick={() => void pickLogo()} className={GHOST}>
                     {logo ? "Replace logo" : "+ Logo watermark"}
@@ -4846,7 +4956,16 @@ export function VideoEditorWidget() {
                   </span>
                 </div>
                 <p className="text-[12px] text-faint">Download the template (one file for the intro and the titles), give it to an LLM with your notes (places, people, dates), then import the JSON it returns: every title with its timing, position, colours, font and size arrives populated.</p>
-                {shortMode && activeShort && <p className="text-[12px] text-accent" data-titles-short>Short mode: these titles belong to {String(shortIndex).padStart(2, "0")} {activeShort.name}; a new one starts inside it.</p>}
+                {shortMode && activeShort && (
+                  <div className="flex flex-wrap items-center gap-2 text-[12px]">
+                    <p className="text-accent" data-titles-short>Short mode: these titles belong to {String(shortIndex).padStart(2, "0")} {activeShort.name}; a new one starts inside it.</p>
+                    {shorts.length > 1 && (
+                      <button type="button" onClick={() => setProject((p) => copyTitlesToShorts(p, activeShort.id))} disabled={!project.titles.some((t) => t.short === activeShort.id)} className={cn(GHOST, "h-6 text-[11.5px]")} title="Every other short gets copies of these titles at the same offsets from its start; {part}, {of}, {name}, {date} and {short} are filled per short" data-titles-to-all>
+                        Use these for every short
+                      </button>
+                    )}
+                  </div>
+                )}
                 {view.titles.length > 0 && <p className="text-[12px] text-faint">In time order. Open one to edit it; titles that overlap in time are all drawn, so give them different positions.</p>}
                 {[...view.titles]
                   .sort((a, b) => a.start - b.start)
@@ -4884,6 +5003,49 @@ export function VideoEditorWidget() {
                         </select>
                       </label>
                     )}
+                    <div className="flex flex-wrap items-center gap-2 text-[12px] text-muted">
+                      <label className="flex items-center gap-1">
+                        In
+                        <select value={t.enter ?? "fade"} onChange={(e) => patchTitle(t.id, { enter: e.target.value as TitleEnter })} className={cn(INPUT, "h-7")} aria-label="Entrance" data-title-enter>
+                          {TITLE_ENTERS.map((k) => (
+                            <option key={k} value={k}>
+                              {TITLE_ENTER_NAMES[k]}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label className="flex items-center gap-1">
+                        Out
+                        <select value={t.exit ?? "fade"} onChange={(e) => patchTitle(t.id, { exit: e.target.value as TitleExit })} className={cn(INPUT, "h-7")} aria-label="Exit" data-title-exit>
+                          {TITLE_EXITS.map((k) => (
+                            <option key={k} value={k}>
+                              {TITLE_EXIT_NAMES[k]}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label className="flex items-center gap-1">
+                        Style
+                        <select value="" onChange={(e) => { const id = e.target.value; if (id) setProject((p) => ({ ...p, titles: p.titles.map((x) => (x.id === t.id ? applyTitlePreset(x, id) : x)) })); }} className={cn(INPUT, "h-7")} aria-label="Style preset" data-title-preset>
+                          <option value="">preset…</option>
+                          {TITLE_PRESETS.map((p) => (
+                            <option key={p.id} value={p.id} title={p.hint}>
+                              {p.name}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label className="flex items-center gap-1" title="The colour of words written *like this*">
+                        Highlight
+                        <input type="text" value={t.highlight ?? "#ffd60a"} onChange={(e) => patchTitle(t.id, { highlight: e.target.value })} className={cn(INPUT, "h-7 w-24 font-mono")} aria-label="Highlight colour" data-title-highlight />
+                      </label>
+                      {(t.kind === "words" || !!t.wordAt?.length) && (
+                        <label className="flex items-center gap-1" title="When each word appears, seconds after the start, e.g. 0 0.4 0.8; empty spreads them evenly before the fade">
+                          Words at
+                          <input type="text" key={`${t.id}:${(t.wordAt ?? []).join(",")}`} defaultValue={(t.wordAt ?? []).join(" ")} onBlur={(e) => patchTitle(t.id, { wordAt: parseWordAt(e.target.value) })} onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }} className={cn(INPUT, "h-7 w-40 font-mono")} aria-label="Word times" data-title-wordat />
+                        </label>
+                      )}
+                    </div>
                     <div className="grid grid-cols-3 gap-2 text-[12px] text-muted">
                       <label>
                         Start (s)
@@ -5089,6 +5251,12 @@ export function VideoEditorWidget() {
                 onCopyPost={() => void copyShortPost()}
                 onTitles={() => setTab("titles")}
                 onAction={onShortAction}
+                beats={project.music.find((m) => m.beats)?.beats ? { bpm: project.music.find((m) => m.beats)!.beats!.bpm, count: beats.length } : null}
+                hasMusic={project.music.length > 0}
+                onAnalyseBeats={() => { const m = project.music[0]; if (m) void analyseTrackBeats(m.id); }}
+                onCutToBeats={cutShortToBeats}
+                onPunchIns={punchShort}
+                onSlowHalf={slowShort}
               />
             )}
             {tab === "export" && (

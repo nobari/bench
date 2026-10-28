@@ -5,6 +5,7 @@
  * Nothing here touches the DOM, files or codecs — see engine.ts for that.
  */
 import type { StopScan } from "./stops";
+import type { BeatGrid } from "./beats";
 
 /** Built-in conversions, plus the project's own .cube (DJI's official file, say). */
 export type LutKind = "none" | "dji-official" | "dlogm" | "dji-official-vivid" | "dji-official-study" | "dlogm-study" | "dlogm-natural" | "dlogm-vivid" | "dlog" | "custom";
@@ -249,6 +250,8 @@ export interface MusicTrack {
   fadeIn: number;
   fadeOut: number;
   keyframes: Keyframe[];
+  /** The track's beats, once analysed (beats.ts), for ticks, snapping and cuts on the beat. */
+  beats?: BeatGrid | null;
 }
 
 /* ---------------------------------------------------------- shorts (Short mode) */
@@ -335,16 +338,27 @@ export interface Title {
   borderColor: string;
   /** How the title comes in over its fade: fading alone, popping up from slightly smaller, or rising a little. Missing: fade. */
   enter?: TitleEnter;
+  exit?: TitleExit;
+  /** Word by word: when each word appears, seconds after the title's start; unset, the words share the time before the fade evenly. */
+  wordAt?: number[];
+  /** The colour of words written *like this*. */
+  highlight?: string;
   /** false lets the title ignore the project's safe area (the frame's edges still keep their margin). */
   safe?: boolean;
   /** The short this title belongs to (Short mode): shown and exported only with that short; unset, it is the landscape edit's. */
   short?: string;
 }
 /** intro: a full-screen card on black. title: text over the picture. lowerThird: a small caption in a corner with a box. hook: the big line that opens a short. caption: a short's wrapped caption line, inside the platform's safe area. */
-export type TitleKind = "intro" | "title" | "lowerThird" | "hook" | "caption";
-export const TITLE_KINDS: TitleKind[] = ["intro", "title", "lowerThird", "hook", "caption"];
-export type TitleEnter = "fade" | "pop" | "rise";
-export const TITLE_ENTERS: TitleEnter[] = ["fade", "pop", "rise"];
+export type TitleKind = "intro" | "title" | "lowerThird" | "hook" | "caption" | "words" | "badge" | "place" | "cta" | "counter";
+export const TITLE_KINDS: TitleKind[] = ["intro", "title", "lowerThird", "hook", "caption", "words", "badge", "place", "cta", "counter"];
+/** How a title comes in over its fade: the block as one, or (typewriter, wordPop) word by word. */
+export type TitleEnter = "fade" | "pop" | "rise" | "slideLeft" | "slideRight" | "slideUp" | "slideDown" | "typewriter" | "blur" | "zoomOut" | "wordPop";
+export const TITLE_ENTERS: TitleEnter[] = ["fade", "pop", "rise", "slideLeft", "slideRight", "slideUp", "slideDown", "typewriter", "blur", "zoomOut", "wordPop"];
+export const TITLE_ENTER_NAMES: Record<TitleEnter, string> = { fade: "Fade", pop: "Pop", rise: "Rise", slideLeft: "Slide from the left", slideRight: "Slide from the right", slideUp: "Slide up", slideDown: "Slide down", typewriter: "Typewriter", blur: "Blur in", zoomOut: "Zoom out", wordPop: "Word by word" };
+/** How a title goes out over its fade; none is a hard cut. */
+export type TitleExit = "fade" | "popOut" | "slideOut" | "drop" | "none";
+export const TITLE_EXITS: TitleExit[] = ["fade", "popOut", "slideOut", "drop", "none"];
+export const TITLE_EXIT_NAMES: Record<TitleExit, string> = { fade: "Fade", popOut: "Pop out", slideOut: "Slide out", drop: "Drop", none: "Cut" };
 export type TitleShadow = "none" | "soft" | "hard" | "outline";
 export const TITLE_SHADOWS: TitleShadow[] = ["none", "soft", "hard", "outline"];
 export type TitleAlign = "auto" | "left" | "center" | "right";
@@ -379,6 +393,16 @@ const TITLE_DEFAULTS: Record<TitleKind, TitleStyle> = {
   hook: { ...STYLE_BASE, position: "mc", color: "#ffffff", background: "", size: 0.055, duration: 2.5, fade: 0.25, weight: 800, letterSpacing: -0.01, shadow: "outline", shadowColor: "rgba(0,0,0,0.85)", enter: "pop" },
   // A caption line: bold on a dark pill at the foot of the safe area, wrapped to the frame.
   caption: { ...STYLE_BASE, position: "bc", color: "#ffffff", background: "rgba(0,0,0,0.6)", size: 0.038, duration: 3, fade: 0.2, weight: 700, padding: 0.5, radius: 0.6, shadow: "none", enter: "rise" },
+  // A caption whose words land one by one, big and outlined in the middle, the way shorts carry speech and punchlines.
+  words: { ...STYLE_BASE, position: "mc", color: "#ffffff", background: "", size: 0.05, duration: 3, fade: 0.15, weight: 800, shadow: "outline", shadowColor: "rgba(0,0,0,0.85)", enter: "wordPop" },
+  // "Part 3 / 7" in a corner, small, for the whole short.
+  badge: { ...STYLE_BASE, position: "tl", color: "#ffffff", background: "rgba(0,0,0,0.55)", size: 0.028, duration: 10, fade: 0.2, weight: 700, padding: 0.5, radius: 0.5, shadow: "none", enter: "fade" },
+  // Where and when, low in the frame.
+  place: { ...STYLE_BASE, position: "bl", color: "#ffffff", background: "rgba(0,0,0,0.5)", size: 0.034, duration: 4, fade: 0.3, weight: 600, padding: 0.5, radius: 0.3, shadow: "none", enter: "slideLeft" },
+  // "Follow for part 2" near the end, sliding up into the safe area.
+  cta: { ...STYLE_BASE, position: "bc", color: "#111111", background: "#ffd60a", size: 0.04, duration: 3, fade: 0.25, weight: 800, padding: 0.6, radius: 0.8, shadow: "none", enter: "slideUp" },
+  // A number that counts: "120 km/h", "Day 3", big and bare.
+  counter: { ...STYLE_BASE, position: "tc", color: "#ffffff", background: "", size: 0.075, duration: 3, fade: 0.2, weight: 800, letterSpacing: -0.02, shadow: "hard", shadowColor: "rgba(0,0,0,0.7)", enter: "zoomOut" },
 };
 
 export function newTitle(kind: TitleKind, start: number, text: string, subtitle = ""): Title {
@@ -414,6 +438,9 @@ export function normalizeTitle(t: Partial<Title> & { kind: Title["kind"] }): Tit
     borderWidth: typeof t.borderWidth === "number" ? Math.min(0.5, Math.max(0, t.borderWidth)) : d.borderWidth,
     borderColor: typeof t.borderColor === "string" && t.borderColor ? t.borderColor : d.borderColor,
     enter: TITLE_ENTERS.includes(t.enter as TitleEnter) ? (t.enter as TitleEnter) : d.enter,
+    ...(TITLE_EXITS.includes(t.exit as TitleExit) && t.exit !== "fade" ? { exit: t.exit as TitleExit } : {}),
+    ...(Array.isArray(t.wordAt) && t.wordAt.length ? { wordAt: t.wordAt.filter((v): v is number => typeof v === "number" && Number.isFinite(v) && v >= 0).map((v) => Math.round(v * 1e3) / 1e3) } : {}),
+    ...(typeof t.highlight === "string" && t.highlight ? { highlight: t.highlight } : {}),
     ...(typeof t.short === "string" && t.short ? { short: t.short } : {}),
     ...(t.safe === false ? { safe: false } : {}),
   };
@@ -453,6 +480,7 @@ export function titlesTemplate(p: Project): Record<string, unknown> {
     options: {
       kinds: TITLE_KINDS,
       enters: TITLE_ENTERS,
+      exits: TITLE_EXITS,
       positions: TITLE_POSITIONS,
       fonts: [...Object.keys(TITLE_FONTS), ...TITLE_FAMILIES, "<any installed family name>"],
       sizeRange: [0.02, 0.16],
@@ -540,6 +568,9 @@ export function parseTitlesImport(text: string, p: Project): { titles: Title[]; 
         borderWidth: num(r.borderWidth),
         borderColor,
         enter: typeof r.enter === "string" ? (r.enter as TitleEnter) : undefined,
+        exit: typeof r.exit === "string" ? (r.exit as TitleExit) : undefined,
+        wordAt: Array.isArray(r.wordAt) ? (r.wordAt.map(num).filter((v): v is number => v !== undefined) as number[]) : undefined,
+        highlight: isCssColor(r.highlight) ? r.highlight : undefined,
         safe: r.safe === false ? false : undefined,
       }),
     );
