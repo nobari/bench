@@ -4,7 +4,7 @@ import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, use
 import Link from "next/link";
 import { AlertTriangle, Camera, ChevronDown, ChevronRight, ChevronUp, Sparkles, Clapperboard, Crop, Download, FolderOpen, Gauge, Loader, Maximize2, Minimize2, Music, Pause, Play, Repeat, Save, Scissors, SkipBack, SkipForward, SlidersHorizontal, Smartphone, StepBack, StepForward, Trash2, Type, Upload, Volume2, VolumeX, Keyboard, Search, Shuffle, X } from "lucide-react";
 import { newShort, timelineDuration as shortTimelineDuration, type EditorMode, type Short } from "@/lib/tools/video/project";
-import { DEFAULT_SHORT_SECONDS, MIN_SHORT_SECONDS, SHORTS_FOLDER, clampShort, seamCandidates, seamScore, shortBytes, shortChecks, shortFileName, shortPostText, shortProject, shortsFromMoments, suggestWindows, viewFor } from "@/lib/tools/video/short-mode";
+import { DEFAULT_SHORT_SECONDS, MIN_SHORT_SECONDS, SHORTS_FOLDER, clampShort, seamCandidates, seamScore, shortBytes, shortChecks, shortFileName, shortPostText, shortProject, shortStem, shortTemplate, shortTemplateProject, shortsFromMoments, suggestWindows, titlesIntoShort, viewFor } from "@/lib/tools/video/short-mode";
 import { scoreMoments as scoreShortMoments } from "@/lib/tools/video/intro";
 import { ShortsPanel, type SeamState } from "@/components/widgets/short-mode-panel";
 import { SafeGhost } from "@/components/widgets/shorts-parts";
@@ -2228,18 +2228,33 @@ export function VideoEditorWidget() {
   const templateJsonInput = useRef<HTMLInputElement>(null);
   const relinkInput = useRef<HTMLInputElement>(null);
   const [importReplace, setImportReplace] = useState(false);
+  /** The template as the mode sees it: one short alone in Short mode, else the landscape edit (never a short's titles). */
+  const templateData = () => (shortMode && activeShort ? shortTemplate(project, activeShort) : videoTemplate(landscape));
   const downloadTemplate = () => {
-    const blob = new Blob([JSON.stringify(videoTemplate(project), null, 2)], { type: "application/json" });
+    const blob = new Blob([JSON.stringify(templateData(), null, 2)], { type: "application/json" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
-    a.download = `${project.name.replace(/[^\w-]+/g, "-") || "video"}-template.json`;
+    const stem = project.name.replace(/[^\w-]+/g, "-") || "video";
+    a.download = `${stem}${shortMode && activeShort ? `-${shortStem(shortIndex, activeShort).replace(/[^\w-]+/g, "-")}` : ""}-template.json`;
     a.click();
     setTimeout(() => URL.revokeObjectURL(a.href), 5000);
   };
   /** A filled template: titles replace or join the current ones, and the intro section (if any) is applied too. */
-  const importTemplateJson = async (file: File) => {
+  const importTemplateJson = (file: File) => file.text().then((text) => importTemplateText(text, file.name));
+  const importTemplateText = async (text: string, fileName: string) => {
     try {
-      const { titles, intro, warnings } = parseTemplateImport(await file.text(), project);
+      if (shortMode && activeShort) {
+        // A short's template: the titles are read against the short alone and land inside it, tagged as its own.
+        const x = activeShort;
+        const parsed = parseTemplateImport(text, shortTemplateProject(project, x));
+        const mapped = titlesIntoShort(parsed.titles, x);
+        if (mapped.length) setProject((p) => ({ ...p, titles: [...(importReplace ? p.titles.filter((t) => t.short !== x.id) : p.titles), ...mapped] }));
+        if (mapped[0]) setSelectedTitle(mapped[0].id);
+        setStatus(`Imported ${mapped.length} title${mapped.length === 1 ? "" : "s"} into ${x.name} from ${fileName}${parsed.intro ? " — the intro section was left alone, a short has none" : ""}${parsed.warnings.length ? ` with ${parsed.warnings.length} note${parsed.warnings.length === 1 ? "" : "s"}` : ""}`);
+        if (parsed.warnings.length) setError(`Import notes: ${parsed.warnings.join(" · ")}`);
+        return;
+      }
+      const { titles, intro, warnings } = parseTemplateImport(text, project);
       let next: Project = titles.length ? { ...project, titles: importReplace ? titles : [...project.titles, ...titles] } : project;
       const notes: string[] = [];
       if (titles.length) notes.push(`${titles.length} title${titles.length === 1 ? "" : "s"}`);
@@ -2268,7 +2283,7 @@ export function VideoEditorWidget() {
         void makeIntro(makeScenes, next);
       }
       if (intro && !titles.length) setTab("intro");
-      setStatus(`Imported ${notes.join(", ") || "nothing new"} from ${file.name}${warnings.length ? ` with ${warnings.length} note${warnings.length === 1 ? "" : "s"}` : ""}`);
+      setStatus(`Imported ${notes.join(", ") || "nothing new"} from ${fileName}${warnings.length ? ` with ${warnings.length} note${warnings.length === 1 ? "" : "s"}` : ""}`);
       if (warnings.length) setError(`Import notes: ${warnings.join(" · ")}`);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -2492,6 +2507,8 @@ export function VideoEditorWidget() {
       getWindowRect: () => windowRect,
       windowKeys: () => under?.clip.reframe?.keys ?? [],
       layOutSteps,
+      getTemplate: () => templateData(),
+      importTemplateText: (text: string) => importTemplateText(text, "pasted JSON"),
       getStepKeys: () => stepKeys,
       setStepSeconds: (v: number) => setStepSeconds(v),
       analyseTrackBeats,
@@ -5072,7 +5089,7 @@ export function VideoEditorWidget() {
                     )}
                   </span>
                 </div>
-                <p className="text-[12px] text-faint">Download the template (one file for the intro and the titles), give it to an LLM with your notes (places, people, dates), then import the JSON it returns: every title with its timing, position, colours, font and size arrives populated.</p>
+                <p className="text-[12px] text-faint">{shortMode && activeShort ? `The template describes this short alone — ${activeShort.name}, its clips and its titles with times from its own start, no intro; a filled file imports into this short.` : "Download the template (one file for the intro and the titles)"}, give it to an LLM with your notes (places, people, dates), then import the JSON it returns: every title with its timing, position, colours, font and size arrives populated.</p>
                 {shortMode && activeShort && (
                   <div className="flex flex-wrap items-center gap-2 text-[12px]">
                     <p className="text-accent" data-titles-short>Short mode: these titles belong to {String(shortIndex).padStart(2, "0")} {activeShort.name}; a new one starts inside it.</p>

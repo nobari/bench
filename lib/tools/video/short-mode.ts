@@ -12,6 +12,8 @@ import { PLATFORMS, lengthFor, postCopy, safeAreaFor, shortLimits, type Platform
 import { candidatesIn, stretches } from "./shortplan";
 import { shortFolderName } from "./shortset";
 import { fillTitles, placeholdersFor } from "./title-tools";
+import { videoTemplate } from "./template";
+import { titlesTemplate } from "./project";
 
 /** The sub-folder of the project folder the shorts' files go into. */
 export const SHORTS_FOLDER = "shorts";
@@ -234,4 +236,53 @@ export function shortChecks(derived: Project, targets: PlatformId[], fps: number
 /** The title, description and hashtags to post with a short, as the file beside it holds them. */
 export function shortPostText(derived: Project, targets: PlatformId[], index: number, of: number, seconds: number): string {
   return postCopy(derived, targets, { part: of > 1 ? { index, of } : undefined, seconds }).text;
+}
+
+/** The short as a template sees it: its clips and titles from zero, placeholders left as written, no tags. */
+export function shortTemplateProject(project: Project, short: Short): Project {
+  const s = clampShort(short, timelineDuration(project));
+  const derived = shortProject(project, s);
+  const titles = titlesBetween(titlesOf(project.titles, s.id), s.from, s.to).map((t) => {
+    const { short: tag, ...rest } = t;
+    void tag;
+    return rest;
+  });
+  return { ...derived, titles };
+}
+
+/**
+ * The JSON template for one short: the titles template of the short alone (its clips, its length, its titles with
+ * times from its start) with a block naming the short and no intro section — what an LLM fills in for this short.
+ */
+export function shortTemplate(project: Project, short: Short): Record<string, unknown> {
+  const shorts = project.shorts ?? [];
+  const index = shorts.findIndex((x) => x.id === short.id) + 1;
+  const s = clampShort(short, timelineDuration(project));
+  const derived = shortTemplateProject(project, s);
+  const base = videoTemplate(derived) as Record<string, unknown> & { options?: Record<string, unknown> };
+  const { intro, ...rest } = base;
+  void intro;
+  const options = Object.fromEntries(Object.entries(rest.options ?? {}).filter(([k]) => !k.startsWith("intro")));
+  const seconds = +(s.to - s.from).toFixed(3);
+  const titlesPart = titlesTemplate(derived) as { instructions: string[] };
+  return {
+    ...rest,
+    options,
+    instructions: [
+      `This file describes one short cut from the timeline: "${s.name}"${index ? ` (part ${index} of ${shorts.length})` : ""}, ${seconds} s long. Every start is in seconds from the short's own start, 0 to ${seconds}; the import puts the titles into this short alone. Placeholders stay as written and are filled per short: {part}, {of}, {name}, {date}, {short}. A short has no intro section.`,
+      ...titlesPart.instructions.slice(1),
+    ],
+    short: { name: s.name, index, of: shorts.length, from: +s.from.toFixed(3), to: +s.to.toFixed(3), seconds, loop: s.loop, targets: s.targets },
+  };
+}
+
+/** Titles read from a short's template put onto the timeline: moved to the short's start, kept inside it, tagged as its. */
+export function titlesIntoShort(titles: Title[], short: Short): Title[] {
+  const len = short.to - short.from;
+  return titles.map((t) => {
+    let start = short.from + Math.max(0, t.start);
+    if (start >= short.to) start = Math.max(short.from, short.to - Math.min(t.duration, len));
+    const duration = Math.max(0.1, Math.min(t.duration, short.to - start));
+    return { ...t, start: Math.round(start * 1e3) / 1e3, duration: Math.round(duration * 1e3) / 1e3, short: short.id };
+  });
 }
