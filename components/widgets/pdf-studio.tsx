@@ -1,18 +1,22 @@
 "use client";
 
 /**
- * PDF Studio: open a PDF, read it, search it, fill its forms, mark it up and comment on it, organise its pages, and
- * save it — all in the browser. pdf.js draws and edits; pdf-lib (in a worker) changes the document's structure; every
- * change is bytes → bytes with an undo stack of snapshots. The file never leaves the device.
+ * PDF Studio: open a PDF, read it, search it, fill its forms, mark it up and comment on it, edit its text in place,
+ * sign and stamp it, redact it, watermark and number its pages, organise and crop its pages, compress it, and save it
+ * — all in the browser. pdf.js draws and edits; pdf-lib (in a worker) changes the document's structure; every change
+ * is bytes → bytes with an undo stack of snapshots. The file never leaves the device.
  */
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { createPortal } from "react-dom";
 import { parseAsInteger, parseAsString, parseAsStringLiteral, useQueryState } from "nuqs";
 import type { PDFDocumentProxy } from "pdfjs-dist";
 import {
   ChevronLeft,
   ChevronRight,
   Columns2,
+  Crop,
   Download,
+  EyeOff,
   FileText,
   FolderOpen,
   Highlighter,
@@ -29,14 +33,17 @@ import {
   PanelLeft,
   Paperclip,
   Pencil,
+  PenLine,
   Printer,
   Redo2,
   RotateCw,
   Save,
   Search,
   Square,
+  Stamp,
   StretchVertical,
   Strikethrough,
+  TextCursorInput,
   Type,
   Underline,
   Undo2,
@@ -56,15 +63,23 @@ import type { PdfInfo } from "@/lib/tools/files/pdf/meta";
 import { chunkPages, chunksFrom, parsePageRanges, runLabel } from "@/lib/tools/files/pdf/ranges";
 import { SAMPLE_NAME } from "@/lib/tools/files/pdf/sample";
 import { parsePdfDate } from "@/lib/tools/files/pdf/dates";
-import { AUTOSAVE_LIMIT, clearAutosave, derivedName, downloadBytes, ensurePermission, hasFilePicker, hasSavePicker, loadAutosave, pickPdf, pickSaveTarget, readAuthor, recentFiles, rememberRecent, saveAutosave, writeAuthor, writeToHandle, type Autosave, type RecentEntry } from "@/lib/tools/files/pdf/store";
+import { planLineEdit, planRedaction, type TextLine } from "@/lib/tools/files/pdf/textruns";
+import type { ImageFile } from "@/lib/tools/files/pdf/stamps";
+import type { CompressOptions } from "@/lib/tools/files/pdf/compress";
+import { AUTOSAVE_LIMIT, clearAutosave, derivedName, downloadBytes, ensurePermission, forgetSignature, hasFilePicker, hasSavePicker, loadAutosave, loadSignatures, pickPdf, pickSaveTarget, readAuthor, recentFiles, rememberRecent, saveAutosave, saveSignature, writeAuthor, writeToHandle, type Autosave, type RecentEntry } from "@/lib/tools/files/pdf/store";
 import { cn } from "@/lib/utils";
 import { BenchCommentManager, type LiveComment } from "./pdf-comment-manager";
 import { PdfOpsClient } from "./pdf-ops-client";
-import { PdfViewerHost, ZOOM_STEPS, type EditorParams, type EditorState, type FindResult, type PdfViewerApi, type ViewMode } from "./pdf-viewer";
+import { PdfViewerHost, ZOOM_STEPS, type EditorParams, type EditorState, type FindResult, type PdfViewerApi, type Tool, type ViewMode } from "./pdf-viewer";
 import { CommentDialog, CommentPopup, CommentsPanel, type CommentFilter } from "./pdf-comments";
 import { AttachmentList, InfoPanel, OutlineList, SidebarTabs, ThumbList, type Attachment, type DocInfo, type OutlineNode } from "./pdf-sidebar";
 import { PagesPanel } from "./pdf-pages";
 import { useThumbnails } from "./pdf-thumbs";
+import { BTN, Choice, ICON_BTN, Menu, MenuItem, MenuLabel, MenuSeparator, PRIMARY, TOOL_BTN, hexToRgb } from "./pdf-ui";
+import { AttachDialog, CompressDialog, CropDialog, ExportImagesDialog, HeaderFooterDialog, NoteDialog, PasswordDialog, ProtectDialog, SignatureDialog, SplitDialog, StampDialog, WatermarkDialog } from "./pdf-dialogs";
+import { CropLayer, RedactLayer, usePageBoxes, type PdfBox, type RedactMark } from "./pdf-overlays";
+import { TextEditLayer, useTextIndex, type AddTextState, type TextEditState } from "./pdf-text-edit";
+import { blobToFile, isImageFile, renderPage, renderPageFile, toPdfImage } from "./pdf-render";
 
 /* ------------------------------------------------------------------ types */
 
@@ -88,11 +103,21 @@ type Dialog =
   | { kind: "split" }
   | { kind: "crop"; pages: number[] }
   | { kind: "protect" }
-  | { kind: "note"; page: number; x: number; y: number; clientX: number; clientY: number }
-  | { kind: "insert"; at: number; bytes: Uint8Array; name: string; wrong: boolean };
+  | { kind: "note"; page: number; x: number; y: number }
+  | { kind: "insert"; at: number; bytes: Uint8Array; name: string; wrong: boolean }
+  | { kind: "watermark" }
+  | { kind: "header" }
+  | { kind: "compress" }
+  | { kind: "export-images" }
+  | { kind: "attach"; file: File }
+  | { kind: "stamp" }
+  | { kind: "sign" };
+
+/** What a satellite page (merge, split, sign…) opens with. */
+export type Preset = "merge" | "split" | "rotate" | "to-images" | "from-images" | "sign" | "stamp" | "watermark" | "page-numbers" | "redact" | "compress" | "protect" | "unlock" | "edit-text" | "crop" | "flatten" | "extract-text" | "attach";
 
 const VIEWS = ["continuous", "single", "two-up", "wrapped"] as const;
-const TOOLS = ["select", "highlight", "note", "text", "draw", "image"] as const;
+const TOOLS = ["select", "highlight", "note", "text", "draw", "image", "edittext", "crop", "redact"] as const;
 const TABS = ["pages", "outline", "comments", "info", "attachments", "organise"] as const;
 const VIEW_LABELS: Record<ViewMode, string> = { continuous: "Continuous", single: "Single page", "two-up": "Two-up", wrapped: "Wrapped" };
 const HIGHLIGHT_COLORS = ["#FFFF98", "#53FFBC", "#80EBFF", "#FFCBE6", "#FF4F5F"];
@@ -102,15 +127,8 @@ const MAX_HISTORY = 30;
 
 const DEFAULT_PARAMS: EditorParams = { highlightColor: "#FFFF98", highlightThickness: 12, inkColor: "#e5484d", inkThickness: 2, inkOpacity: 1, textColor: "#1b1b1f", textSize: 12 };
 
-const hexToRgb = (hex: string): [number, number, number] => {
-  const n = parseInt(hex.replace("#", ""), 16);
-  return [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255];
-};
-
-const isPdf = (bytes: Uint8Array) => {
-  const head = new TextDecoder("latin1").decode(bytes.subarray(0, 1024));
-  return head.includes("%PDF");
-};
+const isPdf = (bytes: Uint8Array) => new TextDecoder("latin1").decode(bytes.subarray(0, 1024)).includes("%PDF");
+const isPdfFile = (f: File) => /\.pdf$/i.test(f.name) || f.type === "application/pdf";
 
 const NAMED_SIZES: [string, number, number][] = [
   ["A4", 595, 842],
@@ -126,20 +144,18 @@ function sizeName(w: number, h: number): string {
   return `${Math.round((w / 72) * 25.4)}×${Math.round((h / 72) * 25.4)} mm`;
 }
 
-const BTN = "inline-flex h-8 shrink-0 items-center gap-1 rounded-[var(--radius-sm)] border border-edge px-2 text-[12px] text-muted transition-colors hover:border-accent hover:text-accent disabled:pointer-events-none disabled:opacity-40";
-const ICON_BTN = "flex h-8 w-8 shrink-0 items-center justify-center rounded-[var(--radius-sm)] border border-edge text-muted transition-colors hover:border-accent hover:text-accent disabled:pointer-events-none disabled:opacity-40";
-const TOOL_BTN = "flex h-8 w-8 shrink-0 items-center justify-center rounded-[var(--radius-sm)] border text-muted transition-colors hover:text-ink disabled:pointer-events-none disabled:opacity-40";
-const PRIMARY = "inline-flex h-8 shrink-0 items-center gap-1 rounded-[var(--radius-sm)] bg-accent px-2.5 text-[12px] font-medium text-on-accent transition-[filter] hover:brightness-110 disabled:pointer-events-none disabled:opacity-40";
+const PRESET_TOOL: Partial<Record<Preset, Tool>> = { redact: "redact", "edit-text": "edittext", crop: "crop" };
+const PRESET_DIALOG: Partial<Record<Preset, Dialog["kind"]>> = { split: "split", sign: "sign", stamp: "stamp", watermark: "watermark", "page-numbers": "header", compress: "compress", protect: "protect", "to-images": "export-images" };
 
 /* --------------------------------------------------------------- widget */
 
-export function PdfStudioWidget() {
+export function PdfStudioWidget({ preset }: { preset?: Preset } = {}) {
   /* url state */
   const [pageParam, setPageParam] = useQueryState("p", parseAsInteger.withDefault(1).withOptions({ history: "replace", throttleMs: 300 }));
   const [zoom, setZoom] = useQueryState("z", parseAsString.withDefault("auto").withOptions({ history: "replace", throttleMs: 300 }));
   const [view, setView] = useQueryState("view", parseAsStringLiteral(VIEWS).withDefault("continuous").withOptions({ history: "replace" }));
   const [tab, setTab] = useQueryState("tab", parseAsStringLiteral(TABS).withDefault("pages").withOptions({ history: "replace" }));
-  const [tool, setTool] = useQueryState("tool", parseAsStringLiteral(TOOLS).withDefault("select").withOptions({ history: "replace" }));
+  const [tool, setToolParam] = useQueryState("tool", parseAsStringLiteral(TOOLS).withDefault("select").withOptions({ history: "replace" }));
   const [sampleParam, setSampleParam] = useQueryState("sample", parseAsInteger.withOptions({ history: "replace" }));
 
   /* document */
@@ -169,6 +185,18 @@ export function PdfStudioWidget() {
   const [find, setFind] = useState<{ open: boolean; query: string; caseSensitive: boolean; entireWord: boolean; result: FindResult }>({ open: false, query: "", caseSensitive: false, entireWord: false, result: { status: "idle", current: 0, total: 0 } });
   const [menuOpen, setMenuOpen] = useState<"open" | "more" | null>(null);
 
+  /* editing overlays */
+  const [overlayEl, setOverlayEl] = useState<HTMLDivElement | null>(null);
+  const [textEdit, setTextEdit] = useState<TextEditState | null>(null);
+  const [addText, setAddText] = useState<AddTextState | null>(null);
+  const [addStyle, setAddStyle] = useState<{ size: number; color: string; family: "sans" | "serif" | "mono"; bold: boolean; italic: boolean }>({ size: 12, color: "#1b1b1f", family: "sans", bold: false, italic: false });
+  const [marks, setMarks] = useState<RedactMark[]>([]);
+  const [flattenRedactions, setFlattenRedactions] = useState(false);
+  const [signatures, setSignatures] = useState<string[]>([]);
+  /** Files to merge in once the first one is open (several PDFs dropped at once). */
+  const [queued, setQueued] = useState<File[] | null>(null);
+  const [presetDone, setPresetDone] = useState<string | null>(null);
+
   /* document-derived */
   const [outline, setOutline] = useState<OutlineNode[] | null>(null);
   const [attachments, setAttachments] = useState<Attachment[] | null>(null);
@@ -187,6 +215,7 @@ export function PdfStudioWidget() {
   const [viewerHost, setViewerHost] = useState<HTMLDivElement | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const insertInput = useRef<HTMLInputElement>(null);
+  const attachInput = useRef<HTMLInputElement>(null);
   const history = useRef<{ past: Uint8Array[]; future: Uint8Array[] }>({ past: [], future: [] });
   /** How deep the undo and redo stacks are (a ref is not read while rendering). */
   const [depth, setDepth] = useState({ past: 0, future: 0 });
@@ -197,11 +226,14 @@ export function PdfStudioWidget() {
   const manager = useMemo(() => new BenchCommentManager(), []);
   const liveSnap = useSyncExternalStore(manager.subscribe, manager.snapshot, manager.snapshot);
   const thumbs = useThumbnails(pdf, rotation, 128);
+  const overlayTool = tool === "edittext" || tool === "crop" || tool === "redact";
+  const boxes = usePageBoxes(api, overlayTool && !!pdf, doc?.version ?? 0);
+  const textIndex = useTextIndex(pdf, doc?.version ?? 0, tool === "edittext" || tool === "redact");
 
   useEffect(() => () => ops.dispose(), [ops]);
 
   const dirty = !!doc && (doc.dirty || editorDirty || liveSnap.live.length > 0);
-  useUnsavedWork(busy ? "A change to the PDF is being written." : dirty ? "The changes to this PDF have not been saved." : null);
+  useUnsavedWork(busy ? "A change to the PDF is being written." : dirty ? "The changes to this PDF have not been saved." : marks.length ? "Redaction marks have not been applied." : null);
 
   const pageLabel = useCallback(
     (i: number) => {
@@ -214,9 +246,19 @@ export function PdfStudioWidget() {
   const say = useCallback((text: string) => setStatus(text), []);
   useEffect(() => {
     if (!status) return;
-    const t = setTimeout(() => setStatus(null), 5000);
+    const t = setTimeout(() => setStatus(null), 7000);
     return () => clearTimeout(t);
   }, [status]);
+
+  /** Switches tools, dropping any half-done overlay state. */
+  const setTool = useCallback(
+    (t: Tool) => {
+      setTextEdit(null);
+      setAddText(null);
+      void setToolParam(t);
+    },
+    [setToolParam],
+  );
 
   /* ----------------------------------------------------------- opening */
 
@@ -236,6 +278,9 @@ export function PdfStudioWidget() {
       setSelectedComment(null);
       setPagesSelected(new Set());
       setEditorDirty(false);
+      setMarks([]);
+      setTextEdit(null);
+      setAddText(null);
       setFind((f) => ({ ...f, open: false, result: { status: "idle", current: 0, total: 0 } }));
       if (source === "file") void rememberRecent({ name, size: bytes.length, openedAt: Date.now(), handle }).then(() => recentFiles().then(setRecent));
     },
@@ -258,15 +303,36 @@ export function PdfStudioWidget() {
     [doc, openBytes],
   );
 
+  /** A new PDF with one page per image. */
+  const openImages = useCallback(
+    async (files: File[]) => {
+      setPhase("loading");
+      setError(null);
+      try {
+        const images: ImageFile[] = [];
+        for (const f of files) images.push(await toPdfImage(f));
+        const r = await ops.runFresh({ type: "from-images", input: { at: 0, images, paper: "fit", margin: 0 } });
+        const base = files.length === 1 ? files[0].name.replace(/\.[^.]+$/, "") : "images";
+        openBytes(r.bytes, `${base}.pdf`, null, "file", undefined, true);
+        say(`${images.length} image${images.length > 1 ? "s" : ""} became ${images.length > 1 ? "pages" : "a page"} — Save writes the PDF.`);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+        setPhase(doc ? "ready" : "error");
+      }
+    },
+    [ops, openBytes, say, doc],
+  );
+
   const guardReplace = useCallback(() => !dirty || window.confirm("The open PDF has unsaved changes. Replace it anyway?"), [dirty]);
 
   const pick = useCallback(async () => {
     if (!guardReplace()) return;
     if (hasFilePicker()) {
-      const handles = await pickPdf().catch(() => null);
+      const handles = await pickPdf(true).catch(() => null);
       if (!handles?.length) return;
       const file = await handles[0].getFile();
       await openFile(file, handles[0]);
+      if (handles.length > 1) setQueued(await Promise.all(handles.slice(1).map((h) => h.getFile())));
     } else fileInput.current?.click();
   }, [guardReplace, openFile]);
 
@@ -313,6 +379,7 @@ export function PdfStudioWidget() {
     });
     void loadAutosave().then((a) => active && a && setRestorable(a));
     void recentFiles().then((r) => active && setRecent(r));
+    void loadSignatures().then((s) => active && setSignatures(s));
     return () => {
       active = false;
     };
@@ -410,7 +477,7 @@ export function PdfStudioWidget() {
     };
   }, [pdf]);
 
-  // Whether a text selection sits inside the viewer (for Underline / Strike-out).
+  // Whether a text selection sits inside the viewer (for Underline / Strike-out / Mark for redaction).
   useEffect(() => {
     const onSel = () => {
       const sel = window.getSelection();
@@ -444,12 +511,15 @@ export function PdfStudioWidget() {
     [author, ops],
   );
 
-  const applyBytes = useCallback((bytes: Uint8Array, patch: Partial<DocState> = {}) => {
-    const version = ++versionRef.current;
-    manager.destroy();
-    setEditorDirty(false);
-    setDoc((d) => (d ? { ...d, bytes, version, dirty: true, ...patch } : d));
-  }, [manager]);
+  const applyBytes = useCallback(
+    (bytes: Uint8Array, patch: Partial<DocState> = {}) => {
+      const version = ++versionRef.current;
+      manager.destroy();
+      setEditorDirty(false);
+      setDoc((d) => (d ? { ...d, bytes, version, dirty: true, ...patch } : d));
+    },
+    [manager],
+  );
 
   /** Bakes, snapshots, runs the operations, and swaps the bytes in. Files an operation produces are handed back. */
   const runOps = useCallback(
@@ -463,6 +533,7 @@ export function PdfStudioWidget() {
         const r = await ops.run(bytes, op, doc.password);
         if (r.changed) applyBytes(r.bytes);
         else if (bytes !== doc.bytes) applyBytes(bytes);
+        if (r.warnings?.length) setError(r.warnings.join(" "));
         if (!opts.quiet) say(`${label} · ${Math.round(r.ms)} ms`);
         return r;
       } catch (e) {
@@ -504,6 +575,51 @@ export function PdfStudioWidget() {
     say("Redone");
   }, [editorState.hasSomethingToRedo, doc, applyBytes, say]);
 
+  // Several PDFs opened at once: the rest are merged in after the first.
+  useEffect(() => {
+    if (!queued?.length || !doc || !pdf || busy) return;
+    const files = queued;
+    let active = true;
+    queueMicrotask(() => {
+      if (!active) return;
+      setQueued(null);
+      void (async () => {
+        const list: PdfOp[] = [];
+        for (const f of files) {
+          const bytes = new Uint8Array(await f.arrayBuffer());
+          if (isPdf(bytes)) list.push({ type: "insert-pdf", at: 1e9, bytes });
+        }
+        if (list.length) void runOps(list, `Merged ${list.length} more file${list.length > 1 ? "s" : ""}`);
+      })();
+    });
+    return () => {
+      active = false;
+    };
+  }, [queued, doc, pdf, busy, runOps]);
+
+  // A satellite page's purpose, once per opened document.
+  useEffect(() => {
+    if (!preset || !doc || !pdf || presetDone === doc.docKey) return;
+    const t = PRESET_TOOL[preset];
+    const d = PRESET_DIALOG[preset];
+    let active = true;
+    queueMicrotask(() => {
+      if (!active) return;
+      setPresetDone(doc.docKey);
+      if (t) setTool(t);
+      if (d) setDialog({ kind: d } as Dialog);
+      if (preset === "merge" || preset === "rotate") void setTab("organise");
+      if (preset === "attach") void setTab("attachments");
+      if (preset === "merge") say("Use “Insert another PDF” in the Organise tab, or drop more PDFs onto the page, to merge them in.");
+      if (preset === "unlock") say(doc.password ? "Open the More menu and choose “Remove the password”." : "This PDF has no password to remove.");
+      if (preset === "flatten") say("The More menu flattens the form fields or bakes the comments into the pages.");
+      if (preset === "extract-text") say("The More menu copies or downloads the document's text.");
+    });
+    return () => {
+      active = false;
+    };
+  }, [preset, doc, pdf, presetDone, setTool, setTab, say]);
+
   /* ------------------------------------------------------------- saving */
 
   const finalBytes = useCallback(async (): Promise<Uint8Array | null> => {
@@ -521,7 +637,7 @@ export function PdfStudioWidget() {
       if (!bytes) return;
       let handle = doc.handle;
       if (handle && !(await ensurePermission(handle, "readwrite"))) handle = null;
-      if (!handle && hasSavePicker()) handle = await pickSaveTarget(doc.source === "file" ? doc.name : derivedName(doc.name, "edited"));
+      if (!handle && hasSavePicker()) handle = await pickSaveTarget(doc.source === "file" && doc.handle ? doc.name : derivedName(doc.name, "edited"));
       if (handle) {
         await writeToHandle(handle, bytes);
         setDoc((d) => (d ? { ...d, bytes, dirty: false, handle, name: handle!.name, source: "file" } : d));
@@ -590,26 +706,64 @@ export function PdfStudioWidget() {
     }
   }, [doc, busy, finalBytes, say]);
 
-  const pagePng = useCallback(async () => {
-    if (!pdf) return;
-    const pg = await pdf.getPage(page);
-    const viewport = pg.getViewport({ scale: 2, rotation: (pg.rotate + rotation) % 360 });
-    const canvas = document.createElement("canvas");
-    canvas.width = Math.ceil(viewport.width);
-    canvas.height = Math.ceil(viewport.height);
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    await pg.render({ canvasContext: ctx, canvas, viewport }).promise;
-    canvas.toBlob((blob) => {
-      if (!blob) return;
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `${(doc?.name ?? "page").replace(/\.pdf$/i, "")}-p${page}.png`;
-      a.click();
-      setTimeout(() => URL.revokeObjectURL(url), 10_000);
-    }, "image/png");
-  }, [pdf, page, rotation, doc]);
+  const exportImages = useCallback(
+    async (input: { pages: number[]; dpi: number; format: "png" | "jpeg"; quality: number }) => {
+      if (!pdf || !doc) return;
+      setDialog(null);
+      setBusy("Rendering");
+      try {
+        const base = doc.name.replace(/\.pdf$/i, "");
+        const ext = input.format === "png" ? "png" : "jpg";
+        const files: { name: string; data: Uint8Array }[] = [];
+        for (const p of input.pages) {
+          const { blob } = await renderPage(pdf, p, { dpi: input.dpi, format: input.format, quality: input.quality, rotation });
+          files.push({ name: `${base}-p${String(p + 1).padStart(String(pdf.numPages).length, "0")}.${ext}`, data: new Uint8Array(await blob.arrayBuffer()) });
+        }
+        if (files.length === 1) downloadBytes(files[0].data, files[0].name, input.format === "png" ? "image/png" : "image/jpeg");
+        else downloadBytes(await buildZip(files.map((f) => ({ name: f.name, data: f.data, mtime: Date.now() }))), `${base}-pages.zip`, "application/zip");
+        say(`${files.length} page${files.length > 1 ? "s" : ""} saved as ${input.format.toUpperCase()}`);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+      } finally {
+        setBusy(null);
+      }
+    },
+    [pdf, doc, rotation, say],
+  );
+
+  const extractText = useCallback(
+    async (how: "copy" | "download") => {
+      if (!pdf || !doc) return;
+      setBusy("Reading the text");
+      try {
+        const parts: string[] = [];
+        for (let i = 1; i <= pdf.numPages; i++) {
+          const pg = await pdf.getPage(i);
+          const tc = await pg.getTextContent();
+          let s = "";
+          for (const it of tc.items) {
+            if (!("str" in it)) continue;
+            s += it.str;
+            if (it.hasEOL) s += "\n";
+          }
+          parts.push(s.trim());
+        }
+        const text = parts.join("\n\n");
+        if (how === "copy") {
+          await navigator.clipboard.writeText(text);
+          say(`Copied ${text.length.toLocaleString()} characters`);
+        } else {
+          downloadBytes(new TextEncoder().encode(text), doc.name.replace(/\.pdf$/i, "") + ".txt", "text/plain");
+          say("Text downloaded");
+        }
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+      } finally {
+        setBusy(null);
+      }
+    },
+    [pdf, doc, say],
+  );
 
   /** pdf.js lists attachments without their bytes; they are fetched when one is downloaded. */
   const downloadAttachment = useCallback(
@@ -637,6 +791,7 @@ export function PdfStudioWidget() {
     manager.destroy();
     history.current = { past: [], future: [] };
     setDepth({ past: 0, future: 0 });
+    setMarks([]);
     void clearAutosave();
     void setPageParam(1);
   }, [guardReplace, manager, setPageParam]);
@@ -688,7 +843,7 @@ export function PdfStudioWidget() {
       setDialog(null);
       const r = await runOps({ type: "note", page: p, x, y, text, author: author || "Anonymous", color: hexToRgb(noteColor) }, "Note added");
       if (r?.annotId) setSelectedComment(r.annotId);
-      setTab("comments");
+      void setTab("comments");
     },
     [dialog, runOps, author, noteColor, setTab],
   );
@@ -709,6 +864,118 @@ export function PdfStudioWidget() {
   );
 
   const markdown = useMemo(() => commentsMarkdown(comments, (p) => `Page ${pageLabel(p)}`), [comments, pageLabel]);
+
+  /* ---------------------------------------------------------- text edit */
+
+  const commitTextEdit = useCallback(async () => {
+    const te = textEdit;
+    if (!te) return;
+    setTextEdit(null);
+    const pageIndex = Number(te.lineId.split(":")[0]);
+    const idx = textIndex.get(pageIndex);
+    const line = idx?.lines.find((l) => l.id === te.lineId);
+    if (!idx || !line || line.text === te.text) return;
+    try {
+      const plan = planLineEdit(idx, line, te.text, { family: line.font.family, bold: line.font.bold, italic: line.font.italic }, textIndex.glyphs());
+      if (!plan.ops.length) return;
+      const r = await runOps({ type: "edit-text", page: pageIndex, ops: plan.ops }, plan.fallback ? "Text edited (in a stand-in font)" : "Text edited");
+      if (r && plan.fallback && !r.warnings?.length) say("Text edited — the new characters are in a stand-in font, as the page's own font does not carry them.");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }, [textEdit, textIndex, runOps, say]);
+
+  const commitAddText = useCallback(async () => {
+    const a = addText;
+    if (!a) return;
+    setAddText(null);
+    if (!a.text.trim()) return;
+    const box = boxes.find((b) => b.index === a.page);
+    if (!box) return;
+    const [x, y] = box.viewport.convertToPdfPoint(a.x, a.y);
+    await runOps({ type: "add-text", input: { page: a.page, x, y, text: a.text, size: addStyle.size, color: hexToRgb(addStyle.color), style: { family: addStyle.family, bold: addStyle.bold, italic: addStyle.italic }, rotate: (360 - rotation) % 360 || 0 } }, "Text added");
+  }, [addText, boxes, addStyle, runOps, rotation]);
+
+  const startTextEdit = useCallback((line: TextLine) => setTextEdit({ lineId: line.id, text: line.text }), []);
+
+  /* --------------------------------------------------------------- crop */
+
+  const cropTo = useCallback(
+    (scope: "one" | "all", pageIndex: number, box: PdfBox) => {
+      const pages = scope === "all" ? Array.from({ length: pageCount }, (_, i) => i) : [pageIndex];
+      void runOps({ type: "crop-box", pages, box }, scope === "all" ? "All pages cropped" : `Page ${pageIndex + 1} cropped`);
+    },
+    [pageCount, runOps],
+  );
+
+  /* ---------------------------------------------------------- redaction */
+
+  const addMark = useCallback((pageIndex: number, box: PdfBox) => setMarks((m) => [...m, { id: `${Date.now().toString(36)}-${m.length}`, page: pageIndex, box }]), []);
+
+  const markSelection = useCallback(() => {
+    const sel = api.current?.selectionQuads();
+    if (!sel) {
+      say("Select some text first.");
+      return;
+    }
+    const next: RedactMark[] = [];
+    for (let i = 0; i + 7 < sel.quads.length; i += 8) {
+      const xs = [sel.quads[i], sel.quads[i + 2], sel.quads[i + 4], sel.quads[i + 6]], ys = [sel.quads[i + 1], sel.quads[i + 3], sel.quads[i + 5], sel.quads[i + 7]];
+      next.push({ id: `${Date.now().toString(36)}-${i}`, page: sel.page, box: [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)] });
+    }
+    api.current?.clearSelection();
+    window.getSelection()?.removeAllRanges();
+    setMarks((m) => [...m, ...next]);
+  }, [say]);
+
+  const applyRedactions = useCallback(async () => {
+    if (!pdf || !marks.length) return;
+    const byPage = new Map<number, PdfBox[]>();
+    for (const m of marks) byPage.set(m.page, [...(byPage.get(m.page) ?? []), m.box]);
+    setBusy("Redacting");
+    try {
+      const list: PdfOp[] = [];
+      for (const [p, rects] of byPage) {
+        const idx = await textIndex.ensure(p);
+        const textOps = idx ? planRedaction(idx, rects.map(([x0, y0, x1, y1]) => ({ x0, y0, x1, y1 }))) : [];
+        const image = flattenRedactions ? await renderPageFile(pdf, p, { dpi: 200, format: "png", boxes: rects, annotations: false }) : undefined;
+        list.push({ type: "redact", page: p, ops: textOps, rects, image });
+      }
+      setBusy(null);
+      const r = await runOps(list, `Redacted ${marks.length} area${marks.length > 1 ? "s" : ""} on ${byPage.size} page${byPage.size > 1 ? "s" : ""}`);
+      if (r) setMarks([]);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      setBusy(null);
+    }
+  }, [pdf, marks, textIndex, flattenRedactions, runOps]);
+
+  /* -------------------------------------------------------- sign & stamp */
+
+  const placeImage = useCallback(
+    async (blob: Blob, name: string) => {
+      setDialog(null);
+      const ok = await api.current?.pasteImage(blobToFile(blob, name));
+      if (!ok) setError("The page is not ready for a stamp yet — scroll to it and try again.");
+      else say("Placed in the middle of the page — drag it into place, resize it by its corners, then Save.");
+    },
+    [say],
+  );
+
+  const placeSignature = useCallback(
+    async (blob: Blob, remember: boolean) => {
+      if (remember) {
+        const dataUrl = await new Promise<string>((resolve) => {
+          const r = new FileReader();
+          r.onload = () => resolve(String(r.result));
+          r.readAsDataURL(blob);
+        });
+        setSignatures(await saveSignature(dataUrl));
+      }
+      await placeImage(blob, "signature.png");
+    },
+    [placeImage],
+  );
 
   /* -------------------------------------------------------------- pages */
 
@@ -736,16 +1003,29 @@ export function PdfStudioWidget() {
     [runOps, doc],
   );
 
-  const insertPdf = useCallback(
-    async (file: File, at: number, pw?: string) => {
-      const bytes = new Uint8Array(await file.arrayBuffer());
-      if (!isPdf(bytes)) {
-        setError(`“${file.name}” does not look like a PDF.`);
-        return;
+  const insertFiles = useCallback(
+    async (files: File[], at: number, pw?: string) => {
+      const pdfs = files.filter(isPdfFile);
+      const images = files.filter((f) => !isPdfFile(f) && isImageFile(f));
+      const list: PdfOp[] = [];
+      for (const f of pdfs) {
+        const bytes = new Uint8Array(await f.arrayBuffer());
+        if (!isPdf(bytes)) {
+          setError(`“${f.name}” does not look like a PDF.`);
+          return;
+        }
+        list.push({ type: "insert-pdf", at, bytes, password: pw });
       }
-      const r = await runOps({ type: "insert-pdf", at, bytes, password: pw }, `Inserted ${file.name}`);
+      if (images.length) {
+        const imgs: ImageFile[] = [];
+        for (const f of images) imgs.push(await toPdfImage(f));
+        list.push({ type: "from-images", input: { at, images: imgs, paper: "fit", margin: 0 } });
+      }
+      if (!list.length) return;
+      const label = pdfs.length && images.length ? `Inserted ${files.length} files` : pdfs.length ? `Inserted ${pdfs.length === 1 ? pdfs[0].name : `${pdfs.length} PDFs`}` : `Added ${images.length} page${images.length > 1 ? "s" : ""} from images`;
+      const r = await runOps(list, label);
       if (r) setDialog(null);
-      else setDialog({ kind: "insert", at, bytes, name: file.name, wrong: pw !== undefined });
+      else if (pdfs.length === 1 && !images.length) setDialog({ kind: "insert", at, bytes: new Uint8Array(await pdfs[0].arrayBuffer()), name: pdfs[0].name, wrong: pw !== undefined });
     },
     [runOps],
   );
@@ -780,6 +1060,27 @@ export function PdfStudioWidget() {
       else downloadBytes(await buildZip(r.files.map((f) => ({ name: f.name, data: f.bytes, mtime: Date.now() }))), `${base}-split.zip`, "application/zip");
     },
     [doc, pageCount, outline, runOps],
+  );
+
+  const compress = useCallback(
+    async (options: CompressOptions) => {
+      if (!doc) return;
+      setDialog(null);
+      const before = doc.bytes.length;
+      const r = await runOps({ type: "compress", options }, "Compressed", { quiet: true });
+      if (!r) return;
+      const after = r.bytes.length;
+      const pct = before ? Math.round(((before - after) / before) * 100) : 0;
+      const rep = r.report;
+      const bits = [`${formatBytes(before)} → ${formatBytes(after)} (${pct >= 0 ? "−" : "+"}${Math.abs(pct)}%)`];
+      if (rep) {
+        if (rep.images.recoded) bits.push(`${rep.images.recoded} picture${rep.images.recoded > 1 ? "s" : ""} re-encoded`);
+        if (rep.deflated) bits.push(`${rep.deflated} stream${rep.deflated > 1 ? "s" : ""} deflated`);
+        if (rep.dropped) bits.push(`${rep.dropped} unused object${rep.dropped > 1 ? "s" : ""} dropped`);
+      }
+      say(`Compressed: ${bits.join(" · ")}${after >= before ? " — this file was already tight; undo keeps the original" : ""}`);
+    },
+    [doc, runOps, say],
   );
 
   /* ----------------------------------------------------------- keyboard */
@@ -817,11 +1118,13 @@ export function PdfStudioWidget() {
       if (mod) return;
       switch (e.key) {
         case "Escape":
-          if (dialog) setDialog(null);
+          if (textEdit) setTextEdit(null);
+          else if (addText) setAddText(null);
+          else if (dialog) setDialog(null);
           else if (find.open) {
             api.current?.closeFind();
             setFind((f) => ({ ...f, open: false }));
-          } else if (tool !== "select") void setTool("select");
+          } else if (tool !== "select") setTool("select");
           else manager.closePopup();
           break;
         case "ArrowLeft":
@@ -857,19 +1160,28 @@ export function PdfStudioWidget() {
           void setZoom("auto");
           break;
         case "h":
-          void setTool(tool === "highlight" ? "select" : "highlight");
+          setTool(tool === "highlight" ? "select" : "highlight");
           break;
         case "n":
-          void setTool(tool === "note" ? "select" : "note");
+          setTool(tool === "note" ? "select" : "note");
           break;
         case "t":
-          void setTool(tool === "text" ? "select" : "text");
+          setTool(tool === "text" ? "select" : "text");
           break;
         case "d":
-          void setTool(tool === "draw" ? "select" : "draw");
+          setTool(tool === "draw" ? "select" : "draw");
+          break;
+        case "e":
+          setTool(tool === "edittext" ? "select" : "edittext");
+          break;
+        case "c":
+          setTool(tool === "crop" ? "select" : "crop");
+          break;
+        case "x":
+          setTool(tool === "redact" ? "select" : "redact");
           break;
         case "v":
-          void setTool("select");
+          setTool("select");
           break;
         case "r":
           setRotation((r) => (r + 90) % 360);
@@ -878,7 +1190,7 @@ export function PdfStudioWidget() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [doc, dialog, find.open, tool, view, page, pageCount, save, saveAs, pick, undo, redo, setTool, setZoom, manager]);
+  }, [doc, dialog, find.open, tool, view, page, pageCount, save, saveAs, pick, undo, redo, setTool, setZoom, manager, textEdit, addText]);
 
   // A handle for headless checks: the pdf.js document, the bytes, and the operations.
   useEffect(() => {
@@ -890,11 +1202,15 @@ export function PdfStudioWidget() {
       run: (op: PdfOp | PdfOp[], label = "Check") => runOps(op, label),
       api: () => api.current,
       comments: () => comments,
+      textIndex: (p: number) => textIndex.ensure(p),
+      marks: () => marks,
+      setTool: (t: Tool) => setTool(t),
+      placeImage: (blob: Blob) => placeImage(blob, "check.png"),
     };
     return () => {
       delete w.__benchPdf;
     };
-  }, [pdf, doc, runOps, comments]);
+  }, [pdf, doc, runOps, comments, textIndex, marks, setTool, placeImage]);
 
   // Menus close on an outside click.
   useEffect(() => {
@@ -959,9 +1275,27 @@ export function PdfStudioWidget() {
     { id: "info" as const, label: "Info", icon: <Info size={14} /> },
   ];
 
-  const onDropFiles = (files: FileList | File[]) => {
-    const file = Array.from(files).find((f) => /\.pdf$/i.test(f.name) || f.type === "application/pdf") ?? Array.from(files)[0];
-    if (file && guardReplace()) void openFile(file);
+  const onDropFiles = (list: FileList | File[]) => {
+    const files = Array.from(list);
+    const pdfs = files.filter(isPdfFile);
+    const images = files.filter((f) => !isPdfFile(f) && isImageFile(f));
+    if (current && !pdfs.length && images.length) {
+      void insertFiles(images, pageCount);
+      return;
+    }
+    if (pdfs.length) {
+      if (!guardReplace()) return;
+      void openFile(pdfs[0]);
+      const rest = [...pdfs.slice(1), ...images];
+      if (rest.length) setQueued(rest);
+      return;
+    }
+    if (images.length) {
+      if (!guardReplace()) return;
+      void openImages(images);
+      return;
+    }
+    if (files[0] && guardReplace()) void openFile(files[0]);
   };
 
   const sidebar = (
@@ -999,11 +1333,50 @@ export function PdfStudioWidget() {
           />
         )}
         {tab === "organise" && <PagesPanel count={pageCount} ratios={pageGeom.ratios} sizes={pageGeom.sizes} current={page} thumbs={thumbs} selected={pagesSelected} onSelected={setPagesSelected} onGoTo={(p) => api.current?.goTo(p)} busy={!!busy} actions={pagesActions} pageLabel={pageLabel} />}
-        {tab === "attachments" && <AttachmentList attachments={attachments} onDownload={(a) => void downloadAttachment(a)} />}
+        {tab === "attachments" && (
+          <AttachmentList
+            attachments={attachments}
+            busy={!!busy}
+            onDownload={(a) => void downloadAttachment(a)}
+            onAdd={() => attachInput.current?.click()}
+            onRemove={(a) => window.confirm(`Remove “${a.filename}” from the PDF?`) && void runOps({ type: "detach", name: a.name }, "Attachment removed")}
+          />
+        )}
         {tab === "info" && <InfoPanel info={info} busy={!!busy} onEdit={async (patch: Partial<PdfInfo>) => void (await runOps({ type: "info", patch }, "Document info saved"))} />}
       </div>
     </div>
   );
+
+  const overlays =
+    overlayEl && current && overlayTool
+      ? createPortal(
+          <>
+            {tool === "edittext" && (
+              <TextEditLayer
+                boxes={boxes}
+                index={textIndex}
+                edit={textEdit}
+                add={addText}
+                addStyle={addStyle}
+                onStart={startTextEdit}
+                onEditText={(text) => setTextEdit((t) => (t ? { ...t, text } : t))}
+                onCommit={() => void commitTextEdit()}
+                onCancel={() => {
+                  setTextEdit(null);
+                  setAddText(null);
+                }}
+                onAddAt={(p, x, y) => setAddText({ page: p, x, y, text: "" })}
+                onAddText={(text) => setAddText((a) => (a ? { ...a, text } : a))}
+                onAddCommit={() => void commitAddText()}
+                busy={!!busy}
+              />
+            )}
+            {tool === "crop" && <CropLayer boxes={boxes} onCrop={cropTo} />}
+            {tool === "redact" && <RedactLayer boxes={boxes} marks={marks} onMark={addMark} onUnmark={(id) => setMarks((m) => m.filter((x) => x.id !== id))} />}
+          </>,
+          overlayEl,
+        )
+      : null;
 
   const viewerPane = (
     <div ref={setViewerHost} className="panel relative flex h-full min-h-0 flex-col overflow-hidden" data-pdf-viewer-pane>
@@ -1085,7 +1458,7 @@ export function PdfStudioWidget() {
               void setPageParam(p);
             }}
             onZoom={(z) => void setZoom(z)}
-            onToolChange={(t) => void setTool(t)}
+            onToolChange={(t) => setTool(t)}
             onEditorState={setEditorState}
             onFind={(result) => setFind((f) => ({ ...f, result }))}
             onDirty={setEditorDirty}
@@ -1098,19 +1471,17 @@ export function PdfStudioWidget() {
               setError(m);
               setPhase("error");
             }}
-            onNoteClick={({ page: p, x, y }) => setDialog({ kind: "note", page: p, x, y, clientX: 0, clientY: 0 })}
+            onNoteClick={({ page: p, x, y }) => setDialog({ kind: "note", page: p, x, y })}
             onAnnotationClick={(id) => {
               setSelectedComment(id);
               if (tab !== "comments") void setTab("comments");
             }}
+            onOverlayRoot={setOverlayEl}
           />
         )}
+        {overlays}
         {/* pdf.js points its comment buttons' aria-controls at this element and keeps keyboard focus inside it. */}
-        <div
-          ref={(el) => manager.setDialogHost(el)}
-          className="contents"
-          data-comment-dialog-host
-        >
+        <div ref={(el) => manager.setDialogHost(el)} className="contents" data-comment-dialog-host>
           {liveSnap.dialog && (
             <CommentDialog
               state={liveSnap.dialog}
@@ -1139,6 +1510,101 @@ export function PdfStudioWidget() {
     </div>
   );
 
+  const toolOptions = () => {
+    if (tool === "highlight")
+      return (
+        <>
+          <span>Colour</span>
+          {HIGHLIGHT_COLORS.map((c) => (
+            <button key={c} type="button" onClick={() => setParams((p) => ({ ...p, highlightColor: c }))} className={cn("h-5 w-5 rounded-full border border-black/15", params.highlightColor === c && "ring-2 ring-accent ring-offset-1 ring-offset-[var(--color-surface)]")} style={{ background: c }} aria-label={`Highlight in ${c}`} aria-pressed={params.highlightColor === c} />
+          ))}
+          <label className="inline-flex items-center gap-1">
+            Free-hand width <input type="range" min={8} max={24} value={params.highlightThickness} onChange={(e) => setParams((p) => ({ ...p, highlightThickness: Number(e.target.value) }))} className="w-24 accent-[var(--accent)]" />
+          </label>
+          <span className="text-faint">Select text to highlight it; drag on empty space for a free-hand mark. Each highlight has a comment button.</span>
+        </>
+      );
+    if (tool === "draw")
+      return (
+        <>
+          <label className="inline-flex items-center gap-1">
+            Colour <input type="color" value={params.inkColor} onChange={(e) => setParams((p) => ({ ...p, inkColor: e.target.value }))} className="h-6 w-8 cursor-pointer rounded border border-edge bg-transparent" />
+          </label>
+          <label className="inline-flex items-center gap-1">
+            Width <input type="range" min={1} max={20} value={params.inkThickness} onChange={(e) => setParams((p) => ({ ...p, inkThickness: Number(e.target.value) }))} className="w-24 accent-[var(--accent)]" />
+          </label>
+          <label className="inline-flex items-center gap-1">
+            Opacity <input type="range" min={10} max={100} value={Math.round(params.inkOpacity * 100)} onChange={(e) => setParams((p) => ({ ...p, inkOpacity: Number(e.target.value) / 100 }))} className="w-24 accent-[var(--accent)]" />
+          </label>
+        </>
+      );
+    if (tool === "text")
+      return (
+        <>
+          <label className="inline-flex items-center gap-1">
+            Colour <input type="color" value={params.textColor} onChange={(e) => setParams((p) => ({ ...p, textColor: e.target.value }))} className="h-6 w-8 cursor-pointer rounded border border-edge bg-transparent" />
+          </label>
+          <label className="inline-flex items-center gap-1">
+            Size <input type="range" min={6} max={48} value={params.textSize} onChange={(e) => setParams((p) => ({ ...p, textSize: Number(e.target.value) }))} className="w-24 accent-[var(--accent)]" /> <span className="tabular">{params.textSize}</span>
+          </label>
+          <span className="text-faint">Click the page to place a text box (a comment-style annotation). To change the page&apos;s own words, use Edit text.</span>
+        </>
+      );
+    if (tool === "note")
+      return (
+        <>
+          <span>Note colour</span>
+          {NOTE_COLORS.map((c) => (
+            <button key={c} type="button" onClick={() => setNoteColor(c)} className={cn("h-5 w-5 rounded-full border border-black/15", noteColor === c && "ring-2 ring-accent ring-offset-1 ring-offset-[var(--color-surface)]")} style={{ background: c }} aria-label={`Notes in ${c}`} aria-pressed={noteColor === c} />
+          ))}
+          <span className="text-faint">Click anywhere on a page to leave a note there.</span>
+        </>
+      );
+    if (tool === "image") return <span className="text-faint">Choose an image file when asked; it is placed on the page as a stamp you can move and resize.</span>;
+    if (tool === "edittext")
+      return (
+        <>
+          <span className="text-faint">Click a line to change its words (Enter applies, Esc cancels). Click empty space to add text:</span>
+          <label className="inline-flex items-center gap-1">
+            Size <input type="number" min={4} max={120} value={addStyle.size} onChange={(e) => setAddStyle((s) => ({ ...s, size: Math.max(4, Number(e.target.value) || 12) }))} className="input h-7 w-16 px-1.5 py-0 text-[12px]" data-add-size />
+          </label>
+          <label className="inline-flex items-center gap-1">
+            Colour <input type="color" value={addStyle.color} onChange={(e) => setAddStyle((s) => ({ ...s, color: e.target.value }))} className="h-6 w-8 cursor-pointer rounded border border-edge bg-transparent" />
+          </label>
+          <Choice value={addStyle.family} options={[{ id: "sans", label: "Sans" }, { id: "serif", label: "Serif" }, { id: "mono", label: "Mono" }]} onChange={(family) => setAddStyle((s) => ({ ...s, family }))} label="Font" />
+          <button type="button" onClick={() => setAddStyle((s) => ({ ...s, bold: !s.bold }))} className={cn(TOOL_BTN, "h-7 w-7 font-bold", addStyle.bold ? "border-accent text-ink" : "border-edge")} aria-pressed={addStyle.bold} title="Bold">
+            B
+          </button>
+          <button type="button" onClick={() => setAddStyle((s) => ({ ...s, italic: !s.italic }))} className={cn(TOOL_BTN, "h-7 w-7 italic", addStyle.italic ? "border-accent text-ink" : "border-edge")} aria-pressed={addStyle.italic} title="Italic">
+            I
+          </button>
+        </>
+      );
+    if (tool === "crop") return <span className="text-faint">Drag over a page to choose the area to keep, then crop that page or all of them. Nothing is deleted — the Organise tab&apos;s Crop can remove it again.</span>;
+    if (tool === "redact")
+      return (
+        <>
+          <span className="tabular">{marks.length ? `${marks.length} mark${marks.length > 1 ? "s" : ""}` : "No marks yet"}</span>
+          <span className="text-faint">Drag over what must go, or select text and</span>
+          <button type="button" onClick={markSelection} disabled={!hasSelection || !!busy} className={BTN} data-redact-selection>
+            Mark the selection
+          </button>
+          <label className="inline-flex items-center gap-1" title="Pictures and drawings under a mark are only covered unless the page becomes a picture; its text then stops being selectable.">
+            <input type="checkbox" checked={flattenRedactions} onChange={(e) => setFlattenRedactions(e.target.checked)} className="accent-[var(--accent)]" /> Flatten marked pages to pictures
+          </label>
+          <button type="button" onClick={() => void applyRedactions()} disabled={!marks.length || !!busy} className={PRIMARY} data-redact-apply>
+            Apply {marks.length ? `${marks.length} ` : ""}redaction{marks.length === 1 ? "" : "s"}
+          </button>
+          <button type="button" onClick={() => setMarks([])} disabled={!marks.length} className={BTN}>
+            Clear
+          </button>
+          <span className="text-faint">The words under a mark are removed from the file, not just covered.</span>
+        </>
+      );
+    return null;
+  };
+  const options = current ? toolOptions() : null;
+
   return (
     <div
       ref={rootRef}
@@ -1165,21 +1631,33 @@ export function PdfStudioWidget() {
       <input
         ref={fileInput}
         type="file"
-        accept="application/pdf,.pdf"
+        accept="application/pdf,.pdf,image/*"
+        multiple
         hidden
         onChange={(e) => {
-          if (e.target.files?.[0]) void openFile(e.target.files[0]);
+          if (e.target.files?.length) onDropFiles(e.target.files);
           e.target.value = "";
         }}
       />
       <input
         ref={insertInput}
         type="file"
-        accept="application/pdf,.pdf"
+        accept="application/pdf,.pdf,image/*"
+        multiple
         hidden
         onChange={(e) => {
           const at = Number(e.target.getAttribute("data-at") ?? pageCount);
-          if (e.target.files?.[0]) void insertPdf(e.target.files[0], at);
+          if (e.target.files?.length) void insertFiles(Array.from(e.target.files), at);
+          e.target.value = "";
+        }}
+      />
+      <input
+        ref={attachInput}
+        type="file"
+        hidden
+        onChange={(e) => {
+          const f = e.target.files?.[0];
+          if (f) setDialog({ kind: "attach", file: f });
           e.target.value = "";
         }}
       />
@@ -1196,6 +1674,7 @@ export function PdfStudioWidget() {
             if (pending && password) openBytes(pending.bytes, pending.name, pending.handle, "file", password);
           }}
           onPick={() => void pick()}
+          onPickImages={() => fileInput.current?.click()}
           onSample={() => void openSample()}
           restorable={restorable}
           onRestore={restore}
@@ -1210,6 +1689,7 @@ export function PdfStudioWidget() {
             setError(null);
             setPhase("empty");
           }}
+          preset={preset}
         />
       ) : (
         <>
@@ -1222,18 +1702,18 @@ export function PdfStudioWidget() {
               {menuOpen === "open" && (
                 <Menu onClose={() => setMenuOpen(null)}>
                   <MenuItem onClick={() => void pick()}>Open a PDF…</MenuItem>
+                  <MenuItem onClick={() => fileInput.current?.click()}>Open images as a PDF…</MenuItem>
                   <MenuItem onClick={() => void openSample()}>Open the sample</MenuItem>
-                  {recent.filter((r) => r.handle).length > 0 && <div className="my-1 border-t border-edge" />}
+                  {recent.filter((r) => r.handle).length > 0 && <MenuSeparator />}
                   {recent
                     .filter((r) => r.handle)
                     .slice(0, 6)
                     .map((r) => (
-                      <MenuItem key={`${r.name}-${r.openedAt}`} onClick={() => void openRecent(r)}>
-                        <span className="truncate">{r.name}</span>
-                        <span className="ml-auto pl-3 text-[11px] text-faint">{formatBytes(r.size)}</span>
+                      <MenuItem key={`${r.name}-${r.openedAt}`} onClick={() => void openRecent(r)} hint={formatBytes(r.size)}>
+                        {r.name}
                       </MenuItem>
                     ))}
-                  <div className="my-1 border-t border-edge" />
+                  <MenuSeparator />
                   <MenuItem onClick={close}>Close the document</MenuItem>
                 </Menu>
               )}
@@ -1264,14 +1744,29 @@ export function PdfStudioWidget() {
                   ["text", Type, "Text box (T)"],
                   ["draw", Pencil, "Draw (D)"],
                   ["image", ImagePlus, "Add an image"],
+                  null,
+                  ["edittext", TextCursorInput, "Edit the page's text (E)"],
+                  null,
+                  ["crop", Crop, "Crop by drawing the area (C)"],
+                  ["redact", EyeOff, "Redact (X)"],
                 ] as const
-              ).map(([id, Icon, title]) => (
-                <button key={id} type="button" onClick={() => void setTool(id)} className={cn(TOOL_BTN, "border-transparent", tool === id && "bg-accent text-on-accent hover:text-on-accent")} title={title} aria-pressed={tool === id} data-tool-button={id}>
-                  <Icon size={14} />
-                </button>
-              ))}
+              ).map((entry, k) => {
+                if (entry === null) return <span key={`sep-${k}`} className="mx-0.5 h-5 w-px bg-edge" />;
+                const [id, Icon, title] = entry;
+                return (
+                  <button key={id} type="button" onClick={() => setTool(id)} className={cn(TOOL_BTN, "border-transparent", tool === id && "bg-accent text-on-accent hover:text-on-accent")} title={title} aria-pressed={tool === id} data-tool-button={id}>
+                    <Icon size={14} />
+                  </button>
+                );
+              })}
             </div>
-            {hasSelection && (
+            <button type="button" onClick={() => setDialog({ kind: "sign" })} disabled={!!busy} className={BTN} title="Sign — draw, type or upload a signature and place it" data-sign>
+              <PenLine size={14} /> <span className="hidden md:inline">Sign</span>
+            </button>
+            <button type="button" onClick={() => setDialog({ kind: "stamp" })} disabled={!!busy} className={BTN} title="Stamp — APPROVED, DRAFT, a date, your own text" data-stamp>
+              <Stamp size={14} /> <span className="hidden md:inline">Stamp</span>
+            </button>
+            {hasSelection && tool !== "redact" && (
               <>
                 <button type="button" onClick={() => void markupSelection("Underline")} disabled={!!busy} className={ICON_BTN} title="Underline the selection" data-underline>
                   <Underline size={14} />
@@ -1356,67 +1851,35 @@ export function PdfStudioWidget() {
                 </button>
                 {menuOpen === "more" && (
                   <Menu onClose={() => setMenuOpen(null)} align="right">
+                    <MenuLabel>Document</MenuLabel>
                     <MenuItem onClick={() => void download()}>Download a copy</MenuItem>
-                    <MenuItem onClick={() => void pagePng()}>Save page {page} as PNG</MenuItem>
-                    <div className="my-1 border-t border-edge" />
+                    <MenuItem onClick={() => setDialog({ kind: "compress" })}>Compress…</MenuItem>
+                    <MenuItem onClick={() => setDialog({ kind: "export-images" })}>Save pages as images…</MenuItem>
+                    <MenuItem onClick={() => void extractText("copy")}>Copy all the text</MenuItem>
+                    <MenuItem onClick={() => void extractText("download")}>Download the text (.txt)</MenuItem>
+                    <MenuItem onClick={() => attachInput.current?.click()}>Attach a file…</MenuItem>
+                    <MenuSeparator />
+                    <MenuLabel>Pages</MenuLabel>
+                    <MenuItem onClick={() => setDialog({ kind: "watermark" })}>Watermark…</MenuItem>
+                    <MenuItem onClick={() => setDialog({ kind: "header" })}>Header, footer &amp; page numbers…</MenuItem>
+                    <MenuSeparator />
+                    <MenuLabel>Comments &amp; forms</MenuLabel>
                     <MenuItem onClick={() => void runOps({ type: "flatten", forms: true, annots: false }, "Form flattened")}>Flatten the form fields</MenuItem>
+                    <MenuItem onClick={() => void runOps({ type: "flatten-annots" }, "Comments baked into the pages")}>Flatten the comments into the pages</MenuItem>
                     <MenuItem onClick={() => window.confirm("Remove every comment and mark-up from the document?") && void runOps({ type: "clear-annots", which: "markup" }, "Comments removed")}>Remove all comments</MenuItem>
-                    <div className="my-1 border-t border-edge" />
+                    <MenuSeparator />
+                    <MenuLabel>Security &amp; repair</MenuLabel>
                     {current.password ? <MenuItem onClick={() => void runOps({ type: "decrypt" }, "Password removed").then(() => setDoc((d) => (d ? { ...d, password: undefined } : d)))}>Remove the password</MenuItem> : <MenuItem onClick={() => setDialog({ kind: "protect" })}>Protect with a password…</MenuItem>}
+                    <MenuItem onClick={() => void runOps({ type: "resave" }, "File rebuilt")}>Rebuild the file (repair)</MenuItem>
                   </Menu>
                 )}
               </div>
             </div>
-            {tool !== "select" && tool !== "note" && tool !== "image" && (
+            {options && (
               <div className="flex w-full flex-wrap items-center gap-2 border-t border-edge pt-1.5 text-[12px] text-muted" data-tool-options>
-                {tool === "highlight" && (
-                  <>
-                    <span>Colour</span>
-                    {HIGHLIGHT_COLORS.map((c) => (
-                      <button key={c} type="button" onClick={() => setParams((p) => ({ ...p, highlightColor: c }))} className={cn("h-5 w-5 rounded-full border border-black/15", params.highlightColor === c && "ring-2 ring-accent ring-offset-1 ring-offset-[var(--color-surface)]")} style={{ background: c }} aria-label={`Highlight in ${c}`} aria-pressed={params.highlightColor === c} />
-                    ))}
-                    <label className="inline-flex items-center gap-1">
-                      Free-hand width <input type="range" min={8} max={24} value={params.highlightThickness} onChange={(e) => setParams((p) => ({ ...p, highlightThickness: Number(e.target.value) }))} className="w-24 accent-[var(--accent)]" />
-                    </label>
-                    <span className="text-faint">Select text to highlight it; drag on empty space for a free-hand mark. Each highlight has a comment button.</span>
-                  </>
-                )}
-                {tool === "draw" && (
-                  <>
-                    <label className="inline-flex items-center gap-1">
-                      Colour <input type="color" value={params.inkColor} onChange={(e) => setParams((p) => ({ ...p, inkColor: e.target.value }))} className="h-6 w-8 cursor-pointer rounded border border-edge bg-transparent" />
-                    </label>
-                    <label className="inline-flex items-center gap-1">
-                      Width <input type="range" min={1} max={20} value={params.inkThickness} onChange={(e) => setParams((p) => ({ ...p, inkThickness: Number(e.target.value) }))} className="w-24 accent-[var(--accent)]" />
-                    </label>
-                    <label className="inline-flex items-center gap-1">
-                      Opacity <input type="range" min={10} max={100} value={Math.round(params.inkOpacity * 100)} onChange={(e) => setParams((p) => ({ ...p, inkOpacity: Number(e.target.value) / 100 }))} className="w-24 accent-[var(--accent)]" />
-                    </label>
-                  </>
-                )}
-                {tool === "text" && (
-                  <>
-                    <label className="inline-flex items-center gap-1">
-                      Colour <input type="color" value={params.textColor} onChange={(e) => setParams((p) => ({ ...p, textColor: e.target.value }))} className="h-6 w-8 cursor-pointer rounded border border-edge bg-transparent" />
-                    </label>
-                    <label className="inline-flex items-center gap-1">
-                      Size <input type="range" min={6} max={48} value={params.textSize} onChange={(e) => setParams((p) => ({ ...p, textSize: Number(e.target.value) }))} className="w-24 accent-[var(--accent)]" /> <span className="tabular">{params.textSize}</span>
-                    </label>
-                    <span className="text-faint">Click the page to place a text box.</span>
-                  </>
-                )}
+                {options}
               </div>
             )}
-            {tool === "note" && (
-              <div className="flex w-full flex-wrap items-center gap-2 border-t border-edge pt-1.5 text-[12px] text-muted" data-tool-options>
-                <span>Note colour</span>
-                {NOTE_COLORS.map((c) => (
-                  <button key={c} type="button" onClick={() => setNoteColor(c)} className={cn("h-5 w-5 rounded-full border border-black/15", noteColor === c && "ring-2 ring-accent ring-offset-1 ring-offset-[var(--color-surface)]")} style={{ background: c }} aria-label={`Notes in ${c}`} aria-pressed={noteColor === c} />
-                ))}
-                <span className="text-faint">Click anywhere on a page to leave a note there.</span>
-              </div>
-            )}
-            {tool === "image" && <p className="w-full border-t border-edge pt-1.5 text-[12px] text-faint">Choose an image file when asked; it is placed on the page as a stamp you can move and resize.</p>}
           </div>
 
           <SplitPane id="pdf-studio" className="min-h-0 flex-1" defaultRatio={0.24} minFirst={240} minSecond={320} collapsible="first" firstLabel="side panel" secondLabel="document" stackBelow="never" gap={8} hidden={sidebarOpen ? null : "first"} first={sidebar} second={viewerPane} />
@@ -1440,7 +1903,7 @@ export function PdfStudioWidget() {
                 </button>
               </span>
             )}
-            <span className="ml-auto hidden sm:inline">⌘F find · ⌘S save · H N T D tools · R rotate view</span>
+            <span className="ml-auto hidden sm:inline">⌘F find · ⌘S save · H N T D E C X tools · R rotate view</span>
           </div>
         </>
       )}
@@ -1458,25 +1921,60 @@ export function PdfStudioWidget() {
             setDialog(null);
             void runOps({ type: "uncrop", pages: dialog.pages }, "Crop removed");
           }}
+          onDraw={() => {
+            setDialog(null);
+            setTool("crop");
+          }}
         />
       )}
       {dialog?.kind === "protect" && (
         <ProtectDialog
           onClose={() => setDialog(null)}
-          onProtect={(user, owner) => {
+          onProtect={(user, owner, permissions) => {
             setDialog(null);
-            void runOps({ type: "encrypt", userPassword: user, ownerPassword: owner }, "Protected").then((r) => r && setDoc((d) => (d ? { ...d, password: user } : d)));
+            void runOps({ type: "encrypt", userPassword: user, ownerPassword: owner, permissions }, "Protected").then((r) => r && setDoc((d) => (d ? { ...d, password: user || owner } : d)));
           }}
         />
       )}
-      {dialog?.kind === "insert" && (
-        <PasswordDialog
-          title={`“${dialog.name}” is protected`}
-          wrong={dialog.wrong}
+      {dialog?.kind === "insert" && <PasswordDialog title={`“${dialog.name}” is protected`} wrong={dialog.wrong} onClose={() => setDialog(null)} onSubmit={(pw) => void insertFiles([new File([dialog.bytes as unknown as BlobPart], dialog.name, { type: "application/pdf" })], dialog.at, pw)} />}
+      {dialog?.kind === "watermark" && (
+        <WatermarkDialog
+          current={page}
+          count={pageCount}
           onClose={() => setDialog(null)}
-          onSubmit={(pw) => void insertPdf(new File([dialog.bytes as unknown as BlobPart], dialog.name), dialog.at, pw)}
+          onApply={(input) => {
+            setDialog(null);
+            void runOps({ type: "watermark", input }, "Watermark added");
+          }}
         />
       )}
+      {dialog?.kind === "header" && current && (
+        <HeaderFooterDialog
+          current={page}
+          count={pageCount}
+          fileName={current.name}
+          onClose={() => setDialog(null)}
+          onApply={(input) => {
+            setDialog(null);
+            void runOps({ type: "header-footer", input }, "Header and footer added");
+          }}
+        />
+      )}
+      {dialog?.kind === "compress" && current && <CompressDialog size={current.bytes.length} onClose={() => setDialog(null)} onApply={(o) => void compress(o)} />}
+      {dialog?.kind === "export-images" && <ExportImagesDialog current={page} count={pageCount} onClose={() => setDialog(null)} onExport={(input) => void exportImages(input)} />}
+      {dialog?.kind === "attach" && (
+        <AttachDialog
+          file={dialog.file}
+          onClose={() => setDialog(null)}
+          onAttach={(name, description) => {
+            const f = dialog.file;
+            setDialog(null);
+            void f.arrayBuffer().then((buf) => runOps({ type: "attach", input: { bytes: new Uint8Array(buf), name, mimeType: f.type || undefined, description: description || undefined } }, `Attached ${name}`)).then(() => void setTab("attachments"));
+          }}
+        />
+      )}
+      {dialog?.kind === "stamp" && <StampDialog author={author} onClose={() => setDialog(null)} onUse={(blob) => void placeImage(blob, "stamp.png")} />}
+      {dialog?.kind === "sign" && <SignatureDialog saved={signatures} onClose={() => setDialog(null)} onUse={(blob, remember) => void placeSignature(blob, remember)} onForget={(s) => void forgetSignature(s).then(setSignatures)} />}
     </div>
   );
 }
@@ -1499,227 +1997,26 @@ async function destinationPage(pdf: PDFDocumentProxy, dest: string | unknown[] |
   }
 }
 
-function Menu({ children, onClose, align = "left" }: { children: React.ReactNode; onClose(): void; align?: "left" | "right" }) {
-  return (
-    <div role="menu" className={cn("absolute top-full z-40 mt-1 min-w-52 rounded-[var(--radius)] border border-edge bg-base p-1 shadow-pop", align === "right" ? "right-0" : "left-0")} onClick={onClose} data-menu-list>
-      {children}
-    </div>
-  );
-}
-
-function MenuItem({ children, onClick }: { children: React.ReactNode; onClick(): void }) {
-  return (
-    <button type="button" role="menuitem" onClick={onClick} className="flex w-full items-center rounded-[var(--radius-sm)] px-2 py-1.5 text-left text-[12.5px] text-ink hover:bg-raised">
-      {children}
-    </button>
-  );
-}
-
-function Modal({ title, children, onClose }: { title: string; children: React.ReactNode; onClose(): void }) {
-  return (
-    <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/30 p-4" onClick={onClose} role="presentation">
-      <div role="dialog" aria-label={title} className="w-full max-w-md rounded-[var(--radius)] border border-edge bg-base p-4 shadow-dialog" onClick={(e) => e.stopPropagation()} data-pdf-dialog={title}>
-        <div className="mb-3 flex items-center">
-          <h3 className="text-[14px] font-semibold text-ink">{title}</h3>
-          <button type="button" onClick={onClose} className={cn(ICON_BTN, "ml-auto h-7 w-7 border-0")} aria-label="Close">
-            <X size={14} />
-          </button>
-        </div>
-        {children}
-      </div>
-    </div>
-  );
-}
-
-function NoteDialog({ color, onColor, author, onSave, onCancel }: { color: string; onColor(c: string): void; author: string; onSave(text: string): void; onCancel(): void }) {
-  const [text, setText] = useState("");
-  const ref = useRef<HTMLTextAreaElement>(null);
-  useEffect(() => {
-    ref.current?.focus();
-  }, []);
-  return (
-    <div role="dialog" aria-label="New note" className="absolute left-1/2 top-4 z-30 w-[min(320px,calc(100%-16px))] -translate-x-1/2 rounded-[var(--radius)] border border-edge bg-base p-2 shadow-pop" data-note-dialog onPointerDown={(e) => e.stopPropagation()}>
-      <div className="mb-1 flex items-center gap-1.5 text-[11.5px] text-faint">
-        <MessageSquarePlus size={12} />
-        <span>{author || "New note"}</span>
-        <span className="ml-auto flex items-center gap-1">
-          {NOTE_COLORS.map((c) => (
-            <button key={c} type="button" onClick={() => onColor(c)} className={cn("h-4 w-4 rounded-full border border-black/15", color === c && "ring-2 ring-accent")} style={{ background: c }} aria-label={`Colour ${c}`} />
-          ))}
-        </span>
-      </div>
-      <textarea
-        ref={ref}
-        value={text}
-        onChange={(e) => setText(e.target.value.slice(0, 4000))}
-        onKeyDown={(e) => {
-          if (e.key === "Escape") {
-            e.preventDefault();
-            onCancel();
-          } else if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && text.trim()) {
-            e.preventDefault();
-            onSave(text);
-          }
-        }}
-        rows={3}
-        placeholder="Write the note…"
-        className="w-full resize-y rounded-[var(--radius-sm)] border border-edge bg-base px-2 py-1.5 text-[13px] leading-snug text-ink outline-none placeholder:text-faint focus:border-accent"
-        data-note-text
-      />
-      <div className="mt-1.5 flex items-center gap-1">
-        <button type="button" disabled={!text.trim()} onClick={() => onSave(text)} className={PRIMARY} data-note-save>
-          Add note
-        </button>
-        <button type="button" onClick={onCancel} className={BTN}>
-          Cancel
-        </button>
-        <span className="ml-auto text-[11px] text-faint">⌘↵</span>
-      </div>
-    </div>
-  );
-}
-
-function SplitDialog({ count, hasOutline, onClose, onSplit }: { count: number; hasOutline: boolean; onClose(): void; onSplit(mode: "every" | "ranges" | "chapters", every: number, ranges: string): void }) {
-  const [mode, setMode] = useState<"every" | "ranges" | "chapters">("every");
-  const [every, setEvery] = useState(1);
-  const [ranges, setRanges] = useState("");
-  const n = mode === "every" ? Math.ceil(count / Math.max(1, every)) : null;
-  return (
-    <Modal title="Split the document" onClose={onClose}>
-      <form
-        className="space-y-3 text-[13px]"
-        onSubmit={(e) => {
-          e.preventDefault();
-          onSplit(mode, every, ranges);
-        }}
-      >
-        <label className="flex items-center gap-2">
-          <input type="radio" name="mode" checked={mode === "every"} onChange={() => setMode("every")} className="accent-[var(--accent)]" />
-          <span>Every</span>
-          <input type="number" min={1} max={count} value={every} onChange={(e) => setEvery(Math.max(1, Number(e.target.value) || 1))} className="input h-8 w-20 px-2 py-0" disabled={mode !== "every"} />
-          <span className="text-muted">page{every > 1 ? "s" : ""} → {n} file{n === 1 ? "" : "s"}</span>
-        </label>
-        <label className="flex items-start gap-2">
-          <input type="radio" name="mode" checked={mode === "ranges"} onChange={() => setMode("ranges")} className="mt-1 accent-[var(--accent)]" />
-          <span className="flex-1">
-            <span>By ranges, one file per line</span>
-            <textarea value={ranges} onChange={(e) => setRanges(e.target.value)} rows={3} placeholder={"1-3\n4-6, 9\n7-"} className="input mt-1 font-mono text-[12.5px]" disabled={mode !== "ranges"} />
-          </span>
-        </label>
-        <label className={cn("flex items-center gap-2", !hasOutline && "opacity-50")}>
-          <input type="radio" name="mode" checked={mode === "chapters"} onChange={() => setMode("chapters")} disabled={!hasOutline} className="accent-[var(--accent)]" />
-          <span>By the outline&apos;s top-level chapters</span>
-        </label>
-        <p className="text-[12px] text-faint">Several files download as one zip; the originals keep their comments and form values.</p>
-        <div className="flex gap-2 pt-1">
-          <button type="submit" className={PRIMARY} data-split-go>
-            Split
-          </button>
-          <button type="button" onClick={onClose} className={BTN}>
-            Cancel
-          </button>
-        </div>
-      </form>
-    </Modal>
-  );
-}
-
-function CropDialog({ pages, onClose, onCrop, onUncrop }: { pages: number[]; onClose(): void; onCrop(inset: { top: number; right: number; bottom: number; left: number }): void; onUncrop(): void }) {
-  const [mm, setMm] = useState({ top: 10, right: 10, bottom: 10, left: 10 });
-  const pt = (v: number) => (v / 25.4) * 72;
-  return (
-    <Modal title={`Crop ${pages.length === 1 ? `page ${pages[0] + 1}` : `${pages.length} pages`}`} onClose={onClose}>
-      <form
-        className="space-y-3 text-[13px]"
-        onSubmit={(e) => {
-          e.preventDefault();
-          onCrop({ top: pt(mm.top), right: pt(mm.right), bottom: pt(mm.bottom), left: pt(mm.left) });
-        }}
-      >
-        <p className="text-muted">Trim this much from each edge, in millimetres. Nothing is deleted: the crop box is what viewers show, and it can be removed again.</p>
-        <div className="grid grid-cols-2 gap-2">
-          {(["top", "right", "bottom", "left"] as const).map((k) => (
-            <label key={k} className="flex items-center gap-2">
-              <span className="w-14 capitalize text-muted">{k}</span>
-              <input type="number" min={0} max={200} step={0.5} value={mm[k]} onChange={(e) => setMm((m) => ({ ...m, [k]: Number(e.target.value) || 0 }))} className="input h-8 px-2 py-0" data-crop={k} />
-            </label>
-          ))}
-        </div>
-        <div className="flex gap-2 pt-1">
-          <button type="submit" className={PRIMARY} data-crop-go>
-            Crop
-          </button>
-          <button type="button" onClick={onUncrop} className={BTN}>
-            Remove crop
-          </button>
-          <button type="button" onClick={onClose} className={cn(BTN, "ml-auto")}>
-            Cancel
-          </button>
-        </div>
-      </form>
-    </Modal>
-  );
-}
-
-function ProtectDialog({ onClose, onProtect }: { onClose(): void; onProtect(user: string, owner: string): void }) {
-  const [user, setUser] = useState("");
-  const [owner, setOwner] = useState("");
-  return (
-    <Modal title="Protect with a password" onClose={onClose}>
-      <form
-        className="space-y-3 text-[13px]"
-        onSubmit={(e) => {
-          e.preventDefault();
-          if (user) onProtect(user, owner || user);
-        }}
-      >
-        <p className="text-muted">The document is encrypted with AES-256. Anyone opening it will need the password; PDF Studio keeps it while you work and the file stays protected when you save.</p>
-        <label className="block">
-          <span className="text-muted">Password to open</span>
-          <input type="password" value={user} onChange={(e) => setUser(e.target.value)} className="input mt-1 h-9" autoFocus data-protect-user />
-        </label>
-        <label className="block">
-          <span className="text-muted">Owner password (optional, for changing permissions later)</span>
-          <input type="password" value={owner} onChange={(e) => setOwner(e.target.value)} className="input mt-1 h-9" data-protect-owner />
-        </label>
-        <div className="flex gap-2 pt-1">
-          <button type="submit" disabled={!user} className={PRIMARY} data-protect-go>
-            Protect
-          </button>
-          <button type="button" onClick={onClose} className={BTN}>
-            Cancel
-          </button>
-        </div>
-      </form>
-    </Modal>
-  );
-}
-
-function PasswordDialog({ title, wrong, onClose, onSubmit }: { title: string; wrong: boolean; onClose(): void; onSubmit(pw: string): void }) {
-  const [pw, setPw] = useState("");
-  return (
-    <Modal title={title} onClose={onClose}>
-      <form
-        className="space-y-3 text-[13px]"
-        onSubmit={(e) => {
-          e.preventDefault();
-          if (pw) onSubmit(pw);
-        }}
-      >
-        {wrong && <p className="text-danger">Wrong password — try again.</p>}
-        <input type="password" value={pw} onChange={(e) => setPw(e.target.value)} placeholder="Password" className="input h-9" autoFocus />
-        <div className="flex gap-2">
-          <button type="submit" disabled={!pw} className={PRIMARY}>
-            Unlock
-          </button>
-          <button type="button" onClick={onClose} className={BTN}>
-            Cancel
-          </button>
-        </div>
-      </form>
-    </Modal>
-  );
-}
+const PRESET_BLURB: Partial<Record<Preset, string>> = {
+  merge: "Open the first PDF, then add the others from the Organise tab — or drop them all here at once.",
+  split: "Open a PDF; the Split dialog asks how to cut it.",
+  rotate: "Open a PDF; the Organise tab rotates the pages you pick, for good.",
+  "to-images": "Open a PDF; pages render to PNG or JPEG at the resolution you choose.",
+  "from-images": "Drop pictures here (PNG, JPEG, WebP, HEIC…) — each becomes a page of a new PDF.",
+  sign: "Open the PDF to sign; draw, type or upload your signature and place it.",
+  stamp: "Open a PDF and stamp it APPROVED, DRAFT, CONFIDENTIAL or anything you type.",
+  watermark: "Open a PDF; the watermark goes across the pages you choose.",
+  "page-numbers": "Open a PDF; page numbers, headers and footers follow.",
+  redact: "Open a PDF; mark what must go, and the words underneath are removed from the file.",
+  compress: "Open a PDF to make it smaller — pictures re-encoded, waste removed.",
+  protect: "Open a PDF to set a password and permissions, or to remove them.",
+  unlock: "Open the protected PDF with its password; then remove the password from the More menu.",
+  "edit-text": "Open a PDF and click any line to change its words in place.",
+  crop: "Open a PDF and draw the area to keep.",
+  flatten: "Open a PDF; the More menu flattens its form fields or its comments.",
+  "extract-text": "Open a PDF; the More menu copies or downloads its text.",
+  attach: "Open a PDF; the Files tab attaches documents that travel inside it.",
+};
 
 function EmptyState({
   phase,
@@ -1730,6 +2027,7 @@ function EmptyState({
   onPassword,
   onUnlock,
   onPick,
+  onPickImages,
   onSample,
   restorable,
   onRestore,
@@ -1737,6 +2035,7 @@ function EmptyState({
   recent,
   onRecent,
   onReset,
+  preset,
 }: {
   phase: Phase;
   error: string | null;
@@ -1746,6 +2045,7 @@ function EmptyState({
   onPassword(v: string): void;
   onUnlock(): void;
   onPick(): void;
+  onPickImages(): void;
   onSample(): void;
   restorable: Autosave | null;
   onRestore(): void;
@@ -1753,6 +2053,7 @@ function EmptyState({
   recent: RecentEntry[];
   onRecent(r: RecentEntry): void;
   onReset(): void;
+  preset?: Preset;
 }) {
   if (phase === "loading")
     return (
@@ -1797,17 +2098,23 @@ function EmptyState({
         </button>
       </div>
     );
+  const blurb = preset ? PRESET_BLURB[preset] : null;
   return (
     <div className={cn("panel flex min-h-0 flex-1 flex-col items-center justify-center gap-3 border-dashed p-8 text-center", dragOver && "border-accent")} data-pdf-empty>
       <span className="flex h-12 w-12 items-center justify-center rounded-full border border-edge text-accent">
         <FileText size={20} />
       </span>
-      <p className="font-display text-base font-semibold text-ink">Drop a PDF here</p>
-      <p className="max-w-sm font-mono text-xs text-faint">or open one, paste it, or try the sample. Read, search, fill forms, highlight, comment, organise pages — nothing is uploaded.</p>
+      <p className="font-display text-base font-semibold text-ink">{preset === "from-images" ? "Drop pictures here" : "Drop a PDF here"}</p>
+      <p className="max-w-sm font-mono text-xs text-faint">{blurb ?? "or open one, paste it, or try the sample. Read, search, fill forms, edit text, sign, comment, redact, organise, compress — nothing is uploaded."}</p>
       <div className="mt-1 flex flex-wrap items-center justify-center gap-2">
-        <button type="button" onClick={onPick} className="inline-flex h-9 items-center gap-2 rounded-[var(--radius)] bg-accent px-4 text-sm font-medium text-on-accent hover:brightness-110" data-open-file>
-          <FolderOpen size={14} /> Open a PDF
+        <button type="button" onClick={preset === "from-images" ? onPickImages : onPick} className="inline-flex h-9 items-center gap-2 rounded-[var(--radius)] bg-accent px-4 text-sm font-medium text-on-accent hover:brightness-110" data-open-file>
+          <FolderOpen size={14} /> {preset === "from-images" ? "Choose images" : preset === "merge" ? "Open the PDFs" : "Open a PDF"}
         </button>
+        {preset !== "from-images" && (
+          <button type="button" onClick={onPickImages} className="inline-flex h-9 items-center gap-2 rounded-[var(--radius)] border border-edge px-3 text-sm text-ink hover:border-accent hover:text-accent" data-open-images>
+            Images → PDF
+          </button>
+        )}
         <button type="button" onClick={onSample} className="inline-flex h-9 items-center gap-2 rounded-[var(--radius)] border border-edge px-3 text-sm text-ink hover:border-accent hover:text-accent" data-open-sample>
           Try the sample
         </button>

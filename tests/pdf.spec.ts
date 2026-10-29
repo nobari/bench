@@ -136,3 +136,47 @@ test("the Organise tab deletes a page and undo restores it", async ({ page }, te
   await page.click("[data-undo]");
   await expect(page.locator(".pdfViewer .page")).toHaveCount(6, { timeout: 30_000 });
 });
+
+test("text is edited in place, a watermark is added and the file compresses", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop", "The editor needs a desktop viewport.");
+  test.setTimeout(180_000);
+  page.on("dialog", (d) => d.accept());
+  await openSample(page);
+  type Hook = { textIndex(p: number): Promise<{ lines: { id: string; text: string }[] } | null>; document(): { getPage(n: number): Promise<{ getTextContent(): Promise<{ items: { str?: string }[] }> }> }; bytes(): Uint8Array | null };
+  const pageText = (n: number) => page.evaluate(async (n) => {
+    const h = (window as unknown as { __benchPdf: Hook }).__benchPdf;
+    const tc = await (await h.document().getPage(n)).getTextContent();
+    return tc.items.map((i) => i.str ?? "").join(" ");
+  }, n);
+  // Edit the heading of page 2 ("Reading" → "Browsing"): the standard font carries every letter, so no stand-in.
+  await page.evaluate(() => (window as unknown as { __benchPdf: { api(): { goTo(p: number): void } } }).__benchPdf.api().goTo(2));
+  await page.click('[data-tool-button="edittext"]');
+  const lineId = await page.evaluate(async () => {
+    const h = (window as unknown as { __benchPdf: Hook }).__benchPdf;
+    const idx = await h.textIndex(1);
+    return idx?.lines.find((l) => l.text === "Reading")?.id ?? null;
+  });
+  expect(lineId).toBeTruthy();
+  await page.waitForSelector(`[data-text-line="${lineId}"]`, { timeout: 60_000 });
+  await page.click(`[data-text-line="${lineId}"]`);
+  await page.fill("[data-text-input]", "Browsing");
+  const before = await page.evaluate(() => (window as unknown as { __benchPdf: Hook }).__benchPdf.bytes()?.length ?? 0);
+  await page.press("[data-text-input]", "Enter");
+  await page.waitForFunction((b) => ((window as unknown as { __benchPdf: Hook }).__benchPdf.bytes()?.length ?? 0) !== b, before, { timeout: 60_000 });
+  await page.waitForFunction(() => !document.querySelector("[data-pdf-busy]"), null, { timeout: 60_000 });
+  await expect.poll(() => pageText(2), { timeout: 30_000 }).toContain("Browsing");
+  expect(await pageText(2)).not.toContain("Reading");
+  // A watermark across every page.
+  await page.click("[data-more-menu]");
+  await page.click("text=Watermark…");
+  await page.fill("[data-watermark-text]", "SAMPLE");
+  await page.click("[data-watermark-go]");
+  await expect.poll(() => pageText(4), { timeout: 60_000 }).toContain("SAMPLE");
+  // Compress (light preset: the sample has no pictures; the status line reports the sizes).
+  await page.click("[data-more-menu]");
+  await page.click("text=Compress…");
+  // "Light" must be the dialog's preset, not the header's theme button.
+  await page.locator('[data-pdf-dialog="Compress the PDF"]').getByRole("button", { name: "Light", exact: true }).click();
+  await page.click("[data-compress-go]");
+  await expect(page.locator("[data-pdf-status]")).toContainText("Compressed", { timeout: 60_000 });
+});

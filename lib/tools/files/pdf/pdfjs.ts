@@ -86,6 +86,8 @@ export async function openPdf(bytes: Uint8Array, password?: string): Promise<PDF
     wasmUrl: `${PDFJS_BASE}wasm/`,
     iccUrl: `${PDFJS_BASE}iccs/`,
     enableXfa: true,
+    // The text editor reads each font's flags, encoding and widths (lib/tools/files/pdf/textruns.ts).
+    fontExtraProperties: true,
   });
   try {
     return await task.promise;

@@ -1,6 +1,6 @@
 {
   "name": "bench",
-  "version": "1.89.0",
+  "version": "1.90.0",
   "private": true,
   "description": "A precision toolkit for the web — fast, private, client-side developer utilities.",
   "license": "MIT",
@@ -19,6 +19,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@cantoo/fontkit": "^2.0.12",
     "@cantoo/pdf-lib": "2.11.1",
     "@codemirror/autocomplete": "^6.20.3",
     "@codemirror/commands": "^6.11.1",

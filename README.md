@@ -42,7 +42,7 @@ Bench is the kind of small tools you reach for a dozen times a day — encode so
 | **JSON & Data** (`/json`) | JSON Viewer · JSON Schema |
 | **Images & Video** (`/media`) | *Images:* Image Converter · Base64 image · Content Credentials (C2PA) — *GIFs & stickers:* GIF Maker · TGS Stickers — *Video:* Video editor · MP4 tags · Slow-mo to normal speed — *QR codes:* QR & barcode scanner · QR Code Generator |
 | **Audio & Music** (`/audio`) | *Audio files:* Audio converter · Audio bitrate & size — *Music math:* Note ↔ frequency · BPM ↔ ms · Transpose chords · Decibels · Semitones ↔ cents |
-| **Files & Archives** (`/files`) | *Archives:* Archive Extractor · Archive Creator — *Readers:* Comic Reader — *Documents:* PDF Studio — *Storage:* Storage & Card Doctor |
+| **Files & Archives** (`/files`) | *Archives:* Archive Extractor · Archive Creator — *Readers:* Comic Reader — *Documents:* PDF Studio · Merge PDF · Split PDF · Rotate PDF · Compress PDF · Sign PDF · Edit PDF Text · Redact PDF · Watermark PDF · Page Numbers · PDF to Images · Images to PDF · Protect PDF · Crop PDF — *Storage:* Storage & Card Doctor |
 | **Crypto & Hashing** (`/crypto`) | *Hashing & signatures:* Hash Generator · ECDSA Sign & Verify — *Ethereum:* EIP-55 Checksum · Wallet Generator |
 | **Generators** (`/generators`) | *Identifiers & passwords:* UUID & NanoID · Password Generator — *Randomness:* Random Generator · Lucky Draw |
 | **Time & Date** (`/time`) | *Dates & timestamps:* Unix Timestamp · Date Converter · Day Calculator — *Schedules:* Cron — *Sky & astronomy:* Earth, Sun & Moon · Sun–Earth–Moon scale |

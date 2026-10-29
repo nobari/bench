@@ -13,6 +13,18 @@ export async function loadPdf(bytes: Uint8Array, opts: LoadOptions = {}): Promis
   return PDFDocument.load(bytes, { password: opts.password, updateMetadata: false });
 }
 
+/**
+ * pdf-lib encodes a content stream it created the first time the document is saved and keeps that encoding, so
+ * operators drawn onto the page afterwards would be lost by the next save. A document kept alive across saves (the
+ * worker's cache) has those caches dropped after each save.
+ */
+export function forgetStreamCaches(doc: PDFDocument): void {
+  for (const [, obj] of doc.context.enumerateIndirectObjects()) {
+    const s = obj as unknown as { contentsCache?: { invalidate?: () => void } };
+    if (s && typeof s === "object" && s.contentsCache?.invalidate) s.contentsCache.invalidate();
+  }
+}
+
 const INHERITED = ["Resources", "MediaBox", "CropBox", "Rotate"].map((n) => PDFName.of(n));
 
 /**

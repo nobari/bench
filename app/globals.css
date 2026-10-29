@@ -912,6 +912,20 @@ html[data-nav="hidden"] .tool-nav {
 [data-pdf-viewer][data-tool="note"] .textLayer span {
   cursor: copy;
 }
+/* The text-editing, crop and redaction overlays take the pointer; the layers under them must not. */
+[data-pdf-viewer][data-tool="edittext"] .textLayer,
+[data-pdf-viewer][data-tool="edittext"] .annotationLayer,
+[data-pdf-viewer][data-tool="crop"] .textLayer,
+[data-pdf-viewer][data-tool="crop"] .annotationLayer,
+[data-pdf-viewer][data-tool="redact"] .annotationLayer {
+  pointer-events: none;
+}
+[data-pdf-viewer][data-tool="redact"] .textLayer {
+  pointer-events: none;
+}
+[data-pdf-viewer] [data-pdf-overlays] input {
+  font-kerning: normal;
+}
 [data-pdf-studio] .bench-flash {
   outline: 2px solid var(--accent);
   outline-offset: 3px;

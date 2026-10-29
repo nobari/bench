@@ -5,7 +5,7 @@
  * The Comments and Pages panels have files of their own.
  */
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { ChevronDown, ChevronRight, Download, ExternalLink, Pencil } from "lucide-react";
+import { ChevronDown, ChevronRight, Download, ExternalLink, Paperclip, Pencil, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatBytes } from "@/lib/tools/bytes";
 import { formatDate } from "@/lib/tools/files/pdf/comments";
@@ -163,25 +163,50 @@ export interface Attachment {
   description?: string;
 }
 
-export function AttachmentList({ attachments, onDownload }: { attachments: Attachment[] | null; onDownload(a: Attachment): void }) {
-  if (!attachments) return <p className="px-3 py-3 text-[12.5px] text-faint">Looking for attachments…</p>;
-  if (!attachments.length) return <p className="px-3 py-3 text-[12.5px] text-faint">No files are attached to this document.</p>;
+export function AttachmentList({ attachments, onDownload, onAdd, onRemove, busy }: { attachments: Attachment[] | null; onDownload(a: Attachment): void; onAdd?(): void; onRemove?(a: Attachment): void; busy?: boolean }) {
+  const header = onAdd && (
+    <div className="flex items-center gap-1 border-b border-edge px-2.5 py-2">
+      <button type="button" onClick={onAdd} disabled={busy} className="inline-flex h-7 items-center gap-1 rounded-[var(--radius-sm)] border border-edge px-2 text-[12px] text-muted hover:border-accent hover:text-accent disabled:opacity-40" data-attach-add>
+        <Paperclip size={12} /> Attach a file…
+      </button>
+      <span className="text-[11px] text-faint">Files travel inside the PDF.</span>
+    </div>
+  );
+  if (!attachments)
+    return (
+      <div className="flex h-full flex-col">
+        {header}
+        <p className="px-3 py-3 text-[12.5px] text-faint">Looking for attachments…</p>
+      </div>
+    );
   return (
-    <ul className="h-full space-y-0.5 overflow-auto px-1.5 py-1.5" data-attachment-list>
-      {attachments.map((a) => (
-        <li key={a.name}>
-          <button type="button" onClick={() => onDownload(a)} className="flex w-full items-center gap-2 rounded-[var(--radius-sm)] px-2 py-1.5 text-left hover:bg-raised" data-attachment={a.filename}>
-            <Download size={13} className="shrink-0 text-muted" />
-            <span className="min-w-0 flex-1">
-              <span className="block truncate text-[12.5px] text-ink">{a.filename}</span>
-              <span className="block text-[11px] text-faint">
-                {[a.size !== null ? formatBytes(a.size) : "", a.description ?? ""].filter(Boolean).join(" · ") || "Click to download"}
-              </span>
-            </span>
-          </button>
-        </li>
-      ))}
-    </ul>
+    <div className="flex h-full min-h-0 flex-col">
+      {header}
+      {!attachments.length ? (
+        <p className="px-3 py-3 text-[12.5px] text-faint">No files are attached to this document.</p>
+      ) : (
+        <ul className="min-h-0 flex-1 space-y-0.5 overflow-auto px-1.5 py-1.5" data-attachment-list>
+          {attachments.map((a) => (
+            <li key={a.name} className="flex items-center gap-1">
+              <button type="button" onClick={() => onDownload(a)} className="flex min-w-0 flex-1 items-center gap-2 rounded-[var(--radius-sm)] px-2 py-1.5 text-left hover:bg-raised" data-attachment={a.filename}>
+                <Download size={13} className="shrink-0 text-muted" />
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-[12.5px] text-ink">{a.filename}</span>
+                  <span className="block text-[11px] text-faint">
+                    {[a.size !== null ? formatBytes(a.size) : "", a.description ?? ""].filter(Boolean).join(" · ") || "Click to download"}
+                  </span>
+                </span>
+              </button>
+              {onRemove && (
+                <button type="button" onClick={() => onRemove(a)} disabled={busy} className="flex h-7 w-7 shrink-0 items-center justify-center rounded-[var(--radius-sm)] text-faint hover:bg-raised hover:text-danger disabled:opacity-40" title="Remove this attachment" aria-label={`Remove ${a.filename}`} data-attachment-remove={a.filename}>
+                  <X size={13} />
+                </button>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   );
 }
 

@@ -5,6 +5,7 @@
  * kept in the worker under a token so the bytes are sent only when they changed on this side.
  */
 import type { PdfOp } from "@/lib/tools/files/pdf/ops";
+import type { CompressReport } from "@/lib/tools/files/pdf/compress";
 import type { OpsRequest, OpsResponse } from "./pdf-ops.worker";
 
 export interface OpResult {
@@ -14,7 +15,25 @@ export interface OpResult {
   annotId?: string;
   files?: { name: string; bytes: Uint8Array }[];
   count?: number;
+  warnings?: string[];
+  report?: CompressReport;
   ms: number;
+}
+
+/** Copies every byte array inside an operation (so the caller keeps its own) and lists the copies for transfer. */
+function detachBytes<T>(value: T, transfer: Transferable[]): T {
+  if (value instanceof Uint8Array) {
+    const copy = value.slice();
+    transfer.push(copy.buffer as ArrayBuffer);
+    return copy as unknown as T;
+  }
+  if (Array.isArray(value)) return value.map((v) => detachBytes(v, transfer)) as unknown as T;
+  if (value && typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) out[k] = detachBytes(v, transfer);
+    return out as T;
+  }
+  return value;
 }
 
 export class PdfOpsClient {
@@ -72,17 +91,14 @@ export class PdfOpsClient {
       payload = bytes.slice().buffer as ArrayBuffer;
       transfer.push(payload);
     }
-    const ops = (Array.isArray(op) ? op : [op]).map((o) => {
-      if (o.type !== "insert-pdf") return o;
-      // The other document's bytes go along too (a copy, so the caller keeps its own).
-      const copy = o.bytes.slice();
-      transfer.push(copy.buffer as ArrayBuffer);
-      return { ...o, bytes: copy };
-    });
+    // Bytes inside operations (another PDF, images, attachments) go along as copies, so the caller keeps its own.
+    const ops = detachBytes(Array.isArray(op) ? op : [op], transfer);
     let r = await this.send({ id, kind: "op", ops, token: known ? this.token : null, bytes: payload, password }, transfer);
     if (!r.ok && r.needsBytes) {
       const again = bytes.slice().buffer as ArrayBuffer;
-      r = await this.send({ id: ++this.seq, kind: "op", ops, token: null, bytes: again, password }, [again]);
+      const retryTransfer: Transferable[] = [again];
+      const opsAgain = detachBytes(Array.isArray(op) ? op : [op], retryTransfer);
+      r = await this.send({ id: ++this.seq, kind: "op", ops: opsAgain, token: null, bytes: again, password }, retryTransfer);
     }
     if (!r.ok) throw new Error(r.error);
     const out = r.changed && r.bytes ? new Uint8Array(r.bytes) : bytes;
@@ -94,8 +110,23 @@ export class PdfOpsClient {
       annotId: r.annotId,
       files: r.files?.map((f) => ({ name: f.name, bytes: new Uint8Array(f.bytes) })),
       count: r.count,
+      warnings: r.warnings,
+      report: r.report,
       ms: r.ms,
     };
+  }
+
+  /** Operations on a new, empty document (pages from images): the bytes of the result. */
+  async runFresh(op: PdfOp | PdfOp[]): Promise<OpResult> {
+    const transfer: Transferable[] = [];
+    const ops = detachBytes(Array.isArray(op) ? op : [op], transfer);
+    const r = await this.send({ id: ++this.seq, kind: "op", ops, token: null, fresh: true }, transfer);
+    if (!r.ok) throw new Error(r.error);
+    if (!r.bytes) throw new Error("Nothing was produced");
+    const out = new Uint8Array(r.bytes);
+    this.token = r.token ?? null;
+    this.tokenFor = r.token ? out : null;
+    return { bytes: out, changed: true, count: r.count, warnings: r.warnings, ms: r.ms };
   }
 
   /** Forget the worker's copy (after the bytes changed elsewhere, say). */

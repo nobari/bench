@@ -1,19 +1,24 @@
 /**
  * pdf-lib in a worker: parses the document once per version, applies operations (lib/tools/files/pdf/ops.ts) and
  * hands the new bytes back, so a 200 MB file never freezes the page. The parsed document is kept under a token the
- * client sends back; bytes travel only when the client holds a version the worker has not seen.
+ * client sends back; bytes travel only when the client holds a version the worker has not seen. Fonts for new text
+ * come from pdf.js's self-hosted font folder; pictures are re-encoded on an OffscreenCanvas when the browser has one.
  */
-import { applyOp, type OpApplied, type PdfOp } from "@/lib/tools/files/pdf/ops";
-import { loadPdf } from "@/lib/tools/files/pdf/pages";
+import { applyOp, type OpApplied, type OpEnv, type PdfOp } from "@/lib/tools/files/pdf/ops";
+import { forgetStreamCaches, loadPdf } from "@/lib/tools/files/pdf/pages";
 import { buildSamplePdf } from "@/lib/tools/files/pdf/sample";
-import type { PDFDocument } from "@cantoo/pdf-lib";
+import { httpFontSource } from "@/lib/tools/files/pdf/fonts";
+import { PDFJS_BASE } from "@/lib/tools/files/pdf/pdfjs";
+import type { CompressReport, DecodedImage, ImageCodec } from "@/lib/tools/files/pdf/compress";
+import { PDFDocument } from "@cantoo/pdf-lib";
 
 export type OpsRequest =
   | { id: number; kind: "sample" }
-  | { id: number; kind: "op"; ops: PdfOp[]; token: string | null; bytes?: ArrayBuffer; password?: string };
+  /** `fresh` starts from an empty document (pages made from images, say) instead of bytes or a token. */
+  | { id: number; kind: "op"; ops: PdfOp[]; token: string | null; bytes?: ArrayBuffer; password?: string; fresh?: boolean };
 
 export type OpsResponse =
-  | { id: number; ok: true; changed: boolean; bytes?: ArrayBuffer; token?: string; annotId?: string; files?: { name: string; bytes: ArrayBuffer }[]; count?: number; ms: number }
+  | { id: number; ok: true; changed: boolean; bytes?: ArrayBuffer; token?: string; annotId?: string; files?: { name: string; bytes: ArrayBuffer }[]; count?: number; warnings?: string[]; report?: CompressReport; ms: number }
   | { id: number; ok: false; error: string; needsBytes?: boolean };
 
 let cache: { token: string; doc: PDFDocument; password?: string } | null = null;
@@ -27,6 +32,48 @@ function friendly(e: unknown): string {
   if (/Expected instance of PDFDict/i.test(m) || /Trying to parse invalid object/i.test(m)) return "The document's structure is damaged in a way pdf-lib cannot read.";
   return m;
 }
+
+/* ------------------------------------------------------------ pictures */
+
+const canvasCodec: ImageCodec | null =
+  typeof OffscreenCanvas === "undefined"
+    ? null
+    : {
+        async recode(image: DecodedImage, target) {
+          let source: ImageBitmap | OffscreenCanvas;
+          if (image.kind === "jpeg") {
+            source = await createImageBitmap(new Blob([image.bytes as unknown as BlobPart], { type: "image/jpeg" }));
+          } else {
+            const c = new OffscreenCanvas(image.width, image.height);
+            const ctx = c.getContext("2d");
+            if (!ctx) return null;
+            ctx.putImageData(new ImageData(image.data as unknown as Uint8ClampedArray<ArrayBuffer>, image.width, image.height), 0, 0);
+            source = c;
+          }
+          const out = new OffscreenCanvas(target.width, target.height);
+          const ctx = out.getContext("2d");
+          if (!ctx) return null;
+          ctx.fillStyle = "#ffffff";
+          ctx.fillRect(0, 0, target.width, target.height);
+          ctx.imageSmoothingEnabled = true;
+          ctx.imageSmoothingQuality = "high";
+          ctx.drawImage(source, 0, 0, target.width, target.height);
+          if (target.grayscale) {
+            const px = ctx.getImageData(0, 0, target.width, target.height);
+            const d = px.data;
+            for (let i = 0; i < d.length; i += 4) {
+              const y = Math.round(0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]);
+              d[i] = d[i + 1] = d[i + 2] = y;
+            }
+            ctx.putImageData(px, 0, 0);
+          }
+          const blob = await out.convertToBlob({ type: "image/jpeg", quality: target.quality });
+          if ("close" in source) source.close();
+          return { bytes: new Uint8Array(await blob.arrayBuffer()), width: target.width, height: target.height };
+        },
+      };
+
+const env: OpEnv = { fonts: httpFontSource(PDFJS_BASE), codec: canvasCodec };
 
 self.onmessage = async (e: MessageEvent<OpsRequest>) => {
   const req = e.data;
@@ -43,7 +90,12 @@ self.onmessage = async (e: MessageEvent<OpsRequest>) => {
   }
   try {
     let doc: PDFDocument;
-    if (req.bytes) {
+    if (req.fresh) {
+      doc = await PDFDocument.create({ updateMetadata: false });
+      doc.setProducer("Bench PDF Studio");
+      doc.setCreator("Bench PDF Studio");
+      cache = null;
+    } else if (req.bytes) {
       doc = await loadPdf(new Uint8Array(req.bytes), { password: req.password });
       cache = null;
     } else if (cache && req.token && cache.token === req.token) {
@@ -54,11 +106,13 @@ self.onmessage = async (e: MessageEvent<OpsRequest>) => {
     }
     const applied: OpApplied = { changed: false };
     for (const op of req.ops) {
-      const a = await applyOp(doc, op);
+      const a = await applyOp(doc, op, env);
       applied.changed = applied.changed || a.changed;
       if (a.id) applied.id = a.id;
       if (a.files) applied.files = [...(applied.files ?? []), ...a.files];
       if (a.count !== undefined) applied.count = (applied.count ?? 0) + a.count;
+      if (a.warnings) applied.warnings = [...(applied.warnings ?? []), ...a.warnings];
+      if (a.report) applied.report = a.report;
     }
     const last = req.ops[req.ops.length - 1];
     const transfer: Transferable[] = [];
@@ -70,18 +124,20 @@ self.onmessage = async (e: MessageEvent<OpsRequest>) => {
     if (!applied.changed) {
       // Nothing to save; keep the parsed document for the next operation on these same bytes.
       cache = req.password === undefined ? { token: req.token ?? (cache?.token ?? newToken()), doc } : null;
-      reply({ id: req.id, ok: true, changed: false, token: cache?.token, annotId: applied.id, files, count: applied.count, ms: performance.now() - started }, transfer);
+      reply({ id: req.id, ok: true, changed: false, token: cache?.token, annotId: applied.id, files, count: applied.count, warnings: applied.warnings, report: applied.report, ms: performance.now() - started }, transfer);
       return;
     }
     const keepPassword = req.password !== undefined && !req.ops.some((o) => o.type === "decrypt");
     if (keepPassword) doc.encrypt({ userPassword: req.password!, ownerPassword: req.password! });
     const out = await doc.save();
+    // The document stays parsed for the next operation; what pdf-lib cached while saving must not go stale.
+    forgetStreamCaches(doc);
     const buf = out.buffer as ArrayBuffer;
     transfer.push(buf);
     // An encrypted document is re-parsed next time (encryption cannot be applied twice to one document object).
     const token = newToken();
     cache = keepPassword || last.type === "encrypt" ? null : { token, doc };
-    reply({ id: req.id, ok: true, changed: true, bytes: buf, token: cache ? token : undefined, annotId: applied.id, files, count: applied.count, ms: performance.now() - started }, transfer);
+    reply({ id: req.id, ok: true, changed: true, bytes: buf, token: cache ? token : undefined, annotId: applied.id, files, count: applied.count, warnings: applied.warnings, report: applied.report, ms: performance.now() - started }, transfer);
   } catch (err) {
     cache = null;
     reply({ id: req.id, ok: false, error: friendly(err) });

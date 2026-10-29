@@ -160,6 +160,21 @@ export function downloadBytes(bytes: Uint8Array, name: string, type = "applicati
 }
 
 /** "report.pdf" → "report-edited.pdf"; a suffix once, never twice. */
+const SIGNATURES_KEY = "signatures";
+
+/** Saved signatures as PNG data URLs, newest first (at most four). */
+export const loadSignatures = () => get<string[]>(SIGNATURES_KEY).then((l) => l ?? []).catch(() => [] as string[]);
+export async function saveSignature(dataUrl: string): Promise<string[]> {
+  const list = [dataUrl, ...(await loadSignatures()).filter((s) => s !== dataUrl)].slice(0, 4);
+  await set(SIGNATURES_KEY, list).catch(() => undefined);
+  return list;
+}
+export async function forgetSignature(dataUrl: string): Promise<string[]> {
+  const list = (await loadSignatures()).filter((s) => s !== dataUrl);
+  await set(SIGNATURES_KEY, list).catch(() => undefined);
+  return list;
+}
+
 export function derivedName(name: string, suffix: string): string {
   const base = name.replace(/\.pdf$/i, "");
   return base.endsWith(`-${suffix}`) ? `${base}.pdf` : `${base}-${suffix}.pdf`;

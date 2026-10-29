@@ -13,7 +13,24 @@ import type { BenchCommentManager } from "./pdf-comment-manager";
 import { cn } from "@/lib/utils";
 
 export type ViewMode = "continuous" | "single" | "two-up" | "wrapped";
-export type Tool = "select" | "highlight" | "note" | "text" | "draw" | "image";
+export type Tool = "select" | "highlight" | "note" | "text" | "draw" | "image" | "edittext" | "crop" | "redact";
+
+/** A pdf.js page view, as far as overlays need it. */
+export interface PageViewInfo {
+  index: number;
+  div: HTMLElement;
+  viewport: PageViewport;
+  rendered: boolean;
+}
+
+export interface PageViewport {
+  width: number;
+  height: number;
+  scale: number;
+  rotation: number;
+  convertToViewportPoint(x: number, y: number): number[];
+  convertToPdfPoint(x: number, y: number): number[];
+}
 /** "auto", "fit" (whole page), "width", or a percentage as a string. */
 export type Zoom = string;
 
@@ -73,6 +90,15 @@ export interface PdfViewerApi {
   uiManager(): unknown;
   /** The visible area's page and offset, to put back after a reload. */
   location(): Location | null;
+  /** A page's view (its element and viewport), once the document's pages exist. */
+  pageView(index: number): PageViewInfo | null;
+  pages(): PageViewInfo[];
+  /** Listen on the viewer's event bus; returns the unsubscribe. */
+  on(event: string, handler: (e: never) => void): () => void;
+  /** Place an image file as a stamp editor on the current page (movable and resizable). */
+  pasteImage(file: File): Promise<boolean>;
+  /** The element overlays render into (inside the scrolling container, over the pages). */
+  overlayRoot(): HTMLDivElement | null;
 }
 
 export interface Location {
@@ -107,6 +133,8 @@ interface Props {
   onError(message: string): void;
   onNoteClick(hit: { page: number; x: number; y: number }): void;
   onAnnotationClick(id: string, page: number): void;
+  /** The overlay root element, once mounted. */
+  onOverlayRoot?(el: HTMLDivElement | null): void;
   className?: string;
 }
 
@@ -126,17 +154,25 @@ interface Inst {
 }
 
 /** The parts of pdf.js's AnnotationEditorUIManager this host calls. */
+interface EditorLayer {
+  getEditorByUID(uid: string): { div?: HTMLElement | null } | null;
+  pasteEditor(options: { mode: number }, params: { bitmapFile: File }): Promise<void>;
+}
+
 interface UiManager {
   updateParams(type: number, value: unknown): void;
   undo(): void;
   redo(): void;
   delete(): void;
   setSelected(editor: unknown): void;
-  getLayer(pageIndex: number): { getEditorByUID(uid: string): { div?: HTMLElement | null } | null } | undefined;
+  getLayer(pageIndex: number): EditorLayer | undefined;
+  readonly currentLayer: EditorLayer | undefined;
+  readonly currentPageIndex: number;
   unselectAll(): void;
 }
 
 const ZOOM_PRESETS: Record<string, string> = { auto: "auto", fit: "page-fit", width: "page-width", actual: "page-actual" };
+const NOT_EDITORS = new Set<Tool>(["note", "edittext", "crop", "redact"]);
 
 export function toScaleValue(zoom: Zoom): string {
   if (ZOOM_PRESETS[zoom]) return ZOOM_PRESETS[zoom];
@@ -230,6 +266,7 @@ class StubL10n {
 export function PdfViewerHost(props: Props) {
   const { ref, bytes, version, docKey, password, className } = props;
   const containerRef = useRef<HTMLDivElement>(null);
+  const overlayRef = useRef<HTMLDivElement>(null);
   const inst = useRef<Inst | null>(null);
   const latest = useRef(props);
   const [ready, setReady] = useState(false);
@@ -314,7 +351,8 @@ export function PdfViewerHost(props: Props) {
           if (!i) return;
           const T = i.lib.api.AnnotationEditorType;
           const p = latest.current;
-          const tool: Tool | null = e.mode === T.HIGHLIGHT ? "highlight" : e.mode === T.FREETEXT ? "text" : e.mode === T.INK ? "draw" : e.mode === T.STAMP ? "image" : e.mode === T.NONE ? (p.tool === "note" ? "note" : "select") : null;
+          // Tools that are not pdf.js editors (note, text editing, crop, redaction) survive a "no editor" report.
+          const tool: Tool | null = e.mode === T.HIGHLIGHT ? "highlight" : e.mode === T.FREETEXT ? "text" : e.mode === T.INK ? "draw" : e.mode === T.STAMP ? "image" : e.mode === T.NONE ? (NOT_EDITORS.has(p.tool) ? p.tool : "select") : null;
           if (tool && tool !== p.tool) p.onToolChange(tool);
         });
         eventBus.on("updatefindcontrolstate", (e: { state: number; matchesCount?: { current: number; total: number } }) => {
@@ -494,6 +532,34 @@ export function PdfViewerHost(props: Props) {
       container: () => containerRef.current,
       uiManager: () => inst.current?.uiManager ?? null,
       location: () => inst.current?.location ?? null,
+      pageView: (index) => pageInfo(inst.current, index),
+      pages: () => {
+        const i = inst.current;
+        if (!i?.doc || !i.initialized) return [];
+        const out: PageViewInfo[] = [];
+        for (let k = 0; k < i.doc.numPages; k++) {
+          const v = pageInfo(i, k);
+          if (v) out.push(v);
+        }
+        return out;
+      },
+      on: (event, handler) => {
+        const i = inst.current;
+        if (!i) return () => {};
+        const h = handler as (e: unknown) => void;
+        i.eventBus.on(event, h as never);
+        return () => i.eventBus.off(event, h as never);
+      },
+      pasteImage: async (file) => {
+        const i = inst.current;
+        const ui = i?.uiManager;
+        if (!i || !ui) return false;
+        const layer = ui.currentLayer ?? ui.getLayer(ui.currentPageIndex) ?? ui.getLayer(i.viewer.currentPageNumber - 1);
+        if (!layer) return false;
+        await layer.pasteEditor({ mode: i.lib.api.AnnotationEditorType.STAMP }, { bitmapFile: file });
+        return true;
+      },
+      overlayRoot: () => overlayRef.current,
     }),
     [],
   );
@@ -529,6 +595,15 @@ export function PdfViewerHost(props: Props) {
     <div className={cn("relative h-full w-full", className)} data-pdf-viewer data-tool={tool}>
       <div ref={containerRef} className="absolute inset-0 overflow-auto" onClick={onClick} data-pdf-container tabIndex={-1}>
         <div className="pdfViewer" />
+        {/* Overlays (text editing, crop, redaction) are portalled in here, positioned over the pages. */}
+        <div
+          ref={(el) => {
+            overlayRef.current = el;
+            props.onOverlayRoot?.(el);
+          }}
+          className="pointer-events-none absolute left-0 top-0 z-10 h-0 w-0 overflow-visible"
+          data-pdf-overlays
+        />
       </div>
       {failed && (
         <div className="absolute inset-0 flex items-center justify-center p-6 text-center text-[13px] text-danger">
@@ -540,6 +615,13 @@ export function PdfViewerHost(props: Props) {
 }
 
 /* ------------------------------------------------------------------ helpers */
+
+function pageInfo(i: Inst | null, index: number): PageViewInfo | null {
+  if (!i?.doc || !i.initialized) return null;
+  const view = i.viewer.getPageView(index) as { div: HTMLElement; viewport: PageViewport; renderingState: number } | undefined;
+  if (!view?.div || !view.viewport) return null;
+  return { index, div: view.div, viewport: view.viewport, rendered: view.renderingState === 3 };
+}
 
 function applyView(i: Inst, view: ViewMode) {
   const { ScrollMode, SpreadMode } = i.lib.viewer;

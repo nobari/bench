@@ -61,6 +61,7 @@ import {
 import { toolId, type CategorySlug, type ToolDef, type ToolGroup } from "./types";
 import { sampleById } from "./text/markdown-samples";
 import { getCategory } from "./categories";
+import { pdfSatellites } from "./files/pdf/satellites";
 
 /**
  * THE REGISTRY — single source of truth for every tool.
@@ -1065,12 +1066,13 @@ export const TOOLS: ToolDef[] = [
     group: "documents",
     title: "PDF Viewer, Editor & Annotator",
     short: "PDF Studio",
-    tagline: "Read, search, fill, comment on and reorganise PDFs in your browser — nothing is uploaded",
+    tagline: "Read, edit the text, sign, comment, redact, organise, compress and protect PDFs in your browser — nothing is uploaded",
     description:
-      "Open a PDF to read, search and fill it; highlight, underline, draw and comment with sticky notes, replies and resolve states that Acrobat and Preview show; rotate, reorder, delete, extract, merge and split pages; protect or unlock it; and save — all in your browser.",
+      "Open a PDF to read, search and fill it; edit its text in place; sign and stamp it; highlight, draw and comment with replies and resolve states Acrobat shows; redact for good; rotate, reorder, crop, merge and split pages; watermark and number them; compress; protect or unlock; and save — all in your browser.",
     keywords: [
       "pdf editor",
       "pdf editor online",
+      "edit pdf text",
       "pdf viewer",
       "pdf reader online",
       "annotate pdf",
@@ -1079,6 +1081,11 @@ export const TOOLS: ToolDef[] = [
       "highlight pdf",
       "sticky notes pdf",
       "fill pdf form",
+      "sign pdf",
+      "redact pdf",
+      "compress pdf",
+      "watermark pdf",
+      "pdf page numbers",
       "merge pdf",
       "split pdf",
       "rotate pdf pages",
@@ -1090,18 +1097,24 @@ export const TOOLS: ToolDef[] = [
       "unlock pdf",
       "flatten pdf",
       "pdf to png",
+      "jpg to pdf",
       "free pdf editor no upload",
       "pdf 編集",
       "pdf 注釈",
       "pdf 結合",
       "pdf 分割",
+      "pdf 圧縮",
     ],
     icon: FileText,
     status: "beta",
     widget: "pdf-studio",
     howItWorks:
-      "Drop a PDF on the page, open one with the picker, paste it, or try the bundled sample. The document is drawn by pdf.js — the engine inside Firefox — served from this site, so the file never leaves your device; a 300-page scan, a form and a password-protected contract all open the same way. Read in a continuous scroll, one page at a time or two-up; zoom, rotate the view, follow links and the outline, search with match counts, select and copy text, and download attachments. The side panel lists pages as thumbnails, the outline, every comment in the document, the pages to organise, attached files and the document's info (title, author, dates, sizes, permissions, whether a form or signatures are present). To mark up, select text and press Highlight — or use Underline and Strike-out — click a page with the Note tool for a sticky note, type with the Text tool or draw with the pen; every mark can carry a comment, and the Comments tab threads replies and resolve states the way Acrobat does, so the review opens in Acrobat, Preview and Firefox alike. Comments already in the file are listed too, with the words under each highlight, and can be answered, resolved, edited or deleted; the whole list copies as Markdown or downloads as JSON. Form fields are filled in place. The Organise tab shows the pages as tiles: select with a click, a shift-click or a range like 1-3, 5, drag to reorder, rotate, delete, duplicate, crop by margins, insert a blank page or the pages of another PDF (that is how merging works), extract a selection to a new file, or split the document every N pages, by ranges or by its chapters into a zip. The More menu flattens form fields, removes every comment, protects the file with AES-256 or removes its password, and saves a page as PNG. Save writes the file in place when the browser allows it (Chrome and Edge), otherwise downloads a copy; every change can be undone, and the working copy is remembered so a reload can bring it back. Structural changes are made by pdf-lib in a background thread, so even large documents stay responsive.",
+      "Drop a PDF on the page, open one with the picker, paste it, or try the bundled sample. The document is drawn by pdf.js — the engine inside Firefox — served from this site, so the file never leaves your device; a 300-page scan, a form and a password-protected contract all open the same way. Read in a continuous scroll, one page at a time or two-up; zoom, rotate the view, follow links and the outline, search with match counts, select and copy text, and download attachments. The side panel lists pages as thumbnails, the outline, every comment in the document, the pages to organise, attached files and the document's info (title, author, dates, sizes, permissions, whether a form or signatures are present). To mark up, select text and press Highlight — or use Underline and Strike-out — click a page with the Note tool for a sticky note, type with the Text tool or draw with the pen; every mark can carry a comment, and the Comments tab threads replies and resolve states the way Acrobat does, so the review opens in Acrobat, Preview and Firefox alike. Comments already in the file are listed too, with the words under each highlight, and can be answered, resolved, edited or deleted; the whole list copies as Markdown or downloads as JSON. Form fields are filled in place. The Organise tab shows the pages as tiles: select with a click, a shift-click or a range like 1-3, 5, drag to reorder, rotate, delete, duplicate, crop by margins, insert a blank page or the pages of another PDF (that is how merging works), extract a selection to a new file, or split the document every N pages, by ranges or by its chapters into a zip. Edit text (E) shows every line of the page's own text; click one, change the words, press Enter, and the line is rewritten inside the page — in its own font when the font carries the characters, in a matching stand-in font when it does not — with kerning kept around the change and columns to the right left where they were; click empty space to add a line in the size, colour and face you choose. Sign draws, types or uploads a signature (and remembers it in this browser), Stamp puts APPROVED, DRAFT, CONFIDENTIAL or your own text with the date on the page; both land as stamps you drag into place and resize. Redact (X) takes rectangles or a text selection and, on Apply, deletes the words underneath from the file — not merely covers them — removes comments in the area and paints the boxes black; a flatten option turns marked pages into pictures so images and drawings go too. Crop (C) draws the area to keep on a page or on all of them. The More menu adds a watermark across pages, headers and footers with page numbers ({n} of {N}, Bates-style zero padding, title, date, file name), compresses the file (pictures re-encoded at the resolution they are shown at, uncompressed streams deflated, unused objects dropped, optionally metadata removed), saves pages as PNG or JPEG, copies or downloads the text, attaches files, flattens form fields or bakes the comments into the pages, removes every comment, protects the file with AES-256 and permissions or removes its password, and rebuilds a damaged file. Pictures dropped on the page become a new PDF or new pages; several PDFs dropped at once are merged. Save writes the file in place when the browser allows it (Chrome and Edge), otherwise downloads a copy; every change can be undone, and the working copy is remembered so a reload can bring it back. Structural changes are made by pdf-lib in a background thread, so even large documents stay responsive.",
     faq: [
+      { q: "Can I edit the text of a PDF?", a: "Yes. With Edit text, click any line to change its words in place. When the page's font carries the characters you type (always the case for the standard fonts, and for characters that appear elsewhere in the document in that font) the line is rewritten in that very font; otherwise a matching stand-in (Helvetica, Times, Courier or Liberation Sans for Greek and Cyrillic) is used. The rest of the line keeps its spacing, text to the right in the same line stays in place, and a line that grows runs on. PDFs have no paragraphs, so a long edit does not reflow the following lines — add or remove words on each line as needed." },
+      { q: "How does redaction work, and is it real?", a: "Yes. Mark areas or a text selection and press Apply: the glyphs under each mark are removed from the page's content stream (what is left keeps its position), comments in the area are deleted, and a black box is drawn. Pictures and vector drawings under a mark are covered but still in the file unless you tick “Flatten marked pages to pictures”, which replaces each marked page with a rendered image. Check the result, then save under a new name." },
+      { q: "Is the signature legally binding?", a: "Sign places a picture of your signature (drawn, typed or uploaded with its background removed) as a stamp annotation, the way most “e-sign” tools do — it is not a cryptographic digital signature with a certificate. Whether it binds depends on your jurisdiction and the agreement; for a certificate-based signature use Acrobat or a signing service." },
+      { q: "How much smaller does Compress make a file?", a: "It depends on what is inside. Scans and photo-heavy files shrink a lot (pictures are re-encoded as JPEG at the resolution they are shown at — 150 ppi in the balanced preset); text-only files from Word or LaTeX are already tight and shrink little, mostly from deflating stored-uncompressed streams and dropping objects nothing points at. The status line reports the before and after sizes; undo restores the original." },
       { q: "Is my PDF uploaded anywhere?", a: "No. pdf.js renders it and pdf-lib edits it inside your browser tab; the file, its comments and any password you type stay on your device. Saving writes to your disk or downloads a copy." },
       { q: "Will the comments show in Acrobat or Preview?", a: "Yes. Highlights, notes, drawings and text boxes are written as standard PDF annotations, replies are threaded with the same references Acrobat uses, and a resolved comment is recorded as a review state, so other viewers list them the same way. Comments that were already in the file are shown here too." },
       { q: "Can I fill in a form?", a: "Yes — text fields, check boxes, radio buttons and drop-downs are editable on the page, and Save writes the values into the file. Flatten the form fields (More menu) to bake the values into the page content for good." },
@@ -1116,10 +1129,11 @@ export const TOOLS: ToolDef[] = [
       { label: "The sample's comments on page 2", query: "sample=1&p=2&tab=comments" },
       { label: "Organise the sample's pages", query: "sample=1&tab=organise" },
     ],
-    related: ["files/comic-reader", "files/unzip", "files/zip", "web/markdown", "web/track-changes"],
-    aliases: ["pdf studio", "pdf", "pdf editor", "pdf viewer", "pdf reader", "annotate pdf", "pdf comments", "merge pdf", "split pdf", "pdf form filler", "rotate pdf", "pdf pages", "sign pdf"],
+    related: ["files/pdf-edit-text", "files/pdf-sign", "files/pdf-merge", "files/pdf-compress", "files/pdf-redact", "files/comic-reader", "web/track-changes"],
+    aliases: ["pdf studio", "pdf", "pdf editor", "pdf viewer", "pdf reader", "annotate pdf", "pdf comments", "merge pdf", "split pdf", "pdf form filler", "rotate pdf", "pdf pages", "sign pdf", "edit pdf", "redact pdf", "compress pdf"],
     added: "2026-10-28",
   },
+  ...pdfSatellites(),
   {
     slug: "hash",
     category: "crypto",
