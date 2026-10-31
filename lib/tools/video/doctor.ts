@@ -272,6 +272,10 @@ export function quickFindings(index: Mp4Check, facts: DoctorFacts, target: Docto
   const repairFix = indexRepairable(index) ? REPAIR_FIX : REMUX_FIX;
 
   // --- structure
+  if (index.size === 0) {
+    push({ id: "empty", severity: "error", title: "The file is empty", what: "It holds no bytes at all.", why: "An export writes its file only at the end, when its finished parts are joined, so an export that stopped before then leaves an empty file beside its parts folder — Resume finishes it, Discard parts leaves nothing behind. Otherwise the very first write to it failed." });
+    return out;
+  }
   if (index.moovAt < 0 || index.moovSize === 0) {
     push({ id: "no-index", severity: "error", title: "No index in the file", what: "No moov box was found, so nothing says where the frames are or when they play.", why: "An MP4 without its index is unplayable and unprocessable: a recording or export that was cut short before it was closed, or not an MP4 at all. Detected by walking the top-level boxes.", fix: REEXPORT_FIX });
     return out;

@@ -1523,23 +1523,62 @@ export function estimateExport(p: Project, spans: ExportSpan[], encodeFps = 30, 
  * A short hash of everything that shapes an export's file — clips, media, grades, titles, music, intro, watermark,
  * export settings — so finished parts of a stopped export can tell whether the project still matches them.
  */
+/** JSON with every object's keys in sorted order and nothing null or undefined: the same edit reads the same however it was built. */
+function canonical(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map((v) => (v === undefined || v === null ? "null" : canonical(v))).join(",")}]`;
+  if (value && typeof value === "object") {
+    const o = value as Record<string, unknown>;
+    return `{${Object.keys(o)
+      .sort()
+      .filter((k) => o[k] !== undefined && o[k] !== null)
+      .map((k) => `${JSON.stringify(k)}:${canonical(o[k])}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "null";
+}
+
+/**
+ * A hash of what shapes the landscape export's frames and sound, so finished parts of an export can tell whether
+ * the project they came from is still this one. It reads the same after a reload or a newer build: keys are sorted
+ * and absent values dropped (a project loaded from its file orders keys differently from one edited in place, and a
+ * newer build fills in fields older ones never wrote), and whatever does not reach the file is left out — the doctor
+ * and review settings, proxies, the preview, the stop scan, remembered folders, the shorts and the editor's mode,
+ * titles that belong to a short, and a recording's keyframe list, rotation and whereabouts.
+ */
 export function exportFingerprint(p: Project): string {
-  const { updatedAt, ...rest } = p as Project & { updatedAt?: number };
+  const { updatedAt, createdAt, proxies, preview, stops, shorts, mode, folders, export: ex, media, titles, ...rest } = p as Project & { updatedAt?: number; folders?: unknown };
   void updatedAt;
-  // The doctor and review settings do not shape the file, and projects saved before they existed keep their fingerprints.
-  // A recording's keyframe list and rotation only decide what is copied and what is re-encoded, never the frames
-  // themselves, so filling them in later keeps an export's finished parts continuable.
-  const text = JSON.stringify(rest, function (this: unknown, key: string, value: unknown) {
-    if ((key === "check" || key === "review") && this === rest.export) return undefined;
-    if (key === "keyframeTimes" || key === "keyframeNote" || key === "rotation") return undefined;
-    return value;
+  void createdAt;
+  void proxies;
+  void preview;
+  void stops;
+  void shorts;
+  void mode;
+  void folders;
+  const { check, review, ...exportRest } = ex;
+  void check;
+  void review;
+  const text = canonical({
+    ...rest,
+    export: exportRest,
+    media: Object.fromEntries(
+      Object.entries(media).map(([id, m]) => {
+        const { keyframeTimes, keyframeNote, rotation, where, ...keep } = m;
+        void keyframeTimes;
+        void keyframeNote;
+        void rotation;
+        void where;
+        return [id, keep];
+      }),
+    ),
+    titles: titles.filter((t) => !t.short),
   });
   let h = 0x811c9dc5;
   for (let i = 0; i < text.length; i++) {
     h ^= text.charCodeAt(i);
     h = Math.imul(h, 0x01000193) >>> 0;
   }
-  return `${h.toString(16).padStart(8, "0")}-${text.length.toString(36)}`;
+  return `2-${h.toString(16).padStart(8, "0")}-${text.length.toString(36)}`;
 }
 
 /* --------------------------------------------------------- serialisation */

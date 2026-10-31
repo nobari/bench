@@ -100,7 +100,7 @@ export interface FileEntry {
   name: string;
   size: number;
   lastModified: number;
-  kind: "export" | "preview" | "fixed" | "other";
+  kind: "export" | "preview" | "fixed" | "other" | "unfinished";
   report?: DoctorReport | null;
   checking?: DoctorProgress | null;
   error?: string;
@@ -899,7 +899,7 @@ export function ExportDone({ done, busy, onDismiss, onAgain, onFiles, onRecheck,
 
 /* ------------------------------------------------------------------ files */
 
-const KIND_LABEL: Record<FileEntry["kind"], string> = { export: "export", preview: "test render", fixed: "re-levelled copy", other: "video" };
+const KIND_LABEL: Record<FileEntry["kind"], string> = { export: "export", preview: "test render", fixed: "re-levelled copy", other: "video", unfinished: "unfinished export" };
 
 export function ExportFiles({ files, loading, onRefresh, onCheck, onCancelCheck, canFix, onFixFinding, onFix, onDelete, fix, busy, resumable, onResume, onDiscard, hasFolder }: { files: FileEntry[]; loading: boolean; onRefresh: () => void; onCheck: (name: string, depth: DoctorDepth) => void; onCancelCheck: (name: string) => void; canFix: (kind: FixKind) => boolean; onFixFinding: (name: string, finding: Finding) => void; onFix: (name: string) => void; onDelete: (name: string) => void; fix: FixState | null; busy: boolean; resumable: ResumableView | null; onResume: () => void; onDiscard: () => void; hasFolder: boolean }) {
   return (
@@ -918,13 +918,11 @@ export function ExportFiles({ files, loading, onRefresh, onCheck, onCancelCheck,
             <span className="font-medium text-ink">
               Parts of an export of {resumable.name}: {fmtTime(resumable.endAt)} of {fmtTime(resumable.total)} done
             </span>{" "}
-            — {resumable.parts} part{resumable.parts === 1 ? "" : "s"}, {fmtBytes(resumable.bytes)}, in {resumable.folder}.{resumable.consumedParts ? ` ${resumable.consumedParts} already joined into a file that did not finish; Resume exports ${fmtTime(resumable.consumedSeconds)} of them again.` : ""} {resumable.matches ? "Resume carries on from there and joins them without re-encoding." : "The project has changed since, so they cannot be continued."}
+            — {resumable.parts} part{resumable.parts === 1 ? "" : "s"}, {fmtBytes(resumable.bytes)}, in {resumable.folder}.{resumable.consumedParts ? ` ${resumable.consumedParts} already joined into a file that did not finish; Resume exports ${fmtTime(resumable.consumedSeconds)} of them again.` : ""} {resumable.matches ? "Resume carries on from there and joins them without re-encoding." : "The project may have changed since they were made (or the editor was updated): Resume anyway carries on all the same — the parts stay as they are and only the rest follows the current edit."}
           </span>
-          {resumable.matches && (
-            <button type="button" onClick={onResume} disabled={busy} className={cn(PRIMARY, "h-8")} data-files-resume>
-              <Play size={13} /> Resume
-            </button>
-          )}
+          <button type="button" onClick={onResume} disabled={busy} className={cn(resumable.matches ? PRIMARY : GHOST, "h-8")} data-files-resume {...(resumable.matches ? {} : { "data-resume-anyway": "" })}>
+            <Play size={13} /> {resumable.matches ? "Resume" : "Resume anyway"}
+          </button>
           <button type="button" onClick={onDiscard} disabled={busy} className={cn(GHOST, "h-8 hover:border-danger hover:text-danger")} data-files-discard>
             <Trash2 size={13} /> Discard parts
           </button>
@@ -945,7 +943,13 @@ export function ExportFiles({ files, loading, onRefresh, onCheck, onCancelCheck,
                 <span className="text-[12px] text-faint">{new Date(f.lastModified).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })}</span>
               </div>
               <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] text-muted">
-                {!f.checking && !report && (f.error ? <span className="text-warn">{f.error}</span> : <span className="text-faint">not checked</span>)}
+                {f.kind === "unfinished" ? (
+                  <span className="text-muted" data-file-unfinished>
+                    An export that stopped before its parts were joined — Resume above carries on from them; Discard parts removes them.
+                  </span>
+                ) : (
+                  !f.checking && !report && (f.error ? <span className="text-warn">{f.error}</span> : <span className="text-faint">not checked</span>)
+                )}
                 {!f.checking && report && (
                   <span className="inline-flex items-center gap-1 font-medium text-ink" data-file-verdict>
                     {fmtTime(report.facts.durationS)}
@@ -953,6 +957,7 @@ export function ExportFiles({ files, loading, onRefresh, onCheck, onCancelCheck,
                     {report.index.tags.title ? ` · “${report.index.tags.title}”` : ""}
                   </span>
                 )}
+                {f.kind !== "unfinished" && (
                 <span className="ml-auto flex flex-wrap gap-1.5">
                   <button type="button" onClick={() => onCheck(f.name, "quick")} disabled={busy || !!f.checking} className={cn(GHOST, "h-7 px-2 text-[12px]")} title="Read the index and judge the structure, codec parameters and YouTube's rules — seconds" data-file-check>
                     {report ? "Check again" : "Check"}
@@ -967,6 +972,7 @@ export function ExportFiles({ files, loading, onRefresh, onCheck, onCancelCheck,
                     <Trash2 size={12} />
                   </button>
                 </span>
+                )}
               </div>
               <FileVerdict report={report} checking={f.checking} error={f.checking || report ? undefined : f.error} repaired={f.repaired} onCancel={() => onCancelCheck(f.name)} canFix={canFix} onFix={(x) => onFixFinding(f.name, x)} busy={busy} hook="file-report" />
               {fix && fix.name === f.name && (

@@ -258,7 +258,7 @@ const PREVIEW_SPEEDS = [0.25, 0.5, 1, 1.5, 2, 4, 8, 12, 16];
 /** Tests can watch every frame time the export hands to the encoder (see window.__benchVideo.traceFrames). */
 let frameTrace: ((timelineT: number) => void) | null = null;
 /** Tests can shorten the parts and make the drive refuse writes (window.__benchVideo.exportOptions). */
-const testExportOptions: { partSeconds?: number; joinMode?: "keep" | "remove"; failJoinAfter?: number; noParts?: boolean; refuseAfterBytes?: number; refuseFinalAfterBytes?: number } = {};
+const testExportOptions: { partSeconds?: number; joinMode?: "keep" | "remove"; failJoinAfter?: number; noParts?: boolean; refuseAfterBytes?: number; refuseFinalAfterBytes?: number; failDecode?: { media?: string; from: number; to?: number; times?: number; hardwareOnly?: boolean } } = {};
 /** Tests: a writable that refuses like a full disk once this many bytes have gone through a run's writables (all of them, or the file alone). */
 const testBytes = { all: 0, final: 0 };
 const refusingAfter = (target: WritableStream<import("mediabunny").StreamTargetChunk>, limit: number, count: "all" | "final"): WritableStream<import("mediabunny").StreamTargetChunk> => {
@@ -931,7 +931,11 @@ export function VideoEditorWidget() {
     if (!resumable) return;
     if (!window.confirm(`Remove the ${resumable.manifest.parts.length} kept part${resumable.manifest.parts.length === 1 ? "" : "s"} (${fmtBytes(resumable.bytes)})? A later export starts from the beginning.`)) return;
     await store.remove(null, resumable.folder);
+    // The export's own file is written only at the join, so an export that never got there left it empty.
+    const target = await store.fileIn(resumable.manifest.name);
+    if (target && target.size === 0) await store.remove(resumable.manifest.name).catch(() => undefined);
     setResumable(null);
+    setFilesVersion((v) => v + 1);
   };
   /* ------------------------------------------------------------ export set-up: name, estimate, pre-flight, files */
   const firstMedia = project.media[project.clips[0]?.media ?? ""];
@@ -1172,14 +1176,18 @@ export function VideoEditorWidget() {
       const list = [...(await store.listFiles()), ...(await store.listFiles(SHORTS_FOLDER))];
       const recordings = new Set(Object.values(project.media).map((m) => m.name));
       const videos = list.filter((f) => /\.(mp4|mov|m4v)$/i.test(f.name) && !recordings.has(f.name));
+      // The empty file of an export whose parts still sit beside it stopped before its join: nothing to judge in it
+      // yet. (A re-export over an earlier file leaves that file whole until the join, so it is judged as usual.)
+      const unfinished = new Set((await store.subFolders()).filter((d) => d.endsWith(".parts")).map((d) => `${d.slice(0, -".parts".length)}.mp4`));
       // A file that changed (a repair, a re-export) is checked again; what a repair did stays with it.
       const next: FileEntry[] = videos.map((f) => {
         const old = files.find((o) => o.name === f.name);
-        if (old && old.size === f.size && old.lastModified === f.lastModified) return old;
-        return { name: f.name, size: f.size, lastModified: f.lastModified, kind: f.name.startsWith("preview-") ? "preview" : isFixedCopy(f.name) ? "fixed" : "export", repaired: old?.repaired };
+        const kind: FileEntry["kind"] = f.name.startsWith("preview-") ? "preview" : isFixedCopy(f.name) ? "fixed" : unfinished.has(f.name) && f.size === 0 ? "unfinished" : "export";
+        if (old && old.size === f.size && old.lastModified === f.lastModified && old.kind === kind) return old;
+        return { name: f.name, size: f.size, lastModified: f.lastModified, kind, repaired: old?.repaired };
       });
       setFiles(next);
-      for (const f of next) if (!f.report && !f.error && !f.checking) await checkFile(f.name);
+      for (const f of next) if (f.kind !== "unfinished" && !f.report && !f.error && !f.checking) await checkFile(f.name);
     } finally {
       setFilesLoading(false);
     }
@@ -3125,7 +3133,10 @@ export function VideoEditorWidget() {
     const name = resume ? resume.manifest.name : fileName;
     const partsFolder = resume ? resume.folder : `${name.replace(/\.mp4$/, "")}.parts`;
     const exportSeconds = range ? range.to - range.from : duration;
-    const manifest: ExportManifest = resume ? resume.manifest : { version: 1, fingerprint, name, total: exportSeconds, parts: [], skipped: [], updatedAt: 0 };
+    // Parts whose fingerprint is not the project's as it stands (an edit since, or a hash from an older build) are
+    // continued all the same when asked: they stay as they were made, and the manifest takes the current fingerprint.
+    const anyway = !!resume && resume.manifest.fingerprint !== fingerprint;
+    const manifest: ExportManifest = resume ? { ...resume.manifest, fingerprint } : { version: 1, fingerprint, name, total: exportSeconds, parts: [], skipped: [], updatedAt: 0 };
     const live = manifest.parts.filter((p) => !p.consumed);
     const covered = live.reduce((a, p) => a + (p.end - p.start), 0);
     const resumedFrom = live.length ? Math.max(...live.map((p) => p.end)) : 0;
@@ -3147,11 +3158,16 @@ export function VideoEditorWidget() {
     setDone(null);
     setLiveAt(null);
     setSkipped(manifest.skipped.map((k) => ({ from: k.from, to: k.to })));
-    setEvents([{ at: Date.now(), kind: "start", text: resumedFrom ? `Resuming ${name} from ${fmtTime(resumedFrom)} — ${live.length} finished part${live.length === 1 ? "" : "s"} kept` : `Started ${name} — ${output.codec} ${outW}×${outH} at ${output.bitrateMbps} Mbps, about ${fmtBytes(estimate.bytes)}` }]);
+    setEvents([{ at: Date.now(), kind: "start", text: resumedFrom ? `Resuming ${name} from ${fmtTime(resumedFrom)} — ${live.length} finished part${live.length === 1 ? "" : "s"} kept${anyway ? "; the project may have changed since they were made, so they stay as they are and only the rest follows the current edit" : ""}` : `Started ${name} — ${output.codec} ${outW}×${outH} at ${output.bitrateMbps} Mbps, about ${fmtBytes(estimate.bytes)}` }]);
     setError(null);
     setResumable(null);
+    // The file is written only at the join; until then its writable holds a lock on it (and on a re-export, on the
+    // earlier file's place), so an export that stops before the join lets go of it — the empty file can then be
+    // removed with the parts, and an earlier file stays as it was.
+    let targetWritable: WritableStream | null = null;
     try {
       const { writable } = await store.createWritable(name);
+      targetWritable = writable as unknown as WritableStream;
       const result = await exportProject({
         project: landscape,
         getFile: (id) => store.getFile(id),
@@ -3178,6 +3194,7 @@ export function VideoEditorWidget() {
               testFailJoinAfter: testExportOptions.failJoinAfter,
             },
         onFault: askAboutFault,
+        testFailDecode: testExportOptions.failDecode,
         onProgress: (progress) => {
           setJob((j) => (j ? { ...j, fraction: progress.fraction, progress } : j));
           document.title = `${(progress.fraction * 100).toFixed(1)}% · ${progress.paused ? "Paused" : "Exporting"} · Bench`;
@@ -3204,6 +3221,7 @@ export function VideoEditorWidget() {
         `Exported ${name}${howNote} — ${fmtBytes(result.bytesWritten)} in ${fmtDuration(result.activeMs)}${result.copiedSeconds > 0 ? ` (${fmtTime(result.copiedSeconds)} copied as is)` : ""}${result.pausedMs > 500 ? ` plus ${fmtDuration(result.pausedMs)} paused` : ""} (${(result.seconds / Math.max(0.001, result.activeMs / 1000)).toFixed(2)}× realtime) · prepare ${fmtDuration(stepMs("prepare"))} · video ${fmtDuration(stepMs("video"))} · audio ${fmtDuration(stepMs("audio"))} · finish ${fmtDuration(stepMs("finalize"))}${skippedNote}`,
       );
     } catch (e) {
+      await targetWritable?.abort().catch(() => undefined);
       const message = e instanceof Error ? e.message : String(e);
       const keptParts = manifest.parts.filter((p) => !p.consumed);
       const kept = keptParts.length ? Math.max(...keptParts.map((p) => p.end)) : 0;

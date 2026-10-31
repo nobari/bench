@@ -151,8 +151,8 @@ export function preflight(project: Project, estimate: ExportEstimate, out: { wid
       id: "parts",
       state: p.matches ? "info" : "warn",
       title: `An export of ${p.name} stopped at ${fmtTime(p.endAt)} of ${fmtTime(p.total)}`,
-      detail: `${p.parts} part${p.parts === 1 ? "" : "s"} (${fmtGb(p.bytes)}) kept in the folder.${consumed}${skipped}${p.matches ? " Resume carries on from there, then joins the parts into the file — a copy, no re-encoding." : " The project has changed since, so these parts cannot be continued; discard them and export again."}`,
-      actions: p.matches ? [{ id: "resume", label: "Resume export", hook: "resume-export" }, { id: "discard", label: "Discard parts", hook: "discard-parts" }] : [{ id: "discard", label: "Discard parts", hook: "discard-parts" }],
+      detail: `${p.parts} part${p.parts === 1 ? "" : "s"} (${fmtGb(p.bytes)}) kept in the folder.${consumed}${skipped}${p.matches ? " Resume carries on from there, then joins the parts into the file — a copy, no re-encoding." : " The project may have changed since they were made (or the editor was updated): Resume anyway carries on all the same — the parts stay as they are and only the rest follows the current edit — or discard them and export again."}`,
+      actions: [{ id: "resume", label: p.matches ? "Resume export" : "Resume anyway", hook: p.matches ? "resume-export" : "resume-anyway" }, { id: "discard", label: "Discard parts", hook: "discard-parts" }],
     });
   }
 

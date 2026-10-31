@@ -65,6 +65,7 @@ import {
   type TransitionWindow,
   STEADY_FRAMES,
 } from "./project";
+import { cutAt, cutBySkips, mergeSkips } from "./skips";
 import { splitWords, wordTimes } from "./title-tools";
 import { even, framed, framePanes, layoutBackdrop, outputSize, pictureAspect, transformAt } from "./reframe";
 import { drawTransition } from "./transitions";
@@ -1267,7 +1268,7 @@ export async function probeKeyframes(file: File, signal?: AbortSignal): Promise<
 /** Something worth a line in the export's log: a part written, a stretch skipped, the join starting. */
 export interface ExportEvent {
   at: number;
-  kind: "part" | "skip" | "join";
+  kind: "part" | "skip" | "join" | "retry";
   text: string;
 }
 export interface ExportOptions {
@@ -1310,6 +1311,12 @@ export interface ExportOptions {
    * "stop" to end with what is done. Without this, the error ends the export.
    */
   onFault?: (fault: ExportFault) => Promise<"skip" | "stop">;
+  /**
+   * Tests only: the decoder "fails" (a Decoding error, as Chrome's reports it) on every frame of the named recording
+   * (any, when unnamed) between the two source times, the first `times` times (every time, when unset); with
+   * `hardwareOnly` a software decoder gets through.
+   */
+  testFailDecode?: { media?: string; from: number; to?: number; times?: number; hardwareOnly?: boolean };
 }
 
 /** A finished part of a resumable export: a video-only MP4 covering [start, end) of the export's time. */
@@ -1880,11 +1887,18 @@ async function exportWithPulse(
   };
 
   // Stretches left out after a frame failed and the user chose to go on (export time).
-  const skips = manifest?.skipped ?? [];
+  const skips: ExportManifest["skipped"] = mergeSkips(manifest?.skipped ?? []);
+  if (manifest) manifest.skipped = skips;
   const isSkipped = (t: number) => skips.some((k) => t >= k.from - 1e-6 && t < k.to - 1e-6);
   let current: { span: ExportSpan; track: InputVideoTrack; clipName: string; frameDur: number } | null = null;
   /** Export time of the frame being composed or encoded right now, when one is. */
   let pendingT: number | null = null;
+  /** The span being decoded, read through a call: it is assigned inside closures, so the catch below must not narrow it. */
+  const currentNow = () => current;
+  /** A stretch (export time) of one recording to decode in software, after its hardware decoder failed there twice. */
+  let softStretch: { mediaId: string; from: number; to: number } | null = null;
+  const testFail = opts.testFailDecode ?? null;
+  let testFailHits = 0;
 
   // The codec configuration of each recording whose packets are copied, with a key so a part never mixes two.
   const configs = new Map<string, { config: VideoDecoderConfig; key: string }>();
@@ -1952,25 +1966,39 @@ async function exportWithPulse(
     for (const planned of spans) {
       spanIndex++;
       if (planned.end - offset <= fromExport + 1e-6) continue;
-      const [span] = trimSpans([planned], fromExport + offset);
-      if (!span) continue;
+      const [whole] = trimSpans([planned], fromExport + offset);
+      if (!whole) continue;
       if (signal?.aborted) throw new DOMException("Cancelled", "AbortError");
       tracker.beginStep(`span-${spanIndex}`);
       emit(true);
-      const clip = project.clips.find((c) => c.id === span.clipId)!;
+      const clip = project.clips.find((c) => c.id === whole.clipId)!;
       const media = project.media[clip.media];
       const input = await openInput(clip.media);
       const track = (await input.getPrimaryVideoTrack())!;
-      if (span.kind === "copy" && parts) {
+      if (whole.kind === "copy" && parts) {
         // The recording's own packets, into copy parts: no decoding, no encoding.
-        await copySpan(span, track, clip, media);
+        await copySpan(whole, track, clip, media);
         tracker.endStep();
         emit(true);
         continue;
       }
       // Without parts (a test render) a copy span is decoded and encoded again like any other, only without the
       // GPU grade (identity draw).
-      const sink = new VideoSampleSink(track);
+      // The span is decoded in pieces: the stretches skipped after a frame failed are left out, a stretch marked
+      // for software decoding is its own piece, and a piece that begins inside the span starts decoding at the
+      // keyframe there when there is one (a skip is sized to the next keyframe), so the packets that failed are never
+      // handed to the decoder again.
+      let pieces = cutBySkips(whole, skips, offset);
+      if (softStretch && softStretch.mediaId === clip.media) pieces = cutAt(cutAt(pieces, softStretch.from + offset), softStretch.to + offset);
+      for (const span of pieces) {
+      let decodeFrom = span.sourceIn;
+      if (span.start > whole.start + 1e-6) {
+        const tol = keyTolerance(media?.fps || fps);
+        const key = await new EncodedPacketSink(track).getKeyPacket(span.sourceIn + tol, { verifyKeyPackets: true }).catch(() => null);
+        if (key && Math.abs(key.timestamp - span.sourceIn) <= tol) decodeFrom = key.timestamp;
+      }
+      const soft = !!softStretch && softStretch.mediaId === clip.media && span.start < softStretch.to + offset - 1e-6 && span.end > softStretch.from + offset + 1e-6;
+      const sink = new VideoSampleSink(track, soft ? { hardwareAcceleration: "prefer-software" } : undefined);
       const srcW = media.width ?? track.displayWidth,
         srcH = media.height ?? track.displayHeight;
       const speed = span.speed || 1;
@@ -2043,7 +2071,7 @@ async function exportWithPulse(
     };
       // Lights are held over frames of this span only: nothing from the footage before a cut bleeds into it.
       steady?.reset();
-      for await (const sample of sink.samples(span.sourceIn, span.sourceOut)) {
+      for await (const sample of sink.samples(decodeFrom, span.sourceOut)) {
         if (signal?.aborted) {
           sample.close();
           throw new DOMException("Cancelled", "AbortError");
@@ -2055,6 +2083,10 @@ async function exportWithPulse(
         }
         // Whatever happens to the frame (a failure included), the sample goes back to the decoder.
         try {
+          if (testFail && testFailHits < (testFail.times ?? Infinity) && (!testFail.media || media?.name === testFail.media) && sample.timestamp >= testFail.from - 1e-6 && sample.timestamp < (testFail.to ?? Infinity) - 1e-6 && !(testFail.hardwareOnly && soft)) {
+            testFailHits++;
+            throw new DOMException("Decoding error.", "EncodingError");
+          }
           if (speed === 1) {
             // The first sample is the frame showing at the in point, which may have begun before it (the in point need
             // not sit on the frame grid): it enters at the span's start for what is left of it, or is skipped when
@@ -2090,6 +2122,7 @@ async function exportWithPulse(
           sample.close();
         }
       }
+      }
       current = null;
       tracker.endStep();
       emit(true);
@@ -2123,6 +2156,22 @@ async function exportWithPulse(
   };
 
   const isAbort = (e: unknown) => (e as DOMException)?.name === "AbortError";
+  /** The decoder's own failure (Chrome: an EncodingError "Decoding error."), as against a failure composing or encoding. */
+  const isDecodeError = (e: unknown) => {
+    const x = e as { name?: string; message?: string } | null;
+    return x?.name === "EncodingError" || /decod/i.test(x?.message ?? "");
+  };
+  /** Whether the browser has a software decoder for the track (Chrome on a Mac: H.264 yes, HEVC no). */
+  const softwareDecodes = async (track: InputVideoTrack) => {
+    try {
+      if (typeof VideoDecoder === "undefined") return false;
+      const config = await track.getDecoderConfig();
+      return !!config && !!(await VideoDecoder.isConfigSupported({ ...config, hardwareAcceleration: "prefer-software" })).supported;
+    } catch {
+      return false;
+    }
+  };
+  let decodeRetry: { at: number; count: number } | null = null;
   const isPartError = (e: unknown) => (e as Error)?.name === "PartError";
   let cursor = gaps[0]?.from ?? 0;
   let faults = 0;
@@ -2141,22 +2190,40 @@ async function exportWithPulse(
           await settleCloses();
         }
         const canAsk = !!current && !isAbort(e) && !isPartError(e) && !!opts.onFault;
+        const failed = currentNow();
+        const failedTrack = failed?.track ?? null;
+        const failedMedia = failed ? (project.clips.find((c) => c.id === failed.span.clipId)?.media ?? null) : null;
         const fault = canAsk ? await describeFault(e, faults + 1) : null;
         current = null;
         if (!fault) throw e;
+        // A decoder failure is tried again before anyone is asked: once with a fresh decoder (hardware decoders
+        // hiccup hours in, on footage that is sound), then once in software for the stretch up to the next keyframe
+        // when the browser has a software decoder for the codec. Only a frame that still fails is put to the user.
+        if (isDecodeError(e) && failedTrack) {
+          const n: number = decodeRetry && Math.abs(decodeRetry.at - fault.timelineT) < 1e-3 ? decodeRetry.count : 0;
+          decodeRetry = { at: fault.timelineT, count: n + 1 };
+          const where = `${fault.clipName} at ${fmtMs(fault.sourceT)} in the recording, ${fmtMs(fault.timelineT - offset)} into the export`;
+          const again = n === 0 ? "Trying again with a fresh decoder." : n === 1 && failedMedia && (await softwareDecodes(failedTrack)) ? `Trying the next ${fault.stretch.toFixed(2)} s with a software decoder.` : null;
+          if (again) {
+            if (n === 1) softStretch = { mediaId: failedMedia!, from: fault.timelineT - offset, to: fault.timelineT - offset + fault.stretch };
+            opts.onEvent?.({ at: Date.now(), kind: "retry", text: `A frame failed to decode — ${where}: ${fault.message} ${again}` });
+            cursor = parts ? doneUntil() : Math.max(cursor, fault.timelineT - offset);
+            continue;
+          }
+        }
         faults++;
         if (Math.abs(fault.timelineT - lastFaultT) < 1e-3) sameFault++;
         else sameFault = 0;
         lastFaultT = fault.timelineT;
         if (faults > MAX_FAULTS || sameFault >= 3)
-          throw new Error(`${fault.message} — ${sameFault >= 3 ? "the same frame kept failing" : `${faults} frames failed`}; the export stopped, keeping what was finished.`);
+          throw new Error(`${fault.message} — ${sameFault >= 3 ? `the same frame kept failing even after skipping (${fault.clipName} at ${fmtMs(fault.sourceT)} in the recording): trim the clip past that point, or check the recording with the Video Doctor` : `${faults} frames failed`}; the export stopped, keeping what was finished.`);
         tracker.pause();
         emit(true);
         const answer = await opts.onFault!(fault);
         tracker.resume();
         emit(true);
         if (answer !== "skip") throw e;
-        skips.push({ from: fault.timelineT - offset, to: fault.timelineT - offset + fault.stretch, message: fault.message });
+        skips.splice(0, skips.length, ...mergeSkips([...skips, { from: fault.timelineT - offset, to: fault.timelineT - offset + fault.stretch, message: fault.message }]));
         opts.onEvent?.({ at: Date.now(), kind: "skip", text: `Skipped ${fault.stretch < 0.1 ? "one frame" : `${fault.stretch.toFixed(2)} s`} at ${fmtMs(fault.timelineT - offset)} — ${fault.message}` });
         if (manifest) {
           manifest.skipped = skips;
