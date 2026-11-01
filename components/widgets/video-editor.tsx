@@ -7,6 +7,9 @@ import { makeRoomForAll, makeRoomForTransition, newShort, timelineDuration as sh
 import { DEFAULT_SHORT_SECONDS, MIN_SHORT_SECONDS, SHORTS_FOLDER, clampShort, seamCandidates, seamScore, shortBytes, shortChecks, shortFileName, shortPostText, shortProject, shortStem, shortTemplate, shortTemplateProject, shortsFromMoments, suggestWindows, titlesIntoShort, viewFor } from "@/lib/tools/video/short-mode";
 import { scoreMoments as scoreShortMoments } from "@/lib/tools/video/intro";
 import { ShortsPanel, type SeamState } from "@/components/widgets/short-mode-panel";
+import { ShortMusicBlock, WaveBars } from "@/components/widgets/short-music";
+import { SHORT_FADE_IN, SHORT_FADE_OUT, carryThrough, continueTrack, musicForNewShort, placeShortMusic, shortMusicOf, slipTrack, songTrack, songsOf, trimTrackEnd, trimTrackStart, spreadToAll } from "@/lib/tools/video/short-music";
+import { peakBins, peaksOf } from "@/lib/tools/video/waveform";
 import { SafeGhost } from "@/components/widgets/shorts-parts";
 import { carryKeys, describeKeys, keyAround, keyFor, keyIndexAt, keysFromSamples, layoutSteps, movedKey, removeKeyAt, setKey, smoothKeys, sortKeys, thinKeys, windowInPicture, zoomedKey } from "@/lib/tools/video/window-keys";
 import { ROAD_CONFIDENCE, greyOf, vanishingPoint } from "@/lib/tools/video/road";
@@ -17,7 +20,7 @@ import { TITLE_PRESETS, applyTitlePreset, copyTitlesToShorts } from "@/lib/tools
 import { beatPeriod, cutToBeats, nearestBeat, punchIns, slowStretch, timelineBeats } from "@/lib/tools/video/beat-tools";
 import { analyseBeats } from "@/lib/tools/video/beats";
 import { decodeMono } from "@/lib/tools/video/engine";
-import { DEFAULT_EXPORT, NEUTRAL_GRADE, NEUTRAL_TRANSFORM, TITLE_ALIGNS, TITLE_FAMILIES, TITLE_FONTS, TITLE_POSITIONS, TITLE_SHADOWS, TITLE_WEIGHTS, TRANSITIONS, addTransitionAt, appendMusic, applyAudioTo, applyGradeTo, applyTransitionToAll, clipAt, crossfades, dbToGain, effectiveMusicEnd, estimateExport, exportRange, fmtTime, musicGainAt, musicLength, newId, newProject, newTitle, orderRecordings, placeClips, planExport, removeRange, reorderMusic, setTransition, splitClip, timelineDuration, titleLanes, transitionAt, transitionWindows, CLIP_SPEEDS, canMergeWithNext, clipLength, clipSpeed, groupOf, sourceTimeAt, mergeWithNext, moveClip, unjoin, updateClip, visibleCuts, type Clip, type MediaRef, type MusicTrack, type Project, type ProxyHeight, type Title, type TitleFont, isFileLutKind, FILE_LUT_KINDS, type FileLutKind, type LutKind, type MathLutKind, type TitleAlign, type TitlePosition, type TitleShadow, type Transition, type TransitionKind, type ExportTags, type IntroSettings, type IntroCard, DEFAULT_CARD, cardSettings, hasCard, reorderClip, parseTime, type SteadyLights, STEADY_FRAMES, clampMusicStart, musicUnused, shuffleFillMusic, describeWhere, nameSome, whereSummary, type MediaWhere, exportFingerprint, SOUND_MODES, SOUND_LABELS, soundLevels, applySoundLevels, soundState, type SoundMode, type SoundLevels, FRAMES, FRAME_LABELS, MAX_REFRAME_ZOOM, MIN_CLIP_SPEED, MAX_CLIP_SPEED, type Frame, type Layout, type ReframeKey } from "@/lib/tools/video/project";
+import { DEFAULT_EXPORT, NEUTRAL_GRADE, NEUTRAL_TRANSFORM, TITLE_ALIGNS, TITLE_FAMILIES, TITLE_FONTS, TITLE_POSITIONS, TITLE_SHADOWS, TITLE_WEIGHTS, TRANSITIONS, addTransitionAt, appendMusic, applyAudioTo, applyGradeTo, applyTransitionToAll, clipAt, crossfades, dbToGain, effectiveMusicEnd, estimateExport, exportRange, fmtTime, musicGainAt, musicLength, newId, newProject, newTitle, orderRecordings, placeClips, planExport, removeRange, reorderMusic, setTransition, splitClip, timelineDuration, titleLanes, transitionAt, transitionWindows, CLIP_SPEEDS, canMergeWithNext, clipLength, clipSpeed, groupOf, sourceTimeAt, mergeWithNext, moveClip, unjoin, updateClip, visibleCuts, type Clip, type MediaRef, type MusicTrack, type Project, type ProxyHeight, type Title, type TitleFont, isFileLutKind, FILE_LUT_KINDS, type FileLutKind, type LutKind, type MathLutKind, type TitleAlign, type TitlePosition, type TitleShadow, type Transition, type TransitionKind, type ExportTags, type IntroSettings, type IntroCard, DEFAULT_CARD, cardSettings, hasCard, reorderClip, parseTime, type SteadyLights, STEADY_FRAMES, clampMusicStart, musicUnused, musicBetween, shuffleFillMusic, describeWhere, nameSome, whereSummary, type MediaWhere, exportFingerprint, SOUND_MODES, SOUND_LABELS, soundLevels, applySoundLevels, soundState, type SoundMode, type SoundLevels, FRAMES, FRAME_LABELS, MAX_REFRAME_ZOOM, MIN_CLIP_SPEED, MAX_CLIP_SPEED, type Frame, type Layout, type ReframeKey } from "@/lib/tools/video/project";
 import { gainToReach, YOUTUBE_LUFS, type Loudness } from "@/lib/tools/video/loudness";
 import { drawTransition } from "@/lib/tools/video/transitions";
 import { LUT_OPTIONS, buildDlogLut, deriveLut, fetchOfficialLut, lutToCube, parseCube, type Lut3D } from "@/lib/tools/video/lut";
@@ -447,6 +450,10 @@ export function VideoEditorWidget() {
   const windowOverlayRef = useRef<HTMLDivElement>(null);
   const windowActionsRef = useRef<{ keyHere: () => void; removeKey: () => void; jumpKey: (dir: -1 | 1) => void }>({ keyHere: () => undefined, removeKey: () => undefined, jumpKey: () => undefined });
   const shortActionsRef = useRef<{ markIn: () => void; markOut: () => void; newAt: () => void; nudge: (end: "from" | "to", delta: number) => void }>({ markIn: () => undefined, markOut: () => undefined, newAt: () => undefined, nudge: () => undefined });
+  /** The short being worked on, for handlers that run outside a render (a drop, a picker). */
+  const activeShortRef = useRef<Short | null>(null);
+  /** Each decoded song's waveform peaks (waveform.ts), by media id, for the timeline lane and the song strip. */
+  const [songPeaks, setSongPeaks] = useState<Record<string, Float32Array>>({});
   const [previewMuted, setPreviewMuted] = useState(false);
   const loopRef = useRef(false);
   const previewMutedRef = useRef(false);
@@ -697,6 +704,13 @@ export function VideoEditorWidget() {
   const shortMode = project.mode === "short";
   const activeShort = useMemo(() => shorts.find((x) => x.id === currentShort) ?? (shortMode ? (shorts[0] ?? null) : null), [shorts, currentShort, shortMode]);
   const shortIndex = activeShort ? shorts.indexOf(activeShort) + 1 : 0;
+  useEffect(() => {
+    activeShortRef.current = shortMode ? activeShort : null;
+  });
+  /** The music the timeline plays as this mode hears it: in Short mode the short's own tracks placed at the short, else the landscape lanes. */
+  const timelineMusic = useMemo(() => (shortMode && activeShort ? placeShortMusic(activeShort, project.media) : project.music), [shortMode, activeShort, project.music, project.media]);
+  /** Where that music is cut: the short's end in Short mode, the video's otherwise. */
+  const musicEnd = shortMode && activeShort ? activeShort.to : duration;
   /** What the preview shows and a saved frame renders: the short's titles alone in Short mode, the landscape edit's otherwise. */
   const view = useMemo(() => viewFor(project, shortMode ? activeShort : null), [project, shortMode, activeShort]);
   /** What the landscape export renders: never a short's titles. */
@@ -724,7 +738,7 @@ export function VideoEditorWidget() {
   const updateShort = (id: string, patch: Partial<Short>) => setShorts((l) => l.map((x) => (x.id === id ? clampShort({ ...x, ...patch }, durationRef.current) : x)));
   /** A new short, in Short mode, selected: from the playhead for the default length unless both ends are given. */
   const addShortAt = (from: number, to?: number, name?: string): Short => {
-    const made = clampShort(newShort(from, to ?? from + DEFAULT_SHORT_SECONDS, (projectRef.current?.shorts?.length ?? 0) + 1, name), durationRef.current);
+    const made = clampShort({ ...newShort(from, to ?? from + DEFAULT_SHORT_SECONDS, (projectRef.current?.shorts?.length ?? 0) + 1, name), music: musicForNewShort(projectRef.current?.shorts ?? [], projectRef.current?.media ?? {}) }, durationRef.current);
     setProject((p) => ({ ...p, mode: "short", shorts: [...(p.shorts ?? []), made] }));
     setCurrentShort(made.id);
     setTab("shorts");
@@ -748,7 +762,7 @@ export function VideoEditorWidget() {
       const list = p.shorts ?? [];
       const i = list.findIndex((x) => x.id === id);
       if (i < 0) return p;
-      const copy: Short = { ...list[i], id: newId(), name: `${list[i].name} copy`, exported: null };
+      const copy: Short = { ...list[i], id: newId(), name: `${list[i].name} copy`, exported: null, music: (list[i].music ?? []).map((m) => ({ ...m, id: newId() })) };
       const titles = p.titles.filter((t) => t.short === id).map((t) => ({ ...t, id: newId(), short: copy.id }));
       return { ...p, shorts: [...list.slice(0, i + 1), copy, ...list.slice(i + 1)], titles: [...p.titles, ...titles] };
     });
@@ -1292,16 +1306,20 @@ export function VideoEditorWidget() {
     if (musicBuffers.current.has(mediaId)) return;
     const ctx = (audioCtxRef.current ??= new AudioContext());
     try {
-      musicBuffers.current.set(mediaId, await ctx.decodeAudioData(await file.arrayBuffer()));
+      const buf = await ctx.decodeAudioData(await file.arrayBuffer());
+      musicBuffers.current.set(mediaId, buf);
+      const peaks = peaksOf(Array.from({ length: buf.numberOfChannels }, (_, i) => buf.getChannelData(i)), peakBins(buf.duration));
+      setSongPeaks((prev) => ({ ...prev, [mediaId]: peaks }));
     } catch {
       /* undecodable in the browser: silent in the preview, still mixed on export */
     }
   }, []);
   const primeMusic = useCallback(
     async (p: Project) => {
-      for (const m of p.music) {
-        const f = await store.getFile(m.media);
-        if (f) await decodeMusic(m.media, f);
+      const ids = new Set<string>([...p.music, ...(p.shorts ?? []).flatMap((x) => x.music ?? [])].map((m) => m.media));
+      for (const id of ids) {
+        const f = await store.getFile(id);
+        if (f) await decodeMusic(id, f);
       }
     },
     [store, decodeMusic],
@@ -1857,6 +1875,19 @@ export function VideoEditorWidget() {
     setStatus(left ? `${left} file${left === 1 ? " is" : "s are"} still missing — locate ${left === 1 ? "it" : "them"} by hand` : "Every file is back");
   };
 
+  /** Files dropped on the preview or the Music lane: recordings to the timeline, songs to the lanes or, in Short mode, the short. */
+  const addDropped = (dt: DataTransfer) => {
+    // Handles (when the browser offers them) are remembered across reloads; plain Files are not.
+    const items = Array.from(dt.items) as (DataTransferItem & { getAsFileSystemHandle?: () => Promise<FileSystemHandle | null> })[];
+    const pending = items.filter((i) => i.kind === "file").map((i) => (i.getAsFileSystemHandle ? i.getAsFileSystemHandle() : Promise.resolve(i.getAsFile())));
+    void (async () => {
+      const got = (await Promise.all(pending)).filter((x): x is FileSystemFileHandle | File => !!x && (x instanceof File || x.kind === "file")) as (FileSystemFileHandle | File)[];
+      const isVideo = (name: string, type: string) => type.startsWith("video/") || /\.(mp4|mov)$/i.test(name);
+      const withNames = await Promise.all(got.map(async (h) => ({ h, f: h instanceof File ? h : await h.getFile() })));
+      await addVideos(withNames.filter(({ f }) => isVideo(f.name, f.type)).map(({ h }) => h));
+      await addMusic(withNames.filter(({ f }) => f.type.startsWith("audio/") || /\.(mp3|m4a|wav|aac|flac|ogg)$/i.test(f.name)).map(({ h }) => h));
+    })();
+  };
   /** Prefer the picker that hands back file handles (so files are remembered across reloads); fall back to the plain input. */
   const pickFiles = async (kind: "video" | "audio") => {
     const picker = (window as unknown as { showOpenFilePicker?: (o: unknown) => Promise<FileSystemFileHandle[]> }).showOpenFilePicker;
@@ -1880,16 +1911,32 @@ export function VideoEditorWidget() {
     }
   };
 
+  /**
+   * Songs added: on the landscape lanes, after the last track; in Short mode the first becomes the song of the short
+   * being worked on (the rest join the project's songs, to pick from) and the landscape lanes are left alone.
+   */
   const addMusic = async (inputs: (File | FileSystemFileHandle)[]) => {
+    const into = projectRef.current?.mode === "short" ? (activeShortRef.current?.id ?? null) : null;
+    let first = true;
     for (const h of inputs) {
       const id = newId();
       const f = h instanceof File ? h : await h.getFile();
       store.registerFile(id, h);
+      const toShort = into && first ? into : null;
+      first = false;
       try {
         const info = await probe(f);
         const where = (await store.whereIs(h)) ?? undefined;
         const ref: MediaRef = { id, name: f.name, size: f.size, duration: info.duration, hasAudio: true, sampleRate: info.sampleRate, ...(where ? { where } : {}) };
-        setProject((p) => ({ ...p, media: { ...p.media, [id]: ref }, music: [...p.music, appendMusic(p.music, { id: newId(), media: id, lane: 0, in: 0, out: info.duration, gainDb: soundLevels(p).music, muted: false, fadeIn: 2, fadeOut: 3, keyframes: [] }, 2, timelineDuration(p))] }));
+        setProject((p) => {
+          const media = { ...p.media, [id]: ref };
+          if (into) {
+            if (!toShort || !(p.shorts ?? []).some((x) => x.id === toShort)) return { ...p, media };
+            return { ...p, media, shorts: (p.shorts ?? []).map((x) => (x.id === toShort ? { ...x, music: [songTrack(ref, 0, shortMusicOf(x)[0] ?? { gainDb: soundLevels(p).music, fadeIn: SHORT_FADE_IN, fadeOut: SHORT_FADE_OUT, muted: false })] } : x)) };
+          }
+          return { ...p, media, music: [...p.music, appendMusic(p.music, { id: newId(), media: id, lane: 0, in: 0, out: info.duration, gainDb: soundLevels(p).music, muted: false, fadeIn: 2, fadeOut: 3, keyframes: [] }, 2, timelineDuration(p))] };
+        });
+        if (toShort) setStatus(`${f.name} plays in ${activeShortRef.current?.name ?? "the short"} — drag the song strip in the Shorts tab, or the bar on the Music lane, to choose where in it the short starts`);
         await decodeMusic(id, f);
       } catch (e) {
         setError(`${f.name}: ${e instanceof Error ? e.message : "couldn't read the file."}`);
@@ -1995,11 +2042,11 @@ export function VideoEditorWidget() {
     const at = playheadRef.current;
     // Above 4× the browser silences the video; pitch-shifted music at that speed is noise, so it goes quiet too.
     if (rate > 4) return stopAll;
-    for (const m of project.music) {
+    for (const m of timelineMusic) {
       if (m.muted) continue;
       const buf = musicBuffers.current.get(m.media);
       if (!buf) continue;
-      const end = effectiveMusicEnd(m, duration);
+      const end = effectiveMusicEnd(m, musicEnd);
       if (at >= end) continue;
       const src = ctx.createBufferSource();
       src.buffer = buf;
@@ -2012,7 +2059,7 @@ export function VideoEditorWidget() {
       nodes.set(m.id, { src, gain });
     }
     return stopAll;
-  }, [playing, seekToken, project.music, duration, rate]);
+  }, [playing, seekToken, timelineMusic, musicEnd, rate]);
   useEffect(() => {
     if (!playing) return;
     let raf = 0;
@@ -2149,8 +2196,8 @@ export function VideoEditorWidget() {
           } else steadyRef.current?.reset();
           // Music gains follow the playhead so fades and crossfades are audible in the preview.
           for (const [id, node] of musicNodes.current) {
-            const m = project.music.find((x) => x.id === id);
-            node.gain.gain.value = m && !previewMutedRef.current ? musicGainAt(m, project.music, playhead, duration) : 0;
+            const m = timelineMusic.find((x) => x.id === id);
+            node.gain.gain.value = m && !previewMutedRef.current ? musicGainAt(m, timelineMusic, playhead, musicEnd) : 0;
           }
         } catch {
           /* WebGL unavailable: fall back to the raw video element behind the canvas */
@@ -2160,7 +2207,7 @@ export function VideoEditorWidget() {
     };
     raf = requestAnimationFrame(draw);
     return () => cancelAnimationFrame(raf);
-  }, [under, playhead, project, view, shortMode, pictureView, previewFrame, placed, logo, duration, windows, playing, rate, previewUrlFor, customLut, fileLuts]);
+  }, [under, playhead, project, view, shortMode, pictureView, previewFrame, placed, logo, duration, windows, playing, rate, previewUrlFor, customLut, fileLuts, timelineMusic, musicEnd]);
 
   // Grade, crop and audio changes reach every clip of a joined run, so a hidden cut stays invisible.
   const update = (id: string, patch: Partial<Clip>) => setProject((p) => ({ ...p, clips: updateClip(p.clips, id, patch) }));
@@ -2518,6 +2565,17 @@ export function VideoEditorWidget() {
       getProject: () => project,
       frameAt: (t: number, height?: number) => renderFrame({ project: view, getFile: (id) => store.getFile(id), logo, t, height, type: "image/png" }).then((f) => f.blob),
       getShorts: () => project.shorts ?? [],
+      getShortMusic: () => (activeShort ? shortMusicOf(activeShort, project.media) : []),
+      getTimelineMusic: () => timelineMusic,
+      getSongs: () => songsOf(project.media),
+      getSongPeaks: (id: string) => songPeaks[id] ?? null,
+      pickShortSong,
+      songStartAt,
+      slipShortSong,
+      patchShortSong,
+      songForAll,
+      carrySong,
+      songFromLandscape,
       getView: () => view,
       getSeam: () => seam,
       setMode,
@@ -2851,7 +2909,9 @@ export function VideoEditorWidget() {
   /* ------------------------------------------------------------ the beat */
   /** The track's beats from its samples: tempo, grid, downbeats, drop (beats.ts), kept on the track. */
   const analyseTrackBeats = async (id: string) => {
-    const m = projectRef.current?.music.find((x) => x.id === id);
+    const cur = projectRef.current;
+    const inShort = (cur?.shorts ?? []).find((x) => (x.music ?? []).some((t) => t.id === id)) ?? null;
+    const m = cur?.music.find((x) => x.id === id) ?? inShort?.music?.find((t) => t.id === id);
     if (!m || job) return;
     const file = await store.getFile(m.media);
     if (!file) return setError("The music file is not at hand — Locate it in the missing-files notice first.");
@@ -2860,14 +2920,92 @@ export function VideoEditorWidget() {
     try {
       const { pcm, sampleRate } = await decodeMono(file, { signal: abort.signal, onProgress: (d, t) => setJob((j) => (j ? { ...j, fraction: d / Math.max(1, t) } : j)) });
       const grid = analyseBeats(pcm, sampleRate);
-      updateMusic(id, { beats: grid });
-      setStatus(`${grid.bpm} BPM, ${grid.beats.length} beats${grid.drop !== null ? `, the drop at ${fmtTime(grid.drop)} of the track` : ""} — ticks on the ruler, snapping on, cuts and punch-ins on the beat in the Shorts tab`);
+      if (inShort) setShortMusic(inShort.id, (tracks) => tracks.map((t) => (t.id === id ? { ...t, beats: grid } : t)));
+      else updateMusic(id, { beats: grid });
+      setStatus(`${grid.bpm} BPM, ${grid.beats.length} beats${grid.drop !== null ? `, the drop at ${fmtTime(grid.drop)} of the track` : ""} — ticks on the ruler, snapping on, cuts and punch-ins on the beat${inShort ? ", and Drop starts the short there" : " in the Shorts tab"}`);
     } catch (e) {
       if ((e as DOMException).name !== "AbortError") setError(e instanceof Error ? e.message : String(e));
     } finally {
       setJob(null);
     }
   };
+  /* ------------------------------------------------------------ Short mode: the short's own music */
+  /** One short's tracks changed, through a function of what they are (cut to their songs) and the project. */
+  const setShortMusic = (shortId: string, fn: (tracks: MusicTrack[], p: Project, x: Short) => MusicTrack[]) => setProject((p) => ({ ...p, shorts: (p.shorts ?? []).map((x) => (x.id === shortId ? { ...x, music: fn(shortMusicOf(x, p.media), p, x) } : x)) }));
+  const songLike = (p: Project, prev?: MusicTrack) => prev ?? { gainDb: soundLevels(p).music, fadeIn: SHORT_FADE_IN, fadeOut: SHORT_FADE_OUT, muted: false };
+  /** The short's song: one of the project's songs (the place in it kept when it is the same song), or none. */
+  const pickShortSong = (mediaId: string | null) => {
+    const x = activeShortRef.current;
+    if (!x) return;
+    setShortMusic(x.id, (tracks, p) => {
+      if (!mediaId) return [];
+      const song = p.media[mediaId];
+      if (!song) return tracks;
+      const prev = tracks[0];
+      return [songTrack(song, prev?.media === mediaId ? prev.in : 0, songLike(p, prev))];
+    });
+    if (mediaId) void store.getFile(mediaId).then((f) => (f ? decodeMusic(mediaId, f) : undefined));
+    setStatus(mediaId ? `${project.media[mediaId]?.name ?? "The song"} plays in ${x.name} — drag the song strip to choose where in it the short starts` : `${x.name} has no music now`);
+  };
+  /** Where in the song the short starts: its beginning, its drop, or where the previous short with music left its song (taking that song). */
+  const songStartAt = (how: "start" | "drop" | "continue") => {
+    const x = activeShortRef.current;
+    if (!x) return;
+    setShortMusic(x.id, (tracks, p) => {
+      if (how === "continue") {
+        const list = p.shorts ?? [];
+        for (let j = list.findIndex((y) => y.id === x.id) - 1; j >= 0; j--) {
+          const prevT = shortMusicOf(list[j], p.media)[0];
+          const song = prevT ? p.media[prevT.media] : undefined;
+          if (prevT && song) return [continueTrack(prevT, list[j].to - list[j].from, song.duration)];
+        }
+        return tracks;
+      }
+      const t = tracks[0];
+      if (!t) return tracks;
+      const songLen = p.media[t.media]?.duration ?? t.out;
+      if (how === "drop") return t.beats?.drop == null ? tracks : [slipTrack(t, t.beats.drop, songLen), ...tracks.slice(1)];
+      return [slipTrack(t, 0, songLen), ...tracks.slice(1)];
+    });
+  };
+  const slipShortSong = (inPoint: number) => {
+    const x = activeShortRef.current;
+    if (!x) return;
+    setShortMusic(x.id, (tracks, p) => (tracks.length ? [slipTrack(tracks[0], inPoint, p.media[tracks[0].media]?.duration ?? tracks[0].out), ...tracks.slice(1)] : tracks));
+  };
+  const patchShortSong = (patch: Partial<MusicTrack>) => {
+    const x = activeShortRef.current;
+    if (!x) return;
+    setShortMusic(x.id, (tracks) => (tracks.length ? [{ ...tracks[0], ...patch }, ...tracks.slice(1)] : tracks));
+  };
+  const songForAll = () => {
+    const x = activeShortRef.current;
+    if (!x) return;
+    setShorts((l) => spreadToAll(l, x.id));
+    setStatus(`Every short plays ${x.name}'s song as it is set there`);
+  };
+  const carrySong = () => {
+    const x = activeShortRef.current;
+    if (!x) return;
+    setShorts((l) => carryThrough(l, x.id, projectRef.current?.media ?? {}));
+    setStatus(`The shorts after ${x.name} carry its song on, each from where the one before it stopped`);
+  };
+  /** A copy of what the landscape plays under the span — from then on the short's own. */
+  const songFromLandscape = () => {
+    const x = activeShortRef.current;
+    if (!x) return;
+    setShortMusic(x.id, (_tracks, p, s) => musicBetween(p.music, s.from, s.to, s.loop !== "off").map((m) => ({ ...m, id: newId(), lane: 0 })));
+  };
+  /** A click on the song strip: the playhead to that moment of the song as the short plays it, when it is heard inside the short. */
+  const jumpInSong = (songT: number) => {
+    const x = activeShortRef.current;
+    const t = x ? shortMusicOf(x, project.media)[0] : null;
+    if (!x || !t) return;
+    const at = x.from + t.start + (songT - t.in);
+    if (at >= x.from && at <= x.to) stepTo(at);
+  };
+  /** Whether the landscape lanes play anything under the short — the seed "What the landscape plays here" offers. */
+  const landscapeHasMusicHere = !!activeShort && project.music.some((m) => m.start < activeShort.to && m.start + musicLength(m) > activeShort.from);
   /** The short's clips cut on every n-th beat inside it. */
   const cutShortToBeats = (every: 1 | 2 | 4) => {
     const x = activeShort;
@@ -2880,7 +3018,7 @@ export function VideoEditorWidget() {
   const punchShort = (every: 1 | 2 | 4) => {
     const x = activeShort;
     if (!x || !beats.length) return;
-    const r = punchIns(project.clips, beats, x.from, x.to, every, beatPeriod(project.music) ?? 0.5);
+    const r = punchIns(project.clips, beats, x.from, x.to, every, beatPeriod(timelineMusic) ?? 0.5);
     setProject((p) => ({ ...p, clips: r.clips }));
     setStatus(r.punches ? `${r.punches} punch-in${r.punches === 1 ? "" : "s"} on the beat inside ${x.name} — window keys, in the Crop tab` : "No beat inside the short");
   };
@@ -2954,7 +3092,7 @@ export function VideoEditorWidget() {
         if (abort.signal.aborted) break;
         const index = shorts.indexOf(x) + 1;
         await exportShort(x, index, false, abort.signal);
-        if (withoutMusic && projectRef.current?.music.length) await exportShort(x, index, true, abort.signal);
+        if (withoutMusic && (x.music?.length ?? 0) > 0) await exportShort(x, index, true, abort.signal);
         made++;
       }
       setStatus(made === 1 && !all ? `Exported ${shortFileName(shorts.indexOf(list[0]) + 1, list[0])} into ${SHORTS_FOLDER}/` : `${made} short${made === 1 ? "" : "s"} exported into ${SHORTS_FOLDER}/`);
@@ -3363,19 +3501,19 @@ export function VideoEditorWidget() {
 
   const pxPerSec = (timelineWidth / Math.max(10, duration)) * zoom;
   /** The analysed music's beats as timeline instants; the ruler shows them when they are at least six pixels apart, else the downbeats. */
-  const beats = useMemo(() => timelineBeats(project.music, duration), [project.music, duration]);
+  const beats = useMemo(() => timelineBeats(timelineMusic, musicEnd), [timelineMusic, musicEnd]);
   const beatTicks = useMemo(() => {
-    const period = beatPeriod(project.music);
+    const period = beatPeriod(timelineMusic);
     if (!period) return [] as number[];
     if (period * pxPerSec >= 6) return beats;
-    if (period * 4 * pxPerSec >= 6) return timelineBeats(project.music, duration, true);
+    if (period * 4 * pxPerSec >= 6) return timelineBeats(timelineMusic, musicEnd, true);
     return [] as number[];
-  }, [project.music, duration, pxPerSec, beats]);
+  }, [timelineMusic, musicEnd, pxPerSec, beats]);
   useEffect(() => {
     pxRef.current = pxPerSec;
   }, [pxPerSec]);
   /** Where the longest track ends: lanes draw out to here so an unused tail is visible, hatched, past the video. */
-  const musicFarEnd = project.music.reduce((a, m) => Math.max(a, m.start + musicLength(m)), 0);
+  const musicFarEnd = shortMode ? 0 : project.music.reduce((a, m) => Math.max(a, m.start + musicLength(m)), 0);
   const underClipId = under?.clip.id ?? null;
   useEffect(() => {
     steadyRef.current?.reset();
@@ -3408,7 +3546,7 @@ export function VideoEditorWidget() {
     const el = hoverLabelRef.current;
     if (!el) return;
     const held = !!scrubRef.current;
-    el.textContent = held ? `${Math.round(t * 100) / 100}s` : fmtTime(t);
+    el.textContent = musicDragRef.current?.label ?? (held ? `${Math.round(t * 100) / 100}s` : fmtTime(t));
     el.dataset.held = held ? "true" : "false";
   };
   const onTimelinePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
@@ -3474,6 +3612,64 @@ export function VideoEditorWidget() {
     shortDragRef.current = null;
     if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
     if (!d.moved && d.id) selectShort(d.id, true);
+  };
+  /* The Music lane in Short mode: the active short's bar is dragged to slide the song under the short, its edges to set where the music begins and ends; another short's bar selects that short. */
+  const musicDragRef = useRef<{ shortId: string; trackId: string; kind: "slip" | "from" | "to"; startT: number; track0: MusicTrack; moved: boolean; label?: string } | null>(null);
+  const onMusicLanePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0 || !timelineRef.current) return;
+    const target = e.target as HTMLElement;
+    const bar = target.closest("[data-short-music]") as HTMLElement | null;
+    if (!bar) return; // the empty lane scrubs like the ruler
+    e.stopPropagation();
+    const trackId = bar.dataset.shortMusic ?? "", shortId = bar.dataset.shortMusicOf ?? "";
+    const x = shorts.find((y) => y.id === shortId);
+    const track = x ? shortMusicOf(x, project.media).find((m) => m.id === trackId) : undefined;
+    if (!x || !track) return;
+    if (x.id !== activeShort?.id) {
+      selectShort(x.id, true);
+      return;
+    }
+    e.currentTarget.setPointerCapture(e.pointerId);
+    musicDragRef.current = { shortId, trackId, kind: (target.dataset.shortMusicHandle as "from" | "to" | undefined) ?? "slip", startT: timeAtPointer(timelineRef.current, e.clientX, false), track0: track, moved: false };
+  };
+  const onMusicLanePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    const d = musicDragRef.current;
+    if (!d || !timelineRef.current) return;
+    const t = timeAtPointer(timelineRef.current, e.clientX, false);
+    const delta = t - d.startT;
+    if (!d.moved && Math.abs(delta) * pxPerSec < 3) return;
+    d.moved = true;
+    const x = shorts.find((y) => y.id === d.shortId);
+    if (!x) return;
+    const songLen = project.media[d.track0.media]?.duration ?? d.track0.out, shortLen = x.to - x.from;
+    let next: MusicTrack;
+    if (d.kind === "slip") {
+      // The waveform follows the pointer: dragged right, earlier parts of the song come under the short's start.
+      let inPoint = d.track0.in - delta;
+      const g = d.track0.beats;
+      if (g) {
+        const within = SNAP_PX / pxPerSec;
+        let best: number | null = null;
+        for (const b of g.drop !== null ? [g.drop, ...g.beats] : g.beats) if (Math.abs(b - inPoint) <= within && (best === null || Math.abs(b - inPoint) < Math.abs(best - inPoint))) best = b;
+        if (best !== null) inPoint = best;
+      }
+      next = slipTrack(d.track0, inPoint, songLen);
+      d.label = `${fmtTime(next.in)} into the song`;
+    } else if (d.kind === "from") {
+      next = trimTrackStart(d.track0, d.track0.start + delta, shortLen);
+      d.label = `music from ${fmtTime(next.start)} into the short`;
+    } else {
+      next = trimTrackEnd(d.track0, Math.min(shortLen, d.track0.start + musicLength(d.track0)) + delta, shortLen, songLen);
+      d.label = next.out >= songLen - 1e-3 ? "music to the short's end" : `music to ${fmtTime(next.start + musicLength(next))} into the short`;
+    }
+    setShortMusic(d.shortId, (tracks) => tracks.map((m) => (m.id === d.trackId ? next : m)));
+  };
+  const onMusicLanePointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    const d = musicDragRef.current;
+    if (!d) return;
+    musicDragRef.current = null;
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
+    if (!d.moved) setTab("shorts");
   };
   const onTimelinePointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
     if (!scrubRef.current) return;
@@ -3629,12 +3825,14 @@ export function VideoEditorWidget() {
   const laneVideo = { flex: "3 1 0px", minHeight: 28 } as const;
   const laneTitles = { flex: `${titleLaneOf.count} 1 0px`, minHeight: Math.max(0, titleLaneOf.count * 20 - 2) } as const;
   const laneMusic = { flex: "1 1 0px", minHeight: 18 } as const;
+  /** Short mode: the three landscape lanes give way to one lane with the shorts' own songs, tall enough for a waveform. */
+  const laneShortMusic = { flex: "1.8 1 0px", minHeight: 30 } as const;
   // The shorts lane shows whenever there are shorts, and in Short mode from the start.
   const showShortsLane = shortMode || shorts.length > 0;
   const laneShorts = { flex: "1 1 0px", minHeight: 22 } as const;
   // The smallest the timeline pane may be: every lane at its floor plus the header, the hint line and padding. The rows
   // split holds it as a hard floor, so a notice or a result card above the rows squeezes the preview, never the lanes.
-  const timelineFloor = 216 + 20 * titleLaneOf.count + (showShortsLane ? 26 : 0);
+  const timelineFloor = 216 + 20 * titleLaneOf.count + (showShortsLane ? 26 : 0) - (shortMode ? 32 : 0);
   const timelinePanel = (
       <div className="panel flex h-full min-h-0 flex-col select-none overflow-hidden p-2" data-timeline>
         <div className="mb-1.5 flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1">
@@ -3657,9 +3855,13 @@ export function VideoEditorWidget() {
             <div className="mt-1 flex items-center justify-end" style={laneVideo}>Video</div>
             {showShortsLane && <div className="mt-1 flex items-center justify-end" style={laneShorts}>Shorts</div>}
             <div className="mt-1 flex items-center justify-end" style={laneTitles}>Titles</div>
-            {[0, 1, 2].map((lane) => (
-              <div key={lane} className="mt-1 flex items-center justify-end" style={laneMusic}>Music {lane + 1}</div>
-            ))}
+            {shortMode ? (
+              <div className="mt-1 flex items-center justify-end" style={laneShortMusic} title="Each short's own song; the landscape lanes play no part in a short">Music</div>
+            ) : (
+              [0, 1, 2].map((lane) => (
+                <div key={lane} className="mt-1 flex items-center justify-end" style={laneMusic}>Music {lane + 1}</div>
+              ))
+            )}
           </div>
         <div ref={timelineRef} className="relative min-h-0 min-w-0 flex-1 overflow-x-auto overflow-y-hidden" onScroll={onTimelineScroll} onPointerDown={onTimelinePointerDown} onPointerMove={onTimelinePointerMove} onPointerUp={onTimelinePointerUp} onPointerCancel={onTimelinePointerUp} onPointerLeave={onTimelinePointerLeave} data-timeline-scroll>
           <div className="relative flex h-full flex-col" style={{ width: Math.max(100, Math.max(duration, musicFarEnd) * pxPerSec + 40) }}>
@@ -3803,8 +4005,56 @@ export function VideoEditorWidget() {
                 </button>
               ))}
             </div>
-            {/* music lanes */}
-            {[0, 1, 2].map((lane) => (
+            {/* music: in Short mode one lane with every short's own song; otherwise the three landscape lanes */}
+            {shortMode && (
+              <div className="relative mt-1" style={laneShortMusic} data-short-music-lane onPointerDown={onMusicLanePointerDown} onPointerMove={onMusicLanePointerMove} onPointerUp={onMusicLanePointerUp} onPointerCancel={onMusicLanePointerUp} onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); }} onDrop={(e) => { e.preventDefault(); e.stopPropagation(); addDropped(e.dataTransfer); }}>
+                {activeShort && !shortMusicOf(activeShort, project.media).length && (
+                  <div className="pointer-events-none absolute inset-y-0 flex items-center rounded-[3px] border border-dashed border-accent/60 px-2 text-[10.5px] text-faint" style={{ left: activeShort.from * pxPerSec, width: Math.max(6, (activeShort.to - activeShort.from) * pxPerSec) }} data-short-music-empty>
+                    <span className="truncate">Drop a song here, or pick one in the Shorts tab</span>
+                  </div>
+                )}
+                {shorts.map((x) =>
+                  shortMusicOf(x, project.media).map((m) => {
+                    const start = x.from + m.start, end = Math.min(x.to, start + musicLength(m));
+                    if (end <= start + 1e-6) return null;
+                    const active = x.id === activeShort?.id;
+                    const song = project.media[m.media];
+                    const w = Math.max(6, (end - start) * pxPerSec);
+                    const tail = active && x.to - end > 0.05 ? (x.to - end) * pxPerSec : 0;
+                    return (
+                      <Fragment key={m.id}>
+                        <div
+                          role="button"
+                          tabIndex={active ? 0 : -1}
+                          onKeyDown={(e) => { if (e.key === "Enter") setTab("shorts"); }}
+                          className={cn("absolute top-0 flex h-full items-start overflow-hidden rounded-[3px] border select-none", active ? "z-10 cursor-grab border-accent bg-accent/15 text-ink" : "border-edge bg-raised/70 text-muted opacity-40 hover:opacity-70", m.muted && "opacity-30")}
+                          style={{ left: start * pxPerSec, width: w }}
+                          title={active ? `${song?.name ?? "song"} from ${fmtTime(m.in)} — drag the waveform to choose where in the song the short starts, its edges to set where the music begins and ends in the short` : `${x.name}: ${song?.name ?? "song"} from ${fmtTime(m.in)} — click to work on that short`}
+                          data-short-music={m.id}
+                          data-short-music-of={x.id}
+                          data-active={active ? "true" : "false"}
+                        >
+                          <WaveBars peaks={songPeaks[m.media] ?? null} songSeconds={song?.duration ?? m.out} from={m.in} to={m.in + (end - start)} width={w} className={active ? "text-accent" : "text-muted"} dim={!active} />
+                          <span className="pointer-events-none relative mx-1 mt-0.5 max-w-[calc(100%-8px)] truncate rounded-[2px] bg-surface/75 px-1 text-[10.5px] leading-4">{song?.name ?? "song"} · from {fmtTime(m.in)}{m.muted ? " · muted" : m.gainDb <= -60 ? " · off" : ""}</span>
+                          {active && (
+                            <>
+                              <span className="absolute inset-y-0 left-0 w-1.5 cursor-ew-resize bg-accent/60" data-short-music-handle="from" title="Where the music begins in the short" />
+                              <span className="absolute inset-y-0 right-0 w-1.5 cursor-ew-resize bg-accent/60" data-short-music-handle="to" title="Where the music ends in the short (at the short's end it runs to the song's end)" />
+                            </>
+                          )}
+                        </div>
+                        {tail > 10 && (
+                          <div className="pointer-events-none absolute top-0 flex h-full items-center truncate rounded-[3px] border border-dashed border-edge px-1.5 text-[10.5px] text-faint" style={{ left: end * pxPerSec, width: tail }} title="The song runs out (or is trimmed) before the short ends" data-song-runs-out>
+                            {m.out < (song?.duration ?? m.out) - 1e-3 ? "trimmed" : "the song runs out"} · {fmtTime(x.to - end)} without music
+                          </div>
+                        )}
+                      </Fragment>
+                    );
+                  }),
+                )}
+              </div>
+            )}
+            {!shortMode && [0, 1, 2].map((lane) => (
               <div key={lane} className="relative mt-1" style={laneMusic} data-music-lane={lane}>
                 {lane === 0 && !project.music.length && project.clips.length > 0 && <div className="pointer-events-none absolute inset-0 flex items-center rounded-[3px] border border-dashed border-edge px-2 text-[10.5px] text-faint">Drop music onto the preview, or add it from the Audio tab</div>}
                 {project.music.filter((m) => m.lane === lane).map((m) => (
@@ -3999,16 +4249,7 @@ export function VideoEditorWidget() {
             onDrop={(e) => {
               e.preventDefault();
               setDragOver(false);
-              // Handles (when the browser offers them) are remembered across reloads; plain Files are not.
-              const items = Array.from(e.dataTransfer.items) as (DataTransferItem & { getAsFileSystemHandle?: () => Promise<FileSystemHandle | null> })[];
-              const pending = items.filter((i) => i.kind === "file").map((i) => (i.getAsFileSystemHandle ? i.getAsFileSystemHandle() : Promise.resolve(i.getAsFile())));
-              void (async () => {
-                const got = (await Promise.all(pending)).filter((x): x is FileSystemFileHandle | File => !!x && (x instanceof File || x.kind === "file")) as (FileSystemFileHandle | File)[];
-                const isVideo = (name: string, type: string) => type.startsWith("video/") || /\.(mp4|mov)$/i.test(name);
-                const withNames = await Promise.all(got.map(async (h) => ({ h, f: h instanceof File ? h : await h.getFile() })));
-                await addVideos(withNames.filter(({ f }) => isVideo(f.name, f.type)).map(({ h }) => h));
-                await addMusic(withNames.filter(({ f }) => f.type.startsWith("audio/") || /\.(mp3|m4a|wav|aac|flac|ogg)$/i.test(f.name)).map(({ h }) => h));
-              })();
+              addDropped(e.dataTransfer);
             }}
           >
             <video ref={videoRef} playsInline className="absolute inset-0 h-full w-full object-contain opacity-0" />
@@ -4122,8 +4363,8 @@ export function VideoEditorWidget() {
                       {t.text}
                     </div>
                   ))}
-                  {project.music.map((m) => (
-                    <div key={m.id} className="absolute bottom-1 h-2 rounded-[2px]" style={{ left: `${(m.start / duration) * 100}%`, width: `max(2px, ${((effectiveMusicEnd(m, duration) - m.start) / duration) * 100}%)`, backgroundColor: LANE_COLORS[m.lane] + "cc", marginBottom: m.lane * 3 }} title={project.media[m.media]?.name} />
+                  {timelineMusic.map((m) => (
+                    <div key={m.id} className="absolute bottom-1 h-2 rounded-[2px]" style={{ left: `${(m.start / duration) * 100}%`, width: `max(2px, ${((effectiveMusicEnd(m, musicEnd) - m.start) / duration) * 100}%)`, backgroundColor: LANE_COLORS[m.lane] + "cc", marginBottom: m.lane * 3 }} title={project.media[m.media]?.name} />
                   ))}
                   <div className="absolute inset-y-0 w-px bg-[#e5484d]" style={{ left: `${(Math.min(playhead, duration) / duration) * 100}%` }} />
                 </div>
@@ -4956,8 +5197,8 @@ export function VideoEditorWidget() {
               <>
                 <div className="flex flex-wrap items-center gap-1.5">
                   <input ref={musicInput} type="file" accept="audio/*" multiple hidden onChange={(e) => e.target.files && void addMusic(Array.from(e.target.files))} />
-                  <button type="button" onClick={() => void pickFiles("audio")} className={GHOST} title="Add one song or many at once">
-                    <Music size={13} /> Add music
+                  <button type="button" onClick={() => void pickFiles("audio")} className={GHOST} title={shortMode ? "A song for the short being worked on" : "Add one song or many at once"}>
+                    <Music size={13} /> {shortMode ? "Add a song to the short" : "Add music"}
                   </button>
                   {current && (
                     <>
@@ -4968,6 +5209,15 @@ export function VideoEditorWidget() {
                     </>
                   )}
                 </div>
+                {shortMode && (
+                  <div className="flex flex-wrap items-center gap-2 rounded-[var(--radius-sm)] border border-edge p-2 text-[12px] text-muted" data-short-music-audio-note>
+                    <span className="min-w-0 flex-1">In Short mode each short carries its own music, set in the Shorts tab; the landscape lanes play no part in a short and keep what they have for the landscape export.</span>
+                    <button type="button" onClick={() => setTab("shorts")} className={cn(GHOST, "h-7 text-[12px]")} data-open-short-music>
+                      <Music size={12} /> The short&apos;s music
+                    </button>
+                  </div>
+                )}
+                {!shortMode && (
                 <div className="space-y-1.5 rounded-[var(--radius-sm)] border border-edge p-2" data-music-fill>
                   <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
                     <span className="font-medium text-ink">Fill the video with music</span>
@@ -4985,6 +5235,7 @@ export function VideoEditorWidget() {
                   </button>
                   <p className="text-[12px] text-faint">Add as many songs as you like, then shuffle: they are laid end to end in a random order from the start of the video to its end, crossfading between them; when the songs run out before the video does, a fresh shuffle follows (never the same song twice in a row). The last one fades out at the end. This replaces the music lanes; undo brings them back.</p>
                 </div>
+                )}
                 {current && (
                   <>
                     <Slider label={`Original audio gain · ${project.media[current.media]?.name}`} value={current.gainDb} min={-60} max={12} step={0.5} onChange={(v) => update(current.id, { gainDb: v })} format={(v) => (v <= -60 ? "off" : `${v > 0 ? "+" : ""}${v} dB`)} />
@@ -4999,7 +5250,7 @@ export function VideoEditorWidget() {
                     </div>
                   </>
                 )}
-                {currentMusic ? (
+                {shortMode ? null : currentMusic ? (
                   <div className="space-y-2 border-t border-edge pt-2">
                     <div className="flex items-center justify-between">
                       <span className="font-medium text-ink">{project.media[currentMusic.media]?.name}</span>
@@ -5436,9 +5687,10 @@ export function VideoEditorWidget() {
                 onCopyPost={() => void copyShortPost()}
                 onTitles={() => setTab("titles")}
                 onAction={onShortAction}
-                beats={project.music.find((m) => m.beats)?.beats ? { bpm: project.music.find((m) => m.beats)!.beats!.bpm, count: beats.length } : null}
-                hasMusic={project.music.length > 0}
-                onAnalyseBeats={() => { const m = project.music[0]; if (m) void analyseTrackBeats(m.id); }}
+                beats={timelineMusic.find((m) => m.beats)?.beats ? { bpm: timelineMusic.find((m) => m.beats)!.beats!.bpm, count: beats.length } : null}
+                hasMusic={timelineMusic.length > 0}
+                onAnalyseBeats={() => { const m = timelineMusic[0]; if (m) void analyseTrackBeats(m.id); }}
+                music={shortMode && activeShort ? <ShortMusicBlock short={activeShort} shorts={shorts} songs={songsOf(project.media)} media={project.media} tracks={shortMusicOf(activeShort, project.media)} peaks={(id) => songPeaks[id] ?? null} landscapeHasMusicHere={landscapeHasMusicHere} busy={!!job} onPick={pickShortSong} onAdd={() => void pickFiles("audio")} onStartAt={songStartAt} onSlip={slipShortSong} onPatch={patchShortSong} onUseForAll={songForAll} onCarry={carrySong} onFromLandscape={songFromLandscape} onJump={jumpInSong} /> : null}
                 onCutToBeats={cutShortToBeats}
                 onPunchIns={punchShort}
                 onSlowHalf={slowShort}

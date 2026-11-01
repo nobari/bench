@@ -284,6 +284,12 @@ export interface Short {
   /** The cover frame, in timeline seconds; the first frame when unset. */
   cover?: number | null;
   exported?: { name: string; bytes: number; at: number } | null;
+  /**
+   * The short's own music, timed from the short's start (so the song moves with the short), independent of the
+   * landscape lanes. Absent only in a project saved before 1.91.0: the loader gives such a short a copy of what it
+   * heard from the landscape under its span, so nothing already exported changes.
+   */
+  music?: MusicTrack[];
 }
 export type EditorMode = "landscape" | "short";
 export const newShort = (from: number, to: number, index: number, name?: string): Short => ({ id: newId(), name: name ?? `Short ${index}`, from, to, loop: "off", targets: ["shorts", "reels"] });
@@ -301,7 +307,58 @@ export function normalizeShort(s: Partial<Short> | null | undefined): Short | nu
     ...(typeof s.preset === "string" && s.preset ? { preset: s.preset } : {}),
     ...(typeof s.cover === "number" && s.cover >= 0 ? { cover: s.cover } : {}),
     ...(s.exported && typeof s.exported === "object" && typeof s.exported.name === "string" ? { exported: { name: s.exported.name, bytes: Number(s.exported.bytes) || 0, at: Number(s.exported.at) || 0 } } : {}),
+    ...(Array.isArray(s.music) ? { music: s.music.map((m) => normalizeMusicTrack(m)).filter((m): m is MusicTrack => !!m) } : {}),
   };
+}
+
+/** A saved music track made whole: a track without a file or a span is dropped, the rest defaulted. */
+export function normalizeMusicTrack(raw: unknown): MusicTrack | null {
+  const m = raw as Partial<MusicTrack> | null;
+  if (!m || typeof m !== "object" || typeof m.media !== "string" || !m.media) return null;
+  const num = (v: unknown, dflt: number) => (typeof v === "number" && Number.isFinite(v) ? v : dflt);
+  const inPoint = Math.max(0, num(m.in, 0)), out = num(m.out, NaN);
+  if (!(out > inPoint)) return null;
+  return {
+    id: typeof m.id === "string" && m.id ? m.id : newId(),
+    media: m.media,
+    lane: Math.min(2, Math.max(0, Math.round(num(m.lane, 0)))),
+    start: Math.max(0, num(m.start, 0)),
+    in: inPoint,
+    out,
+    gainDb: num(m.gainDb, 0),
+    muted: m.muted === true,
+    fadeIn: Math.max(0, num(m.fadeIn, 0)),
+    fadeOut: Math.max(0, num(m.fadeOut, 0)),
+    keyframes: Array.isArray(m.keyframes) ? m.keyframes.filter((k) => k && typeof k.t === "number" && typeof k.db === "number").map((k) => ({ t: k.t, db: k.db })) : [],
+    ...(m.beats && typeof m.beats === "object" && Array.isArray(m.beats.beats) ? { beats: m.beats } : {}),
+  };
+}
+
+/**
+ * The music heard between two instants, moved to start from zero and cut to the span: a track the span cuts into
+ * fades in briefly, one it cuts short fades out — shorter fades for a loop, so the seam is soft but not slow.
+ */
+export function musicBetween(music: MusicTrack[], from: number, to: number, loop: boolean): MusicTrack[] {
+  const len = to - from;
+  return music
+    .filter((m) => m.start < to && m.start + musicLength(m) > from)
+    .map((m) => {
+      const cutFront = Math.max(0, from - m.start);
+      const start = Math.max(0, m.start - from);
+      const inPoint = m.in + cutFront;
+      const out = Math.min(m.out, inPoint + (len - start));
+      const keyframes = m.keyframes.map((k) => ({ ...k, t: k.t - cutFront })).filter((k) => k.t >= 0 && k.t <= out - inPoint);
+      const cutEnd = m.out - out > 1e-6;
+      return {
+        ...m,
+        start,
+        in: inPoint,
+        out,
+        keyframes,
+        fadeIn: cutFront > 0 ? Math.max(m.fadeIn, loop ? 0.15 : 0.1) : m.fadeIn,
+        fadeOut: cutEnd ? Math.max(m.fadeOut, loop ? 0.3 : 0.5) : m.fadeOut,
+      };
+    });
 }
 
 export interface Title {
@@ -1628,7 +1685,15 @@ export function deserialize(json: string): Project | null {
     if (typeof intro.sceneSeconds !== "number" || !(intro.sceneSeconds > 0)) intro.sceneSeconds = null;
     if (!INTRO_OUTROS.includes(intro.outro as IntroOutro)) intro.outro = "look";
     const sound: SoundMode = SOUND_MODES.includes(p.sound as SoundMode) ? (p.sound as SoundMode) : "footage";
-    const shorts: Short[] = Array.isArray(p.shorts) ? p.shorts.map((x) => normalizeShort(x)).filter((x): x is Short => !!x) : [];
+    // Before 1.91.0 a short had no music of its own and heard the landscape's under its span; such a short takes a copy
+    // of that, so it sounds as it did, and from then on its music is its own.
+    const landscapeMusic = Array.isArray(p.music) ? p.music.map((m) => normalizeMusicTrack(m)).filter((m): m is MusicTrack => !!m) : [];
+    const shorts: Short[] = Array.isArray(p.shorts)
+      ? p.shorts
+          .map((x) => normalizeShort(x))
+          .filter((x): x is Short => !!x)
+          .map((x) => (x.music ? x : { ...x, music: musicBetween(landscapeMusic, x.from, x.to, x.loop !== "off").map((m) => ({ ...m, id: newId(), lane: 0 })) }))
+      : [];
     const mode: EditorMode = p.mode === "short" ? "short" : "landscape";
     return { ...newProject(), ...p, clips, sound, layout, safeArea, shorts, mode, export: { ...DEFAULT_EXPORT, ...p.export, frame, tags: { ...DEFAULT_TAGS, ...(p.export?.tags ?? {}) } }, preview: { ...DEFAULT_PREVIEW, ...(p.preview ?? (Object.values(p.proxies ?? {}).some((x) => x?.ready) ? { proxyHeight: 1080 } : {})) }, transition, intro, stops, titles: (p.titles ?? []).map((t) => normalizeTitle(t)) };
   } catch {

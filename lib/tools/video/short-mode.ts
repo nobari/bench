@@ -7,7 +7,9 @@
 import { EXPORT_PRESETS, applyPreset } from "./export-presets";
 import type { Moment } from "./intro";
 import type { PreflightItem } from "./preflight";
-import { GLIMPSE_SECONDS, clipSpeed, musicLength, newId, newShort, placeClips, timelineDuration, type Clip, type MusicTrack, type Project, type Short, type Title } from "./project";
+import { GLIMPSE_SECONDS, clipSpeed, newId, newShort, placeClips, timelineDuration, type Clip, type Project, type Short, type Title } from "./project";
+import { shortMusicOf } from "./short-music";
+export { musicBetween } from "./project";
 import { PLATFORMS, lengthFor, postCopy, safeAreaFor, shortLimits, type PlatformId, type ShortEnv } from "./shorts";
 import { candidatesIn, stretches } from "./shortplan";
 import { shortFolderName } from "./shortset";
@@ -83,40 +85,13 @@ export function titlesBetween(titles: Title[], from: number, to: number): Title[
 }
 
 /**
- * The music heard between two instants, moved to start from zero and cut to the span: a track the span cuts into
- * fades in briefly, one it cuts short fades out — shorter fades for a loop, so the seam is soft but not slow.
- */
-export function musicBetween(music: MusicTrack[], from: number, to: number, loop: boolean): MusicTrack[] {
-  const len = to - from;
-  return music
-    .filter((m) => m.start < to && m.start + musicLength(m) > from)
-    .map((m) => {
-      const cutFront = Math.max(0, from - m.start);
-      const start = Math.max(0, m.start - from);
-      const inPoint = m.in + cutFront;
-      const out = Math.min(m.out, inPoint + (len - start));
-      const keyframes = m.keyframes.map((k) => ({ ...k, t: k.t - cutFront })).filter((k) => k.t >= 0 && k.t <= out - inPoint);
-      const cutEnd = m.out - out > 1e-6;
-      return {
-        ...m,
-        start,
-        in: inPoint,
-        out,
-        keyframes,
-        fadeIn: cutFront > 0 ? Math.max(m.fadeIn, loop ? 0.15 : 0.1) : m.fadeIn,
-        fadeOut: cutEnd ? Math.max(m.fadeOut, loop ? 0.3 : 0.5) : m.fadeOut,
-      };
-    });
-}
-
-/**
  * The project an export of one short renders: its clips cut to the span (a glimpse loop repeats the first fraction of
- * a second at the end under a short dissolve), its titles and music moved to start from zero, the vertical frame, the
- * short's preset and safe area, no range, no review, the quick check — an ordinary Project the engine already knows.
+ * a second at the end under a short dissolve), its titles moved to start from zero, its own music (already timed from
+ * its start; the landscape lanes play no part), the vertical frame, the short's preset and safe area, no range, no
+ * review, the quick check — an ordinary Project the engine already knows.
  */
 export function shortProject(project: Project, short: Short): Project {
   const s = clampShort(short, timelineDuration(project));
-  const loop = s.loop !== "off";
   const clips = clipsBetween(project.clips, s.from, s.to);
   if (s.loop === "glimpse" && clips.length) {
     const first = clips[0];
@@ -127,7 +102,7 @@ export function shortProject(project: Project, short: Short): Project {
     void joinedToPrevious;
     clips.push({ ...rest, id: newId(), in: first.in, out: Math.min(first.out, first.in + GLIMPSE_SECONDS * speed), transitionIn: { kind: "dissolve", duration: Math.min(0.3, GLIMPSE_SECONDS * 0.75) } });
   }
-  const music = musicBetween(project.music, s.from, s.to, loop);
+  const music = shortMusicOf(s, project.media);
   const used = new Set<string>([...clips.map((c) => c.media), ...music.map((m) => m.media), ...(project.watermark.media ? [project.watermark.media] : [])]);
   const media = Object.fromEntries(Object.entries(project.media).filter(([id]) => used.has(id)));
   const preset = SHORT_PRESETS.includes(s.preset ?? "") ? s.preset! : DEFAULT_SHORT_PRESET;
@@ -272,7 +247,17 @@ export function shortTemplate(project: Project, short: Short): Record<string, un
       `This file describes one short cut from the timeline: "${s.name}"${index ? ` (part ${index} of ${shorts.length})` : ""}, ${seconds} s long. Every start is in seconds from the short's own start, 0 to ${seconds}; the import puts the titles into this short alone. Placeholders stay as written and are filled per short: {part}, {of}, {name}, {date}, {short}. A short has no intro section.`,
       ...titlesPart.instructions.slice(1),
     ],
-    short: { name: s.name, index, of: shorts.length, from: +s.from.toFixed(3), to: +s.to.toFixed(3), seconds, loop: s.loop, targets: s.targets },
+    short: {
+      name: s.name,
+      index,
+      of: shorts.length,
+      from: +s.from.toFixed(3),
+      to: +s.to.toFixed(3),
+      seconds,
+      loop: s.loop,
+      targets: s.targets,
+      music: derived.music.length ? derived.music.map((m) => ({ song: project.media[m.media]?.name ?? m.media, from: +m.in.toFixed(2), startsAt: +m.start.toFixed(2), gainDb: m.gainDb })) : null,
+    },
   };
 }
 

@@ -5,7 +5,7 @@
  * presentation: every change goes back through the callbacks.
  */
 import { ArrowDown, ArrowUp, Copy, Loader, Play, Repeat, Smartphone, Sparkles, Trash2 } from "lucide-react";
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import { EXPORT_PRESETS } from "@/lib/tools/video/export-presets";
 import type { PreflightItem } from "@/lib/tools/video/preflight";
@@ -29,9 +29,11 @@ export interface SeamState {
 
 const BAND_CLASS = { short: "text-warn", sweet: "text-positive", ok: "text-muted", over: "text-danger" } as const;
 
-export function ShortsPanel({ shorts, current, duration, fps, playhead, busy, titlesCount, checks, seam, withoutMusic, loop, postText, beats, hasMusic, onAnalyseBeats, onCutToBeats, onPunchIns, onSlowHalf, onSelect, onChange, onAdd, onRemove, onDuplicate, onMove, onJump, onMarkIn, onMarkOut, onNudge, onLength, onLoopToggle, onFindSeam, onSuggest, onExport, onWithoutMusic, onSaveCover, onCopyPost, onTitles, onAction }: {
+export function ShortsPanel({ shorts, current, duration, fps, playhead, busy, titlesCount, checks, seam, withoutMusic, loop, postText, beats, hasMusic, music, onAnalyseBeats, onCutToBeats, onPunchIns, onSlowHalf, onSelect, onChange, onAdd, onRemove, onDuplicate, onMove, onJump, onMarkIn, onMarkOut, onNudge, onLength, onLoopToggle, onFindSeam, onSuggest, onExport, onWithoutMusic, onSaveCover, onCopyPost, onTitles, onAction }: {
   beats: { bpm: number; count: number } | null;
   hasMusic: boolean;
+  /** The short's Music block (short-music.tsx), composed by the editor, which owns the songs. */
+  music?: ReactNode;
   onAnalyseBeats: () => void;
   onCutToBeats: (every: 1 | 2 | 4) => void;
   onPunchIns: (every: 1 | 2 | 4) => void;
@@ -177,6 +179,7 @@ export function ShortsPanel({ shorts, current, duration, fps, playhead, busy, ti
               ))}
             </span>
           </div>
+          {music}
           <div className="flex flex-wrap items-center gap-1.5">
             <span className="text-muted">Loop</span>
             <select value={current.loop} onChange={(e) => onChange(current.id, { loop: e.target.value as Short["loop"] })} className={cn(INPUT, "h-7")} aria-label="Loop" title={SHORT_LOOPS.find((l) => l.id === current.loop)?.hint} data-short-loop>
@@ -231,8 +234,8 @@ export function ShortsPanel({ shorts, current, duration, fps, playhead, busy, ti
                 </span>
               </>
             ) : (
-              <button type="button" onClick={onAnalyseBeats} disabled={busy || !hasMusic} className={cn(GHOST, "h-6 text-[11.5px]")} title={hasMusic ? "Find the music's tempo and beats, for ticks, snapping, cuts and punch-ins" : "Add music in the Audio tab first"} data-analyse-beats-short>
-                {hasMusic ? "Analyse the music's beat" : "No music yet"}
+              <button type="button" onClick={onAnalyseBeats} disabled={busy || !hasMusic} className={cn(GHOST, "h-6 text-[11.5px]")} title={hasMusic ? "Find the song's tempo, beats and drop, for ticks, snapping, cuts, punch-ins and Start at the drop" : "Pick a song for the short in the Music row first"} data-analyse-beats-short>
+                {hasMusic ? "Analyse the song's beat" : "No music yet"}
               </button>
             )}
             <button type="button" onClick={onSlowHalf} disabled={busy} className={cn(GHOST, "h-6 text-[11.5px]")} title="The short's stretch at half speed; the short grows with it" data-slow-half>
