@@ -254,6 +254,45 @@ export interface MusicTrack {
   beats?: BeatGrid | null;
 }
 
+/* ---------------------------------------------------------- the song library (music-fill.ts) */
+
+/** How much a song is liked: 0 as any other, 1 liked (placed about twice as often), 2 a favourite (about four times). */
+export type SongLike = 0 | 1 | 2;
+export const LIKE_WEIGHTS: Record<SongLike, number> = { 0: 1, 1: 2, 2: 4 };
+
+/** What the project remembers about a song beyond its file: how it is liked and whether the shuffle may place it. */
+export interface SongPrefs {
+  like: SongLike;
+  /** False keeps the song out of the shuffle; it stays in the library and may still open or close the video. */
+  use: boolean;
+}
+export const DEFAULT_SONG_PREFS: SongPrefs = { like: 0, use: true };
+
+export type FillOrder = "shuffle" | "listed";
+export const FILL_ORDERS: FillOrder[] = ["shuffle", "listed"];
+/** How "Shuffle & fill" lays the songs over the video, saved with the project. */
+export interface FillSettings {
+  /** Seconds one song overlaps the next for the crossfade. */
+  overlap: number;
+  /** The song the video opens with and the one it closes with (its end at the video's end); null leaves it to the shuffle. */
+  first: string | null;
+  last: string | null;
+  order: FillOrder;
+}
+export const DEFAULT_FILL: FillSettings = { overlap: 2, first: null, last: null, order: "shuffle" };
+
+/** Saved song preferences made whole; anything unreadable falls back to the defaults. */
+export function normalizeSongPrefs(raw: unknown): SongPrefs {
+  const s = (raw ?? {}) as Partial<SongPrefs>;
+  return { like: s.like === 1 || s.like === 2 ? s.like : 0, use: s.use !== false };
+}
+
+/** Saved fill settings made whole. */
+export function normalizeFill(raw: unknown): FillSettings {
+  const f = (raw ?? {}) as Partial<FillSettings>;
+  return { overlap: typeof f.overlap === "number" && f.overlap >= 0 ? Math.min(10, f.overlap) : DEFAULT_FILL.overlap, first: typeof f.first === "string" ? f.first : null, last: typeof f.last === "string" ? f.last : null, order: FILL_ORDERS.includes(f.order as FillOrder) ? (f.order as FillOrder) : "shuffle" };
+}
+
 /* ---------------------------------------------------------- shorts (Short mode) */
 
 /** The platforms a short is made for — the same ids as shorts.ts's PlatformId. */
@@ -1089,6 +1128,10 @@ export interface Project {
   mode?: EditorMode;
   /** The shorts cut from this timeline (Short mode). */
   shorts?: Short[];
+  /** The song library's preferences by media id (likes, in the shuffle or not); a song without an entry takes the defaults. */
+  songs?: Record<string, SongPrefs>;
+  /** How "Shuffle & fill" lays the songs out; missing: the defaults. */
+  fill?: FillSettings;
 }
 
 /** A readable location for a media file. */
@@ -1368,41 +1411,6 @@ export function appendMusic(music: MusicTrack[], track: Omit<MusicTrack, "start"
   return { ...track, start: latest };
 }
 
-/**
- * Lay every song end to end in a random order to cover the whole video: each placement overlaps the one before
- * by `overlap` seconds for the crossfade, and when the songs run out before the video does a fresh shuffle
- * follows — never the same song twice in a row when there is a choice. The last one is cut at the end of the
- * video by playback as usual. Each song keeps the trim, gain and fades of its first placement; everything goes
- * on the first lane and replaces the music that was there. `rng` is Math.random unless a test seeds it.
- */
-export function shuffleFillMusic(music: MusicTrack[], timelineEnd: number, overlap = 2, rng: () => number = Math.random): MusicTrack[] {
-  const songs: MusicTrack[] = [];
-  for (const m of music) if (!songs.some((s) => s.media === m.media) && musicLength(m) > 0) songs.push(m);
-  if (!songs.length || !(timelineEnd > 0)) return music;
-  const shuffle = (last: string | null) => {
-    const a = [...songs];
-    for (let i = a.length - 1; i > 0; i--) {
-      const j = Math.floor(rng() * (i + 1));
-      [a[i], a[j]] = [a[j], a[i]];
-    }
-    if (a.length > 1 && a[0].media === last) [a[0], a[1]] = [a[1], a[0]];
-    return a;
-  };
-  const out: MusicTrack[] = [];
-  let covered = 0, last: string | null = null;
-  for (let cycle = 0; cycle < 1000 && covered < timelineEnd - 1e-6; cycle++) {
-    for (const s of shuffle(last)) {
-      if (covered >= timelineEnd - 1e-6) break;
-      const ov = Math.min(Math.max(0, overlap), musicLength(s) / 2);
-      const start = clampMusicStart(out.length ? covered - ov : 0, s, timelineEnd);
-      out.push({ ...s, id: newId(), lane: 0, start, muted: false, keyframes: [] });
-      last = s.media;
-      covered = start + musicLength(s);
-    }
-  }
-  return out;
-}
-
 /* ---------------------------------------------------------- export plan */
 
 export type SpanKind = "copy" | "encode";
@@ -1603,7 +1611,8 @@ function canonical(value: unknown): string {
  * titles that belong to a short, and a recording's keyframe list, rotation and whereabouts.
  */
 export function exportFingerprint(p: Project): string {
-  const { updatedAt, createdAt, proxies, preview, stops, shorts, mode, folders, export: ex, media, titles, ...rest } = p as Project & { updatedAt?: number; folders?: unknown };
+  // Likes and the fill settings only steer the next shuffle; they change no frame or sample of the file.
+  const { updatedAt, createdAt, proxies, preview, stops, shorts, mode, folders, songs, fill, export: ex, media, titles, ...rest } = p as Project & { updatedAt?: number; folders?: unknown };
   void updatedAt;
   void createdAt;
   void proxies;
@@ -1612,6 +1621,8 @@ export function exportFingerprint(p: Project): string {
   void shorts;
   void mode;
   void folders;
+  void songs;
+  void fill;
   const { check, review, ...exportRest } = ex;
   void check;
   void review;
@@ -1695,7 +1706,9 @@ export function deserialize(json: string): Project | null {
           .map((x) => (x.music ? x : { ...x, music: musicBetween(landscapeMusic, x.from, x.to, x.loop !== "off").map((m) => ({ ...m, id: newId(), lane: 0 })) }))
       : [];
     const mode: EditorMode = p.mode === "short" ? "short" : "landscape";
-    return { ...newProject(), ...p, clips, sound, layout, safeArea, shorts, mode, export: { ...DEFAULT_EXPORT, ...p.export, frame, tags: { ...DEFAULT_TAGS, ...(p.export?.tags ?? {}) } }, preview: { ...DEFAULT_PREVIEW, ...(p.preview ?? (Object.values(p.proxies ?? {}).some((x) => x?.ready) ? { proxyHeight: 1080 } : {})) }, transition, intro, stops, titles: (p.titles ?? []).map((t) => normalizeTitle(t)) };
+    const songs = p.songs && typeof p.songs === "object" ? Object.fromEntries(Object.entries(p.songs).map(([id, s]) => [id, normalizeSongPrefs(s)])) : undefined;
+    const fill = p.fill && typeof p.fill === "object" ? normalizeFill(p.fill) : undefined;
+    return { ...newProject(), ...p, clips, sound, layout, safeArea, shorts, mode, ...(songs ? { songs } : {}), ...(fill ? { fill } : {}), export: { ...DEFAULT_EXPORT, ...p.export, frame, tags: { ...DEFAULT_TAGS, ...(p.export?.tags ?? {}) } }, preview: { ...DEFAULT_PREVIEW, ...(p.preview ?? (Object.values(p.proxies ?? {}).some((x) => x?.ready) ? { proxyHeight: 1080 } : {})) }, transition, intro, stops, titles: (p.titles ?? []).map((t) => normalizeTitle(t)) };
   } catch {
     return null;
   }

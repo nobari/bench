@@ -2,12 +2,13 @@
 
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import Link from "next/link";
-import { AlertTriangle, Camera, ChevronDown, ChevronRight, ChevronUp, Sparkles, Clapperboard, Crop, Download, FolderOpen, Gauge, Loader, Maximize2, Minimize2, Music, Pause, Play, Repeat, Save, Scissors, SkipBack, SkipForward, SlidersHorizontal, Smartphone, StepBack, StepForward, Trash2, Type, Upload, Volume2, VolumeX, Keyboard, Search, Shuffle, X } from "lucide-react";
+import { AlertTriangle, Camera, ChevronDown, ChevronRight, ChevronUp, Sparkles, Clapperboard, Crop, Download, FolderOpen, Gauge, Heart, Loader, Maximize2, Minimize2, Music, Pause, Play, Repeat, Save, Scissors, SkipBack, SkipForward, SlidersHorizontal, Smartphone, Square, StepBack, StepForward, Trash2, Type, Upload, Volume2, VolumeX, Keyboard, Search, Shuffle, X } from "lucide-react";
 import { makeRoomForAll, makeRoomForTransition, newShort, timelineDuration as shortTimelineDuration, type EditorMode, type Short } from "@/lib/tools/video/project";
 import { DEFAULT_SHORT_SECONDS, MIN_SHORT_SECONDS, SHORTS_FOLDER, clampShort, seamCandidates, seamScore, shortBytes, shortChecks, shortFileName, shortPostText, shortProject, shortStem, shortTemplate, shortTemplateProject, shortsFromMoments, suggestWindows, titlesIntoShort, viewFor } from "@/lib/tools/video/short-mode";
 import { scoreMoments as scoreShortMoments } from "@/lib/tools/video/intro";
 import { ShortsPanel, type SeamState } from "@/components/widgets/short-mode-panel";
 import { ShortMusicBlock, WaveBars } from "@/components/widgets/short-music";
+import { LIKE_LABELS, beatsOfSong, clearLanes, cycleLike, describeFill, describeLibrary, fillPool, fillProject, fillSettings, removeSongs, seededRng, setFill as setFillOf, setSongPrefs as setSongPrefsOf, songLibrary } from "@/lib/tools/video/music-fill";
 import { SHORT_FADE_IN, SHORT_FADE_OUT, carryThrough, continueTrack, musicForNewShort, placeShortMusic, shortMusicOf, slipTrack, songTrack, songsOf, trimTrackEnd, trimTrackStart, spreadToAll } from "@/lib/tools/video/short-music";
 import { peakBins, peaksOf } from "@/lib/tools/video/waveform";
 import { SafeGhost } from "@/components/widgets/shorts-parts";
@@ -20,7 +21,7 @@ import { TITLE_PRESETS, applyTitlePreset, copyTitlesToShorts } from "@/lib/tools
 import { beatPeriod, cutToBeats, nearestBeat, punchIns, slowStretch, timelineBeats } from "@/lib/tools/video/beat-tools";
 import { analyseBeats } from "@/lib/tools/video/beats";
 import { decodeMono } from "@/lib/tools/video/engine";
-import { DEFAULT_EXPORT, NEUTRAL_GRADE, NEUTRAL_TRANSFORM, TITLE_ALIGNS, TITLE_FAMILIES, TITLE_FONTS, TITLE_POSITIONS, TITLE_SHADOWS, TITLE_WEIGHTS, TRANSITIONS, addTransitionAt, appendMusic, applyAudioTo, applyGradeTo, applyTransitionToAll, clipAt, crossfades, dbToGain, effectiveMusicEnd, estimateExport, exportRange, fmtTime, musicGainAt, musicLength, newId, newProject, newTitle, orderRecordings, placeClips, planExport, removeRange, reorderMusic, setTransition, splitClip, timelineDuration, titleLanes, transitionAt, transitionWindows, CLIP_SPEEDS, canMergeWithNext, clipLength, clipSpeed, groupOf, sourceTimeAt, mergeWithNext, moveClip, unjoin, updateClip, visibleCuts, type Clip, type MediaRef, type MusicTrack, type Project, type ProxyHeight, type Title, type TitleFont, isFileLutKind, FILE_LUT_KINDS, type FileLutKind, type LutKind, type MathLutKind, type TitleAlign, type TitlePosition, type TitleShadow, type Transition, type TransitionKind, type ExportTags, type IntroSettings, type IntroCard, DEFAULT_CARD, cardSettings, hasCard, reorderClip, parseTime, type SteadyLights, STEADY_FRAMES, clampMusicStart, musicUnused, musicBetween, shuffleFillMusic, describeWhere, nameSome, whereSummary, type MediaWhere, exportFingerprint, SOUND_MODES, SOUND_LABELS, soundLevels, applySoundLevels, soundState, type SoundMode, type SoundLevels, FRAMES, FRAME_LABELS, MAX_REFRAME_ZOOM, MIN_CLIP_SPEED, MAX_CLIP_SPEED, type Frame, type Layout, type ReframeKey } from "@/lib/tools/video/project";
+import { DEFAULT_EXPORT, NEUTRAL_GRADE, NEUTRAL_TRANSFORM, TITLE_ALIGNS, TITLE_FAMILIES, TITLE_FONTS, TITLE_POSITIONS, TITLE_SHADOWS, TITLE_WEIGHTS, TRANSITIONS, addTransitionAt, appendMusic, applyAudioTo, applyGradeTo, applyTransitionToAll, clipAt, crossfades, dbToGain, effectiveMusicEnd, estimateExport, exportRange, fmtTime, musicGainAt, musicLength, newId, newProject, newTitle, orderRecordings, placeClips, planExport, removeRange, reorderMusic, setTransition, splitClip, timelineDuration, titleLanes, transitionAt, transitionWindows, CLIP_SPEEDS, canMergeWithNext, clipLength, clipSpeed, groupOf, sourceTimeAt, mergeWithNext, moveClip, unjoin, updateClip, visibleCuts, type Clip, type MediaRef, type MusicTrack, type Project, type ProxyHeight, type Title, type TitleFont, isFileLutKind, FILE_LUT_KINDS, type FileLutKind, type LutKind, type MathLutKind, type TitleAlign, type TitlePosition, type TitleShadow, type Transition, type TransitionKind, type ExportTags, type IntroSettings, type IntroCard, DEFAULT_CARD, cardSettings, hasCard, reorderClip, parseTime, type SteadyLights, STEADY_FRAMES, clampMusicStart, musicUnused, musicBetween, type FillOrder, type FillSettings, type SongPrefs, describeWhere, nameSome, whereSummary, type MediaWhere, exportFingerprint, SOUND_MODES, SOUND_LABELS, soundLevels, applySoundLevels, soundState, type SoundMode, type SoundLevels, FRAMES, FRAME_LABELS, MAX_REFRAME_ZOOM, MIN_CLIP_SPEED, MAX_CLIP_SPEED, type Frame, type Layout, type ReframeKey } from "@/lib/tools/video/project";
 import { gainToReach, YOUTUBE_LUFS, type Loudness } from "@/lib/tools/video/loudness";
 import { drawTransition } from "@/lib/tools/video/transitions";
 import { LUT_OPTIONS, buildDlogLut, deriveLut, fetchOfficialLut, lutToCube, parseCube, type Lut3D } from "@/lib/tools/video/lut";
@@ -161,6 +162,8 @@ const SHORTCUTS: [string, string][] = [
 ];
 /** Scrubbing snaps to a cut this close (pixels); hold Alt to scrub freely. */
 const SNAP_PX = 6;
+/** How much of a song "Listen" in the song library plays, seconds. */
+const LISTEN_SECONDS = 20;
 /** Timeline zoom range (× the fit-to-width scale). */
 const ZOOM_MAX = 40;
 
@@ -535,8 +538,12 @@ export function VideoEditorWidget() {
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   // Stops: the scan lives on the project; which ones the user unticked lives here, keyed to that scan.
   const [stopDefaults, setStopDefaults] = useState({ minSeconds: DEFAULT_STOPS.minSeconds, margin: DEFAULT_STOPS.margin });
-  // Fill the video with music: the crossfade between shuffled songs.
-  const [fillOverlap, setFillOverlap] = useState(2);
+  // The song library (Audio tab): the song whose placements light up on the lanes, and the one being listened to on its own.
+  const [hoverSong, setHoverSong] = useState<string | null>(null);
+  const [auditioning, setAuditioning] = useState<string | null>(null);
+  const auditionRef = useRef<{ id: string; src: AudioBufferSourceNode; gain: GainNode } | null>(null);
+  /** A landscape music track being dragged along its lane. */
+  const musicMoveRef = useRef<{ id: string; start0: number; start: number; startX: number; moved: boolean; pointerId: number } | null>(null);
   // Progress notifications while the tab is hidden (and one when a job finishes); remembered per browser.
   const [notify, setNotify] = useState(true);
   const [notifyPermission, setNotifyPermission] = useState<NotificationPermission | "unsupported">("default");
@@ -658,6 +665,7 @@ export function VideoEditorWidget() {
     proxyUrls.current.clear();
     pendingUrls.current.clear();
     musicBuffers.current.clear();
+    stopAudition();
     if (altRef.current) {
       altRef.current.removeAttribute("src");
       delete altRef.current.dataset.src;
@@ -1516,6 +1524,14 @@ export function VideoEditorWidget() {
       setSelected(null);
       return true;
     },
+    /** The selected music track off its lane (Delete when no clip is selected). */
+    deleteSelectedMusic: () => {
+      if (!selectedMusic) return false;
+      const id = selectedMusic;
+      setProject((p) => ({ ...p, music: p.music.filter((m) => m.id !== id) }));
+      setSelectedMusic(null);
+      return true;
+    },
     mergeSelected: () => {
       if (!selected || !canMergeWithNext(project.clips, selected)) return false;
       const id = selected;
@@ -1559,7 +1575,7 @@ export function VideoEditorWidget() {
         setSelectedTransition(null);
       } else if ((e.key === "Delete" || e.key === "Backspace") && !inField(e) && !e.metaKey && !e.ctrlKey) {
         e.preventDefault();
-        if (!e.repeat) trimActionsRef.current.deleteSelected();
+        if (!e.repeat && !trimActionsRef.current.deleteSelected()) trimActionsRef.current.deleteSelectedMusic();
       } else if (e.key === "Control" && !inField(e)) {
         if (!e.repeat) beginSkim();
       } else if (e.key === " " && !inField(e)) {
@@ -2226,15 +2242,113 @@ export function VideoEditorWidget() {
     [placed],
   );
   const updateMusic = (id: string, patch: Partial<MusicTrack>) => setProject((p) => ({ ...p, music: p.music.map((m) => (m.id === id ? { ...m, ...patch } : m)) }));
-  const songCount = new Set(project.music.map((m) => m.media)).size;
-  /** Shuffle every song and lay them end to end over the whole video (replacing the music lanes). */
-  const fillMusic = () => {
-    const filled = shuffleFillMusic(project.music, duration, fillOverlap);
-    if (filled === project.music) return;
-    setProject((p) => ({ ...p, music: filled }));
+  /* The song library: every song the project knows, its likes and whether the shuffle may place it (music-fill.ts). */
+  const library = songLibrary(project, duration);
+  const fill = fillSettings(project);
+  const pool = fillPool(project);
+  /** Lay the library's songs over the whole video in a fresh order (replacing the lanes); a seed makes the order repeatable for the tests. */
+  const fillMusic = (seed?: number) => {
+    const filled = fillProject(project, duration, seed === undefined ? Math.random : seededRng(seed));
+    if (filled === project) return;
+    setProject((p) => ({ ...p, music: filled.music }));
     setSelectedMusic(null);
-    setStatus(`${filled.length} song placements shuffled over ${fmtTime(duration)} from ${songCount} song${songCount === 1 ? "" : "s"}${fillOverlap ? `, ${fillOverlap} s crossfades` : ""} — Shuffle again for another order, ⌘Z to go back`);
+    setStatus(`${describeFill(filled, duration)} — Shuffle again for another order, ⌘Z to go back`);
   };
+  /** Every placement off the lanes; the songs stay in the library. */
+  const clearMusic = () => {
+    if (!project.music.length) return;
+    setProject((p) => clearLanes(p));
+    setSelectedMusic(null);
+    setStatus(`The music lanes are empty — the ${library.length === 1 ? "song stays" : `${library.length} songs stay`} in the library; ⌘Z brings the placements back`);
+  };
+  /** Songs taken out of the project altogether: off the lanes, out of every short and the library. The files stay where they are. */
+  const removeSongsFromProject = (ids: string[]) => {
+    if (!ids.length) return;
+    if (auditionRef.current && ids.includes(auditionRef.current.id)) stopAudition();
+    if (selectedMusic && project.music.some((m) => m.id === selectedMusic && ids.includes(m.media))) setSelectedMusic(null);
+    setProject((p) => removeSongs(p, ids));
+    const one = ids.length === 1 ? project.media[ids[0]]?.name : null;
+    setStatus(`${one ?? `${ids.length} songs`} removed from the project — the file${one ? " stays" : "s stay"} on disk; ⌘Z brings ${one ? "it" : "them"} back`);
+  };
+  const patchSongPrefs = (id: string, patch: Partial<SongPrefs>) => setProject((p) => setSongPrefsOf(p, id, patch));
+  const patchFill = (patch: Partial<FillSettings>) => setProject((p) => setFillOf(p, patch));
+  /** The song being listened to on its own fades out and stops. */
+  const stopAudition = () => {
+    const a = auditionRef.current;
+    auditionRef.current = null;
+    setAuditioning(null);
+    if (!a) return;
+    const ctx = audioCtxRef.current;
+    try {
+      if (ctx) {
+        a.gain.gain.setTargetAtTime(0, ctx.currentTime, 0.08);
+        a.src.stop(ctx.currentTime + 0.4);
+      } else a.src.stop();
+    } catch {
+      /* already stopped */
+    }
+  };
+  /** Hear a stretch of a song on its own — from its drop when the beat is known — to decide how to like it; a second click stops it. */
+  const listen = async (id: string) => {
+    if (auditionRef.current?.id === id) return stopAudition();
+    stopAudition();
+    if (playing) setPlaying(false);
+    const ctx = (audioCtxRef.current ??= new AudioContext());
+    await ctx.resume();
+    if (!musicBuffers.current.has(id)) {
+      const f = await store.getFile(id);
+      if (!f) return setError(`${project.media[id]?.name ?? "The song"} is not at hand — Locate it in the missing-files notice first.`);
+      await decodeMusic(id, f);
+    }
+    const buf = musicBuffers.current.get(id);
+    if (!buf) return;
+    const drop = beatsOfSong(project, id)?.drop ?? null;
+    const from = drop !== null && drop < buf.duration - 5 ? Math.max(0, drop - 2) : 0;
+    const len = Math.max(0.5, Math.min(LISTEN_SECONDS, buf.duration - from));
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    const gain = ctx.createGain();
+    const level = dbToGain(soundLevels(project).music);
+    const now = ctx.currentTime;
+    gain.gain.setValueAtTime(0, now);
+    gain.gain.linearRampToValueAtTime(level, now + Math.min(0.3, len / 4));
+    gain.gain.setValueAtTime(level, now + Math.max(0.3, len - 1));
+    gain.gain.linearRampToValueAtTime(0, now + len);
+    src.connect(gain).connect(ctx.destination);
+    src.onended = () => {
+      if (auditionRef.current?.src === src) {
+        auditionRef.current = null;
+        setAuditioning(null);
+      }
+    };
+    src.start(0, from, len);
+    auditionRef.current = { id, src, gain };
+    setAuditioning(id);
+    setStatus(`Listening to ${project.media[id]?.name ?? "the song"}${from > 0 && drop !== null ? ` from its drop at ${fmtTime(drop)}` : ""} — ${Math.round(len)} s; Listen again to stop`);
+  };
+  // Listening stops when the timeline plays, and when the editor goes away.
+  useEffect(() => {
+    if (!playing) return;
+    const a = auditionRef.current;
+    if (!a) return;
+    auditionRef.current = null;
+    setAuditioning(null);
+    try {
+      a.src.stop();
+    } catch {
+      /* already stopped */
+    }
+  }, [playing]);
+  useEffect(
+    () => () => {
+      try {
+        auditionRef.current?.src.stop();
+      } catch {
+        /* gone */
+      }
+    },
+    [],
+  );
   // Transitions live on the cut they lead into; selecting one parks the playhead on the cut so the preview shows its middle.
   const focusTransition = (incomingId: string | null) => {
     setSelectedTransition(incomingId);
@@ -2569,6 +2683,17 @@ export function VideoEditorWidget() {
       getTimelineMusic: () => timelineMusic,
       getSongs: () => songsOf(project.media),
       getSongPeaks: (id: string) => songPeaks[id] ?? null,
+      getSongLibrary: () => library,
+      getFill: () => fill,
+      fillMusic,
+      clearMusic,
+      removeSongs: removeSongsFromProject,
+      setSongPrefs: patchSongPrefs,
+      setFill: patchFill,
+      listen,
+      getAuditioning: () => auditioning,
+      getSelectedMusic: () => selectedMusic,
+      selectMusic: (id: string | null) => setSelectedMusic(id),
       pickShortSong,
       songStartAt,
       slipShortSong,
@@ -3768,6 +3893,51 @@ export function VideoEditorWidget() {
   }, [playing, scrollTimelineTo]);
   const stepBack = useRepeat((shift) => stepTo(playheadRef.current - (shift ? 1 : 1 / fpsRef.current)));
   const stepForward = useRepeat((shift) => stepTo(playheadRef.current + (shift ? 1 : 1 / fpsRef.current)));
+  /* A landscape music track is dragged along its lane to move it, snapping to the video's start, the cuts and the crossfade point after the track before it (⌥ drags freely); the move is committed once, when the pointer lifts. */
+  const beginMusicMove = (e: React.PointerEvent<HTMLButtonElement>, m: MusicTrack) => {
+    e.stopPropagation();
+    if (e.button !== 0) return;
+    e.currentTarget.setPointerCapture(e.pointerId);
+    musicMoveRef.current = { id: m.id, start0: m.start, start: m.start, startX: e.clientX, moved: false, pointerId: e.pointerId };
+  };
+  const moveMusicMove = (e: React.PointerEvent<HTMLButtonElement>) => {
+    const d = musicMoveRef.current;
+    if (!d) return;
+    if (!d.moved && Math.abs(e.clientX - d.startX) < 4) return;
+    d.moved = true;
+    const track = project.music.find((m) => m.id === d.id);
+    if (!track) return;
+    let start = clampMusicStart(d.start0 + (e.clientX - d.startX) / pxPerSec, track, duration);
+    if (!e.altKey) {
+      const tol = SNAP_PX / pxPerSec;
+      const marks = [0, ...visibleCuts(placed), ...project.music.filter((m) => m.id !== d.id && m.lane === track.lane).flatMap((m) => [m.start + musicLength(m) - fill.overlap, m.start + musicLength(m)])];
+      let best = start, dist = tol;
+      for (const x of marks) {
+        const dd = Math.abs(x - start);
+        if (dd < dist) {
+          best = clampMusicStart(x, track, duration);
+          dist = dd;
+        }
+      }
+      start = best;
+    }
+    d.start = start;
+    e.currentTarget.style.left = `${start * pxPerSec}px`;
+    if (hoverLineRef.current) hoverLineRef.current.style.left = `${start * pxPerSec}px`;
+    showHoverTime(start);
+  };
+  const endMusicMove = (e: React.PointerEvent<HTMLButtonElement>) => {
+    const d = musicMoveRef.current;
+    if (!d) return;
+    musicMoveRef.current = null;
+    if (e.currentTarget.hasPointerCapture(d.pointerId)) e.currentTarget.releasePointerCapture(d.pointerId);
+    if (!d.moved) return;
+    suppressClickRef.current = true;
+    const start = Math.round(d.start * 100) / 100;
+    updateMusic(d.id, { start });
+    setSelectedMusic(d.id);
+    setStatus(`${project.media[project.music.find((m) => m.id === d.id)?.media ?? ""]?.name ?? "The track"} now starts at ${fmtTime(start)}`);
+  };
   /** Dragging a drive clip along the lane moves it before the clip the pointer is over (intro scenes stay put). */
   const beginClipDrag = (e: React.PointerEvent<HTMLButtonElement>, c: (typeof placed)[number]) => {
     if (e.button !== 0 || c.introRole) return;
@@ -4061,15 +4231,24 @@ export function VideoEditorWidget() {
                   <Fragment key={m.id}>
                   <button
                     type="button"
-                    onPointerDown={(e) => e.stopPropagation()}
+                    onPointerDown={(e) => beginMusicMove(e, m)}
+                    onPointerMove={moveMusicMove}
+                    onPointerUp={endMusicMove}
+                    onPointerCancel={endMusicMove}
                     onClick={() => {
+                      if (suppressClickRef.current) {
+                        suppressClickRef.current = false;
+                        return;
+                      }
                       setSelectedMusic(m.id);
                       setSelected(null);
                       setTab("audio");
                     }}
-                    className={cn("absolute top-0 h-full truncate rounded-[3px] border px-1.5 text-left text-[11px]", selectedMusic === m.id ? "border-ink" : "border-transparent", m.muted && "opacity-40")}
+                    className={cn("absolute top-0 h-full cursor-grab truncate rounded-[3px] border px-1.5 text-left text-[11px] active:cursor-grabbing", selectedMusic === m.id ? "border-ink" : "border-transparent", hoverSong === m.media && "ring-2 ring-accent", m.muted && "opacity-40")}
                     style={{ left: m.start * pxPerSec, width: Math.max(4, (effectiveMusicEnd(m, duration) - m.start) * pxPerSec), backgroundColor: LANE_COLORS[lane] + "66" }}
-                    title={project.media[m.media]?.name}
+                    title={`${project.media[m.media]?.name} — drag to move it along the lane (⌥ without snapping); Delete removes it once selected`}
+                    data-music-track={m.id}
+                    data-music-of={m.media}
                   >
                     {project.media[m.media]?.name} {m.gainDb <= -60 ? "(off)" : `${m.gainDb} dB`}
                     {musicUnused(m, duration) > 0 && m.start < duration ? " · cut at the end" : ""}
@@ -5218,22 +5397,75 @@ export function VideoEditorWidget() {
                   </div>
                 )}
                 {!shortMode && (
-                <div className="space-y-1.5 rounded-[var(--radius-sm)] border border-edge p-2" data-music-fill>
+                <div className="space-y-2 rounded-[var(--radius-sm)] border border-edge p-2" data-music-fill>
                   <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-                    <span className="font-medium text-ink">Fill the video with music</span>
-                    <span className="text-[12px] text-faint" data-music-fill-summary>
-                      {songCount ? `${songCount} song${songCount === 1 ? "" : "s"}` : "no songs yet"} · video {fmtTime(duration)}
-                    </span>
-                    <label className="ml-auto flex items-center gap-1 text-[12px] text-muted">
+                    <span className="font-medium text-ink">Songs</span>
+                    <span className="text-[12px] text-faint" data-music-fill-summary>{describeLibrary(project, duration)}</span>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <button type="button" onClick={() => fillMusic()} disabled={(!pool.length && !fill.first && !fill.last) || !duration} className={cn(PRIMARY, "h-8 px-3 text-[13px]")} title="Lay the songs end to end over the whole video in a fresh order; the lanes are replaced (⌘Z brings them back)" data-fill-music>
+                      <Shuffle size={13} /> {project.music.length ? "Shuffle again" : "Shuffle & fill the video"}
+                    </button>
+                    <button type="button" onClick={clearMusic} disabled={!project.music.length} className={GHOST} title="Take every placement off the lanes; the songs stay in the library" data-clear-music>
+                      <X size={13} /> Clear the lanes
+                    </button>
+                    <button type="button" onClick={() => removeSongsFromProject(library.map((s) => s.media.id))} disabled={!library.length} className={cn(GHOST, "hover:border-danger hover:text-danger")} title="Take every song out of the project — off the lanes, out of the shorts and the library; the files stay on disk" data-remove-all-songs>
+                      <Trash2 size={13} /> Remove all songs
+                    </button>
+                    <label className="ml-auto flex items-center gap-1 text-[12px] text-muted" title="Shuffled: a fresh random order each time, liked songs more often. As listed: the library's order, round and round.">
+                      Order
+                      <select value={fill.order} onChange={(e) => patchFill({ order: e.target.value as FillOrder })} className={cn(SEL, "h-7 text-[12px]")} data-fill-order>
+                        <option value="shuffle">Shuffled</option>
+                        <option value="listed">As listed</option>
+                      </select>
+                    </label>
+                    <label className="flex items-center gap-1 text-[12px] text-muted">
                       crossfade
-                      <input type="number" min={0} max={10} step={0.5} value={fillOverlap} onChange={(e) => setFillOverlap(Math.max(0, Math.min(10, Number(e.target.value) || 0)))} className={cn(INPUT, "w-14 font-mono")} aria-label="Crossfade seconds" />
+                      <input type="number" min={0} max={10} step={0.5} value={fill.overlap} onChange={(e) => patchFill({ overlap: Math.max(0, Math.min(10, Number(e.target.value) || 0)) })} className={cn(INPUT, "h-7 w-14 font-mono")} aria-label="Crossfade seconds" data-fill-overlap />
                       s
                     </label>
                   </div>
-                  <button type="button" onClick={fillMusic} disabled={!songCount || !duration} className={cn(PRIMARY, "h-8 px-3 text-[13px]")} data-fill-music>
-                    <Shuffle size={13} /> {project.music.length > songCount ? "Shuffle again" : "Shuffle & fill the video"}
-                  </button>
-                  <p className="text-[12px] text-faint">Add as many songs as you like, then shuffle: they are laid end to end in a random order from the start of the video to its end, crossfading between them; when the songs run out before the video does, a fresh shuffle follows (never the same song twice in a row). The last one fades out at the end. This replaces the music lanes; undo brings them back.</p>
+                  {library.length > 0 && (
+                    <ul className="divide-y divide-edge rounded-[var(--radius-sm)] border border-edge" data-song-list>
+                      {library.map((s) => {
+                        const id = s.media.id;
+                        const out = !s.prefs.use && !s.first && !s.last;
+                        return (
+                          <li key={id} className={cn("flex flex-wrap items-center gap-x-2 gap-y-1 px-2 py-1.5 text-[12.5px]", out && "opacity-60")} onMouseEnter={() => setHoverSong(id)} onMouseLeave={() => setHoverSong((h) => (h === id ? null : h))} data-song-row={id} data-song-like={s.prefs.like} data-song-in={s.prefs.use ? "1" : "0"}>
+                            <button type="button" onClick={() => patchSongPrefs(id, { like: cycleLike(s.prefs.like) })} className={cn("inline-flex h-6 w-9 shrink-0 items-center justify-center gap-0.5 rounded-[3px] border border-transparent hover:border-edge", s.prefs.like ? "text-[#e5484d]" : "text-faint")} title={LIKE_LABELS[s.prefs.like]} aria-label={LIKE_LABELS[s.prefs.like]} data-song-like-button>
+                              <Heart size={13} fill={s.prefs.like ? "currentColor" : "none"} />
+                              {s.prefs.like === 2 && <Heart size={13} fill="currentColor" />}
+                            </button>
+                            <span className="min-w-0 flex-1 truncate font-medium text-ink" title={describeWhere(project, s.media) || s.media.name}>
+                              {s.media.name}
+                            </span>
+                            <span className="font-mono text-faint tabular">{fmtTime(s.media.duration)}</span>
+                            <label className="flex items-center gap-1 text-muted" title="Unticked, the shuffle leaves this song out; it stays in the library and may still open or close the video">
+                              <input type="checkbox" checked={s.prefs.use} onChange={(e) => patchSongPrefs(id, { use: e.target.checked })} className="accent-[var(--accent)]" data-song-use /> in the shuffle
+                            </label>
+                            <button type="button" onClick={() => patchFill({ first: s.first ? null : id })} aria-pressed={s.first} className={cn(GHOST, "h-6 px-1.5 text-[11.5px]", s.first && "border-accent text-accent")} title={s.first ? "Opens the video — click to leave the opening to the shuffle" : "The video opens with this song"} data-song-first>
+                              Opens
+                            </button>
+                            <button type="button" onClick={() => patchFill({ last: s.last ? null : id })} aria-pressed={s.last} className={cn(GHOST, "h-6 px-1.5 text-[11.5px]", s.last && "border-accent text-accent")} title={s.last ? "Closes the video — click to leave the ending to the shuffle" : "The video closes with this song, its end at the video's end"} data-song-last>
+                              Closes
+                            </button>
+                            <span className="w-28 text-right text-[11.5px] text-faint tabular" data-song-placements={s.placements}>
+                              {s.placements ? `${s.placements}× · ${fmtTime(s.seconds)}` : "not placed"}
+                            </span>
+                            <button type="button" onClick={() => void listen(id)} aria-pressed={auditioning === id} className={cn(GHOST, "h-6 px-1.5 text-[11.5px]", auditioning === id && "border-accent text-accent")} title={auditioning === id ? "Stop listening" : `Hear ${LISTEN_SECONDS} s of the song on its own, from its drop once the beat is known`} data-song-listen>
+                              {auditioning === id ? <Square size={11} /> : <Play size={11} />} Listen
+                            </button>
+                            <button type="button" onClick={() => removeSongsFromProject([id])} className="text-faint hover:text-danger" title="Take this song out of the project: off the lanes, out of the shorts and the library; the file stays on disk" aria-label={`Remove ${s.media.name}`} data-song-remove>
+                              <Trash2 size={13} />
+                            </button>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  )}
+                  <p className="text-[12px] text-faint">
+                    Add as many songs as you like, then shuffle: they are laid end to end from the start of the video to its end, crossfading between them — a liked song comes round about twice as often, a favourite four times, never twice in a row. Opens puts a song first; Closes ends the video with one, the song before it cut where the crossfade begins. Hover a song to see its placements on the lanes, drag a placement to move it, Delete removes the selected one. Shuffle replaces the lanes; ⌘Z brings them back.
+                  </p>
                 </div>
                 )}
                 {current && (
