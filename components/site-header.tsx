@@ -44,6 +44,7 @@ export function SiteHeader() {
         </button>
 
         <div className="ml-auto flex items-center gap-1">
+          <Link href="/bistro" className="rounded px-2 py-1 text-[12px] text-muted hover:text-ink">My Bistro</Link>
           <ThemeSwitch className="mr-1" />
           <button
             type="button"
