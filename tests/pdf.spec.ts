@@ -85,6 +85,9 @@ test("comments, a note, a highlight and a form value survive Save", async ({ pag
 
   // a highlight with a comment through pdf.js's editor
   await page.click('[data-tool-button="highlight"]');
+  // pdf.js virtualizes text layers: bring page 2 into view before locating its text.
+  await page.fill("[data-page-input]", "2");
+  await page.press("[data-page-input]", "Enter");
   const span = page.locator('.pdfViewer .page[data-page-number="2"] .textLayer span').filter({ hasText: /Comments are annotations/ }).first();
   await span.scrollIntoViewIfNeeded();
   const tb = (await span.boundingBox())!;
