@@ -272,7 +272,13 @@ export function BistroApp() {
           ) : (
             <div className="b-image-empty">
               <Wheat size={44} />
-              <span>{r.program ? `Program ${r.program}` : "Recipe book"}</span>
+              <span>
+                {r.machineRequired === false
+                  ? "Mix separately"
+                  : r.program
+                    ? `Program ${r.program}`
+                    : "Recipe book"}
+              </span>
             </div>
           )}
           <span className="b-image-label">{finishLabels[r.completion]}</span>
@@ -290,7 +296,11 @@ export function BistroApp() {
         </button>
         <div className="b-card-content">
           <p className="b-eyebrow">
-            {r.program ? `Program ${r.program}` : "Manual functions"}
+            {r.machineRequired === false
+              ? "Separate preparation"
+              : r.program
+                ? `Program ${r.program}`
+                : "Manual functions"}
           </p>
           <Link href={href("recipes", r.id)}>
             <h3>{r.name}</h3>
@@ -426,7 +436,11 @@ export function BistroApp() {
         <div className="b-detail-hero">
           <div>
             <p className="b-eyebrow">
-              {r.program ? `Program ${r.program} · ` : ""}
+              {r.machineRequired === false
+                ? "Separate preparation · "
+                : r.program
+                  ? `Program ${r.program} · `
+                  : ""}
               {finishLabels[r.completion]}
             </p>
             <h1 ref={heading}>{r.name}</h1>
@@ -597,7 +611,10 @@ export function BistroApp() {
     const steps = [
       {
         title: "Get ready",
-        text: "Read the recipe notes and source instructions below. Measure ingredients accurately with a digital scale (1 g increments or smaller). Use a stable surface, keep the appliance clear of walls and furniture, and use a dedicated 100 V AC outlet rated at 15 A or higher.",
+        text:
+          r.machineRequired === false
+            ? "Read the recipe notes and measure the listed ingredients. This recipe uses prepared ingredients and does not require a bread-machine cycle."
+            : "Read the recipe notes and source instructions below. Measure ingredients accurately with a digital scale (1 g increments or smaller). Use a stable surface, keep the appliance clear of walls and furniture, and use a dedicated 100 V AC outlet rated at 15 A or higher.",
       },
       {
         title: "Weigh your ingredients",
@@ -606,7 +623,10 @@ export function BistroApp() {
       ...r.steps,
       {
         title: "Finish & care",
-        text: "Confirm that all finishing instructions above are complete. Unplug the appliance and allow it to cool before cleaning. Do not immerse the appliance in water. Follow the cleaning instructions linked below for the pan, blade and dispensers.",
+        text:
+          r.machineRequired === false
+            ? "Confirm that the mixing and serving instructions are complete. Clean the utensils used for this recipe."
+            : "Confirm that all finishing instructions above are complete. Unplug the appliance and allow it to cool before cleaning. Do not immerse the appliance in water. Follow the cleaning instructions linked below for the pan, blade and dispensers.",
       },
     ];
     const current = steps[Math.min(s.step, steps.length - 1)];
@@ -651,7 +671,12 @@ export function BistroApp() {
       <>
         <div className="b-bake-top">
           <div>
-            <p className="b-eyebrow">Guided baking · Program {r.program}</p>
+            <p className="b-eyebrow">
+              Guided baking ·{" "}
+              {r.machineRequired === false
+                ? "Mix separately"
+                : `Program ${r.program}`}
+            </p>
             <h1>{r.name}</h1>
           </div>
           <Link className="b-text-link" href={href("recipes", r.id)}>
@@ -702,7 +727,7 @@ export function BistroApp() {
             </p>
             <h2 tabIndex={-1}>{current.title}</h2>
             <p className="b-step-copy">{current.text}</p>
-            {s.step === 0 && (
+            {s.step === 0 && r.machineRequired !== false && (
               <>
                 <Notice>
                   Do not touch the steam vent or hot parts. Use dry oven mitts
@@ -716,7 +741,7 @@ export function BistroApp() {
             )}
             {s.step === 1 && Ingredients({ r, interactive: true })}
             {s.step <= 1 && Notes({ r })}{" "}
-            {s.step > 1 && !last && (
+            {s.step > 1 && !last && r.machineRequired !== false && (
               <>
                 <Notice>
                   Follow the machine’s display and beeps. Website progress is

@@ -1,7 +1,7 @@
 import type { Personal } from "./types";
 import { z } from "zod";
 import recipes from "./recipes.json";
-export const FLOW_VERSION = "2026-11-04.1";
+export const FLOW_VERSION = "2026-11-04.2";
 const sessionSchema = z.object({
   flowVersion: z.string().optional(),
   id: z.string(),

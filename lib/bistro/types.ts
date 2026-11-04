@@ -26,6 +26,7 @@ export type Recipe = {
   extraSources?: Source[];
   blade?: string;
   equipment?: string[];
+  machineRequired?: boolean;
 };
 export type HelpTopic = {
   id: string;
