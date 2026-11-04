@@ -128,10 +128,12 @@ export const LUT_OPTIONS: { kind: MathLutKind | FileLutKind; name: string; hint:
   { kind: "dji-official", name: "D-Log M → Rec.709 (DJI's own file)", hint: "DJI's official Osmo Action 6 D-Log M to Rec.709 LUT (v1.0, November 2025), applied exactly as DJI ships it. Punchy, saturated and faithful; the reference everything else is measured against." },
   { kind: "dlogm", name: "D-Log M → Rec.709 (DJI, modelled)", hint: "A compact model of DJI's file: tone, hue and saturation measured from it. Within about two 8-bit levels of the file on real footage." },
   { kind: "dji-official-vivid", name: "D-Log M → Vivid (on DJI's file)", hint: "The attractive look for travel, drives and scenery: DJI's own colour science with the Vivid treatment on top — richer colour where it is muted (vibrance, skin tones held back), a gentle S-curve about mid grey with a soft shoulder so bright sky and clouds stay clean and nothing clips, mids a touch brighter and a hint of warmth." },
+  { kind: "dji-official-vivid-sky", name: "D-Log M → Vivid, deep sky (on DJI's file)", hint: "Vivid with the sky given the depth of colour the D-Log → Rec.709 path has, at DJI's own blue (never cyan) and without clipping, and the shadows kept open: trees and hedges come out brighter than in DJI's file, not darker. Clouds, greys and skin are untouched by the sky boost. Measured on real drives: sky saturation 0.69 against DJI's 0.38 and the D-Log path's 0.72, foliage 4 % brighter than DJI's, nothing crushed." },
   { kind: "dji-official-study", name: "D-Log M → Study (on DJI's file)", hint: "The recommended look for long-play study, focus and work videos: DJI's own colour science with the Study treatment on top — crisp mids, a soft shoulder, sky held off cyan and neutral near white, shadows opened a touch, a hint of warmth, saturation 0.9." },
   { kind: "dlogm-study", name: "D-Log M → Study", hint: "Tuned on Osmo Action 6 footage for long-play study, focus and work videos: DJI's tone with mids kept crisp, a soft shoulder that keeps sky gradients smooth, bright sky held off cyan, shadows opened a touch, a hint of warmth and calmer saturation." },
   { kind: "dlogm-natural", name: "D-Log M → Natural", hint: "DJI's rendering with 12 % less saturation and slightly less contrast — flattering for overcast days and muted scenes." },
   { kind: "dlogm-vivid", name: "D-Log M → Vivid", hint: "The Vivid treatment on the modelled conversion: richer colour where it is muted with skin tones held back, a gentle S-curve with a soft shoulder, mids a touch brighter and a hint of warmth." },
+  { kind: "dlogm-vivid-sky", name: "D-Log M → Vivid, deep sky", hint: "The deep-sky Vivid on the modelled conversion: the sky alone deepened to the D-Log path's saturation at DJI's blue, the shadows kept open, Vivid's colour everywhere else." },
   { kind: "dlog", name: "D-Log → Rec.709 (DJI)", hint: "DJI's published D-Log curve and D-Gamut matrix (Mavic 3 Pro Hasselblad camera, Inspire 3, Zenmuse), rendered with the same tone as the D-Log M look." },
 ];
 /**
@@ -143,7 +145,9 @@ export const LUT_OPTIONS: { kind: MathLutKind | FileLutKind; name: string; hint:
  * don't go neon), skin protection (how much of the vibrance and saturation
  * skin-coloured pixels are spared), contrast about 18 % grey, a soft
  * shoulder above a display level, a soft toe below one (so added contrast
- * deepens shadows without crushing them to black), and a black lift.
+ * deepens shadows without crushing them to black), a black lift, and a sky
+ * boost: extra colour for blue-dominant pixels out of the shadows (the sky,
+ * never clouds or greys), applied before everything else.
  */
 export interface Look {
   exposure: number;
@@ -157,8 +161,10 @@ export interface Look {
   shoulder: number;
   toe: number;
   lift: number;
+  /** The sky's chroma is scaled by up to 1 + sky, by how blue a pixel is (see skyBoost); 0 leaves it alone. */
+  sky: number;
 }
-const PLAIN: Look = { exposure: 0, warm: 0, blueHue: 0, sat: 1, hiDesat: 0, vibrance: 0, skin: 0, con: 1, shoulder: 1, toe: 0, lift: 0 };
+const PLAIN: Look = { exposure: 0, warm: 0, blueHue: 0, sat: 1, hiDesat: 0, vibrance: 0, skin: 0, con: 1, shoulder: 1, toe: 0, lift: 0, sky: 0 };
 // Measured on a sunny Tokyo drive: median 0.4 stop over grey, sky at code 0.35/0.5/0.65, p99 three stops over grey.
 export const STUDY_LOOK: Look = { ...PLAIN, exposure: -0.05, warm: 0.05, blueHue: 0.08, sat: 0.9, hiDesat: 0.35, shoulder: 0.88, lift: 0.008 };
 /**
@@ -168,14 +174,26 @@ export const STUDY_LOOK: Look = { ...PLAIN, exposure: -0.05, warm: 0.05, blueHue
  * hint of warmth, bright near-whites kept clean, and a toe from 0.03 so the shadows the S-curve deepens never crush.
  */
 export const VIVID_LOOK: Look = { ...PLAIN, exposure: 0.05, warm: 0.04, blueHue: 0.04, sat: 1.1, hiDesat: 0.25, vibrance: 0.28, skin: 0.5, con: 1.08, shoulder: 0.9, toe: 0.03 };
+/**
+ * Vivid with a deep sky and open shadows, asked for from two renderings of one dusk frame (Nov 2026): the D-Log →
+ * Rec.709 path's sky (saturation 0.72 on eight real frames, DJI's file 0.38, Vivid 0.44) without its dark trees
+ * (foliage luma 0.126 against DJI's 0.167, pixel-pooled). The sky alone is deepened before the look (×2.2 at
+ * most, at DJI's hue rather than the D-Log path's cyan, never clipping), the S-curve is eased to 2 % with the toe
+ * from 0.04 and the blacks lifted 0.4 % (black stays within four 8-bit levels), and the mids go a twelfth of a stop
+ * brighter. Measured on the same frames: sky 0.67 at the same brightness, foliage 0.176 (5 % brighter than DJI's),
+ * 1.4 % of pixels under 5 % luma (DJI's file 1.5 %, Vivid 4.1 %), nothing crushed or clipped.
+ */
+export const DEEP_SKY_LOOK: Look = { ...VIVID_LOOK, blueHue: 0, exposure: 0.08, hiDesat: 0.2, con: 1.02, toe: 0.04, lift: 0.004, sky: 1.2 };
 const LOOKS: Record<MathLutKind | FileLutKind, Look> = {
   "dji-official": PLAIN,
   "dji-official-vivid": VIVID_LOOK,
+  "dji-official-vivid-sky": DEEP_SKY_LOOK,
   "dji-official-study": STUDY_LOOK,
   dlogm: PLAIN,
   "dlogm-study": STUDY_LOOK,
   "dlogm-natural": { ...PLAIN, sat: 0.88, con: 0.94 },
   "dlogm-vivid": VIVID_LOOK,
+  "dlogm-vivid-sky": DEEP_SKY_LOOK,
   dlog: PLAIN,
 };
 const smoothstep = (a: number, b: number, x: number) => {
@@ -191,9 +209,41 @@ function skinWeight(r: number, g: number, b: number): number {
   if (hue > 60) return 0;
   return smoothstep(8, 18, hue) * (1 - smoothstep(40, 52, hue)) * smoothstep(0.03, 0.1, c);
 }
+/**
+ * Extra colour for the sky: blue-dominant pixels out of the shadows and short of white, weighted by how blue they
+ * are and fading out as they get rich (a pale sky gains most, a deep blue is left as it is), so clouds, greys, the
+ * ground and strong blues are untouched. The chroma is scaled with the luma kept while the blue has room below
+ * white; past that the other two channels are pulled down instead (the hue stays, the sky deepens a little, never by
+ * more than a sixth of its brightness and never to a channel at zero), so nothing clips. Exported for the tests.
+ */
+export function skyBoost(rgb: [number, number, number], k: number): [number, number, number] {
+  const [r, g, b] = rgb;
+  const y = 0.2126 * r + 0.7152 * g + 0.0722 * b, other = Math.max(r, g), min = Math.min(r, g);
+  if (!(k > 0) || b <= other || b <= 0) return rgb;
+  const w = smoothstep(0.02, 0.12, (b - r) / b) * smoothstep(0.12, 0.35, y) * (1 - smoothstep(0.88, 0.98, y)) * (1 - smoothstep(0.45, 0.85, (b - min) / b));
+  if (w <= 0) return rgb;
+  const want = 1 + k * w;
+  const room = b > y ? (1 - y) / (b - y) : want;
+  const roomMin = min < y ? y / (y - min) : want;
+  const s1 = Math.max(1, Math.min(room, roomMin, want));
+  let r1 = y + s1 * (r - y), g1 = y + s1 * (g - y);
+  const b1 = y + s1 * (b - y);
+  let rest = want / s1;
+  if (rest > 1.001) {
+    // Pulling the other channels down darkens: stop at a sixth of the luma, and short of zero on either channel.
+    const drop = 0.2126 * (b1 - r1) + 0.7152 * (b1 - g1);
+    const min1 = Math.min(r1, g1);
+    rest = Math.min(rest, drop > 0 ? 1 + (y / 6) / drop : rest, min1 < b1 ? 0.9 * (b1 / (b1 - min1)) : rest);
+    if (rest > 1) {
+      r1 = b1 - (b1 - r1) * rest;
+      g1 = b1 - (b1 - g1) * rest;
+    }
+  }
+  return [r1, g1, b1];
+}
 /** A look applied to one display-referred RGB triplet; exported for the tests and for tuning. */
 export function applyLook(rgb: [number, number, number], L: Look): [number, number, number] {
-  let [r, g, b] = rgb;
+  let [r, g, b] = L.sky ? skyBoost(rgb, L.sky) : rgb;
   if (L.exposure) {
     const gain = 2 ** L.exposure;
     r *= gain;
