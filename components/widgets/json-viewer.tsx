@@ -8,8 +8,8 @@ import {
 import {
   AlignLeft,
   Check,
-  ChevronRight,
   Copy,
+  ChevronRight,
   FileJson,
   Link2,
   ListTree,
@@ -30,6 +30,9 @@ import {
   typeOf,
   type JsonValue,
 } from "@/lib/tools/json/utils";
+import { CopyButton } from "@/components/copy-button";
+import { OpenResultIn } from "@/components/open-result-in";
+import { useToolHandoff } from "@/lib/tool-handoff";
 import { cn } from "@/lib/utils";
 import { SHARE_SYNC_EVENT } from "@/components/share-button";
 import { readShareState, useShareState } from "@/lib/share-state";
@@ -67,6 +70,7 @@ type IndentOpt = 2 | 4 | "\t";
 
 export function JsonViewerWidget() {
   const [text, setText] = useState<string>(readInitial);
+  const handoff = useToolHandoff("json", setText);
   useUnsavedWork(text.trim() && text !== readInitial() ? "The JSON in the viewer is not in the link yet; it would be lost. Use Share to keep it in the URL." : null);
   // The way the link's reader looked at it, applied softly: only values still understood are taken.
   const [view, setView] = useState<"tree" | "raw">(() => (readShareState<{ view: unknown }>("json")?.view === "raw" ? "raw" : "tree"));
@@ -78,7 +82,6 @@ export function JsonViewerWidget() {
   const [query, setQuery] = useState("");
   const [forceOpen, setForceOpen] = useState<Set<string>>(new Set());
   const [forceClosed, setForceClosed] = useState<Set<string>>(new Set());
-  const [copied, setCopied] = useState(false);
 
   // Keep the compressed document in the URL hash so the page-level Share link reopens it.
   useEffect(() => {
@@ -155,16 +158,12 @@ export function JsonViewerWidget() {
   const onSort = () =>
     value !== undefined && apply(formatJson(sortDeep(value), indent));
 
-  const copyOutput = async () => {
-    const out = value !== undefined ? formatJson(value, indent) : text;
-    await navigator.clipboard.writeText(out);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1400);
-  };
-
   const bytes = new TextEncoder().encode(text).length;
 
   return (
+    <div className="space-y-3">
+      {handoff && <p role="status" className="text-xs text-muted">{handoff}</p>}
+      <OpenResultIn value={value !== undefined ? formatJson(value, indent) : text} targets={["schema", "text"]} />
     <SplitPane id="json-viewer" defaultRatio={0.500} minFirst={260} minSecond={260} collapsible="both" firstLabel="input" secondLabel="tree" stackBelow="lg" gap={12} first={<><div className="panel registered flex min-h-[480px] flex-col">
         <div className="flex flex-wrap items-center gap-1.5 border-b border-edge p-2">
           <span className="readout mr-1 px-1">Source</span>
@@ -240,10 +239,7 @@ export function JsonViewerWidget() {
           )}
 
           <div className="ml-auto flex items-center gap-1.5">
-            <button onClick={copyOutput} disabled={isEmpty} className={cn("inline-flex h-8 items-center gap-1.5 rounded-[var(--radius-sm)] border border-edge px-2.5 font-mono text-xs text-muted transition-colors hover:border-accent hover:text-accent disabled:opacity-40", copied && "border-positive text-positive")}>
-              {copied ? <Check size={13} /> : <Copy size={13} />}
-              {copied ? "Copied" : "Copy"}
-            </button>
+            <CopyButton value={value !== undefined ? formatJson(value, indent) : text} label="Copy result" disabled={isEmpty} />
           </div>
         </div>
 
@@ -293,6 +289,7 @@ export function JsonViewerWidget() {
           )}
         </div>
       </div></>} />
+    </div>
   );
 }
 

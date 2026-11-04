@@ -32,6 +32,14 @@ Bench is the kind of small tools you reach for a dozen times a day — encode so
 - 🧩 **Registry-driven** — one typed array generates routes, the category → group → tool navigation tree, command palette, sitemap, OG images, redirects for moved tools, and AI-discovery files.
 - 🧰 **Built like a tool, not a landing page** — every tool is one click away in a persistent index, each page has a single primary Share action, and the light/dark palette follows your system.
 
+## Personal workbench
+
+- **Favorites and recents:** star tools from their header; the homepage and command palette keep them close. Only tool paths are recorded, never their inputs. Clear recent tools from the homepage.
+- **Connected tools:** use “Open result in” to pass a text transform result to JSON Viewer or JSON Schema, and send JSON or a generated schema to Base64/Text. JSON destinations appear only for valid JSON. Transfers stay in the current browser tab, expire after 30 minutes if unused, and never call the shortener. The source is preserved in its URL for Back navigation; the destination keeps its normal reloadable URL state.
+- **Resume your work:** the homepage lists existing Markdown, Code, Mermaid, Track Changes and PDF drafts, plus video project shortcuts saved after this release. Saved times are shown where known. Deleting a browser draft requires confirmation; forgetting a video shortcut never deletes files on disk. Export important work because browser data can be cleared. Sensitive tools are not included.
+- **Task search:** search for phrases such as “make PDF smaller” or “compare two texts.” Common single-character typos and swapped letters are supported.
+- **Clear actions and recovery:** sharing is secondary to tool actions, examples sit above the workspace, Copy offers a manual fallback when clipboard access fails, and a failed widget has retry/reload controls.
+
 ## Tools
 
 > 58 tools across 11 categories, each split into groups — and counting.

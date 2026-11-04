@@ -1,5 +1,7 @@
 "use client";
 
+import { noteDraftSaved } from "@/lib/draft-catalog";
+
 import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { compressToEncodedURIComponent, decompressFromEncodedURIComponent } from "lz-string";
 import {
@@ -198,6 +200,7 @@ export function TrackChangesWidget() {
           localStorage.removeItem(DRAFT_KEY);
           setSavedAt(null);
         }
+        noteDraftSaved("track-changes", !!localStorage.getItem(DRAFT_KEY));
       } catch {
         /* storage unavailable */
       }

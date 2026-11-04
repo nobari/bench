@@ -1,3 +1,5 @@
+import { PersonalTools } from "@/components/personal-tools";
+import { DraftRecovery } from "@/components/draft-recovery";
 import type { CSSProperties } from "react";
 import Link from "next/link";
 import { CATEGORIES } from "@/lib/tools/categories";
@@ -30,6 +32,9 @@ export default function HomePage() {
           <CommandTrigger />
         </div>
       </div>
+
+      <PersonalTools />
+      <DraftRecovery />
 
       <div className="mt-8 grid grid-cols-[minmax(0,1fr)] gap-x-10 gap-y-8 md:grid-cols-[repeat(2,minmax(0,1fr))]">
         {CATEGORIES.map((cat) => {

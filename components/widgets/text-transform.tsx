@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQueryState, parseAsString } from "nuqs";
 import { ArrowLeftRight, ChevronDown, Search, X, AlertTriangle } from "lucide-react";
 import {
@@ -11,6 +11,9 @@ import {
   textStats,
   type TransformGroup,
 } from "@/lib/tools/text/transforms";
+import { OpenResultIn } from "@/components/open-result-in";
+import { useToolHandoff } from "@/lib/tool-handoff";
+import { SHARE_SYNC_EVENT } from "@/components/share-button";
 import { CopyButton } from "@/components/copy-button";
 import { cn } from "@/lib/utils";
 import { SplitPane } from "@/components/ui/split-pane";
@@ -35,6 +38,18 @@ export function TextTransformWidget({ preset, featured }: Props) {
     }),
   );
 
+  const handoff = useToolHandoff("text", (text) => { void setInput(text); });
+  useEffect(() => {
+    const sync = () => {
+      const url = new URL(window.location.href);
+      url.searchParams.set("i", input);
+      url.searchParams.set("t", transformId);
+      window.history.replaceState(null, "", url.pathname + url.search + url.hash);
+    };
+    window.addEventListener(SHARE_SYNC_EVENT, sync);
+    return () => window.removeEventListener(SHARE_SYNC_EVENT, sync);
+  }, [input, transformId]);
+
   const transform = getTransform(transformId) ?? getTransform("base64-encode")!;
   const result = useMemo(() => runTransform(transform.id, input), [transform.id, input]);
   const output = result.ok ? result.value : "";
@@ -51,6 +66,7 @@ export function TextTransformWidget({ preset, featured }: Props) {
 
   return (
     <div className="space-y-3">
+      {handoff && <p role="status" className="text-xs text-muted">{handoff}</p>}
       {/* control bar */}
       <div className="panel flex flex-wrap items-center gap-2 p-2">
         <TransformPicker value={transform.id} onChange={(id) => setTransformId(id)} />
@@ -122,7 +138,7 @@ export function TextTransformWidget({ preset, featured }: Props) {
           <div className="flex items-center justify-between border-b border-edge px-3 py-2">
             <span className="readout">Output</span>
             <div className="flex items-center gap-2">
-              <CopyButton value={output} />
+              <CopyButton value={output} label="Copy result" />
             </div>
           </div>
           {error ? (
@@ -141,6 +157,7 @@ export function TextTransformWidget({ preset, featured }: Props) {
               className="min-h-[260px] flex-1 resize-y select-all bg-transparent p-3 font-mono text-sm leading-relaxed text-ink outline-none placeholder:text-faint"
             />
           )}
+          <div className="px-3 py-2"><OpenResultIn value={output} targets={["json", "schema"]} /></div>
           <StatBar stats={outStats} />
         </div></>} />
     </div>

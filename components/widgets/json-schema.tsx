@@ -23,6 +23,8 @@ import {
   type SchemaSummary,
 } from "@/lib/tools/json/schema";
 import { checkSchema, validateJson, type ValidationResult } from "@/lib/tools/json/validate";
+import { OpenResultIn } from "@/components/open-result-in";
+import { useToolHandoff } from "@/lib/tool-handoff";
 import { CopyButton } from "@/components/copy-button";
 import { JsonBlock, JsonEditor } from "@/components/json-editor";
 import { SHARE_SYNC_EVENT } from "@/components/share-button";
@@ -127,6 +129,12 @@ export function JsonSchemaWidget() {
     }
     return nodeFromText(initial.schema) ?? createNode("object", { schemaUri: DRAFTS[0].uri });
   });
+  const handoff = useToolHandoff("schema", (text) => {
+    const parsed = parseJsonText(text);
+    if (!parsed.ok) return;
+    setSampleText(text); setDataText(text); setSampleOpen(true);
+    setRoot(inferNode(parsed.value)); void setMode("design");
+  });
   const [note, setNote] = useState<string | null>(null);
 
   // Only the JSON syntax is checked as you type; the schema and the data are validated when asked.
@@ -230,6 +238,7 @@ export function JsonSchemaWidget() {
 
   return (
     <div className="space-y-3">
+      {handoff && <p role="status" className="text-xs text-muted">{handoff}</p>}
       {/* control bar */}
       <div className="panel flex flex-wrap items-center gap-2 p-2">
         <div className="flex rounded-[var(--radius-sm)] border border-edge p-0.5">
@@ -556,8 +565,9 @@ export function JsonSchemaWidget() {
           </div></>} second={<><div className="panel flex min-w-0 flex-col">
             <div className="flex items-center justify-between border-b border-edge px-3 py-2">
               <span className="readout">Generated schema · {draftLabel(root.schemaUri)}</span>
-              <CopyButton value={outputSchema} />
+              <CopyButton value={outputSchema} label="Copy schema" />
             </div>
+            <div className="px-3 py-2"><OpenResultIn value={outputSchema} targets={["json", "text"]} /></div>
             <JsonBlock value={outputSchema} className="min-h-[300px] flex-1 select-all p-3 text-[13px] leading-relaxed" data-generated-schema="" />
             <div className="flex items-center gap-3 border-t border-edge px-3 py-1.5 readout tabular">
               <span>{outputSchema.length.toLocaleString()} ch</span>

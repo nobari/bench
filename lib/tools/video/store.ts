@@ -152,6 +152,9 @@ export class ProjectStore {
     const w = await fh.createWritable();
     await w.write(text);
     await w.close();
+    if (this.lastKey === "lastFolder") {
+      try { localStorage.setItem("bench:video:recovery", JSON.stringify({ savedAt: Date.now() })); window.dispatchEvent(new Event("bench:drafts")); } catch { /* optional metadata */ }
+    }
   }
 
   /** Explicit save: the project file, the autosave journal cleared to match, and every file handle remembered. */
@@ -193,6 +196,7 @@ export class ProjectStore {
     this.dir = null;
     this.files.clear();
     await dbDelete(this.lastKey).catch(() => undefined);
+    if (this.lastKey === "lastFolder") { try { localStorage.removeItem("bench:video:recovery"); } catch { /* optional metadata */ } }
     if (projectId) await dbDelete(`files:${projectId}`).catch(() => undefined);
   }
 
@@ -550,4 +554,10 @@ export class ProjectStore {
       /* already gone */
     }
   }
+}
+
+/** Forget only the browser shortcut, never project files on disk. */
+export async function forgetVideoRecovery() {
+  await dbDelete("lastFolder");
+  localStorage.removeItem("bench:video:recovery");
 }

@@ -1,5 +1,7 @@
 "use client";
 
+import { noteDraftSaved } from "@/lib/draft-catalog";
+
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQueryState, parseAsString } from "nuqs";
 import { compressToEncodedURIComponent, decompressFromEncodedURIComponent } from "lz-string";
@@ -308,6 +310,7 @@ export function CodeEditorWidget() {
         else localStorage.removeItem(DRAFT_KEY);
         localStorage.setItem(LANG_KEY, langId);
         setSavedAt(Date.now());
+        noteDraftSaved("code", !!localStorage.getItem(DRAFT_KEY));
       } catch {
         /* storage unavailable */
       }

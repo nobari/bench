@@ -54,9 +54,29 @@ export interface Autosave {
   handle: FileSystemFileHandle | null;
 }
 
-export const saveAutosave = (a: Autosave) => set(AUTOSAVE_KEY, a).catch(() => undefined);
+const RECOVERY_INFO_KEY = "autosaveInfo";
+type RecoveryInfo = Pick<Autosave, "name" | "savedAt">;
+export const saveAutosave = async (a: Autosave) => {
+  try {
+    await set(AUTOSAVE_KEY, a);
+    await set(RECOVERY_INFO_KEY, { name: a.name, savedAt: a.savedAt });
+  } catch { /* storage unavailable */ }
+};
 export const loadAutosave = () => get<Autosave>(AUTOSAVE_KEY).catch(() => undefined);
-export const clearAutosave = () => del(AUTOSAVE_KEY).catch(() => undefined);
+/** Read small metadata on the homepage; migrate an older working copy once. */
+export async function loadRecoveryInfo(): Promise<RecoveryInfo | undefined> {
+  try {
+    const info = await get<RecoveryInfo>(RECOVERY_INFO_KEY);
+    if (info) return info;
+    const old = await loadAutosave();
+    if (!old) return;
+    const migrated = { name: old.name, savedAt: old.savedAt };
+    await set(RECOVERY_INFO_KEY, migrated);
+    return migrated;
+  } catch { return undefined; }
+}
+export const deleteRecoveryCopy = async () => { await del(AUTOSAVE_KEY); await del(RECOVERY_INFO_KEY); };
+export const clearAutosave = () => deleteRecoveryCopy().catch(() => undefined);
 
 export interface RecentEntry {
   name: string;

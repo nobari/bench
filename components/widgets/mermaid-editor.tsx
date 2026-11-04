@@ -1,5 +1,7 @@
 "use client";
 
+import { noteDraftSaved } from "@/lib/draft-catalog";
+
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { useQueryState, parseAsString } from "nuqs";
 import { compressToEncodedURIComponent, decompressFromEncodedURIComponent } from "lz-string";
@@ -200,6 +202,7 @@ export function MermaidEditorWidget() {
         else localStorage.removeItem(DRAFT_KEY);
         if (annotations.length) localStorage.setItem(ANN_DRAFT_KEY, JSON.stringify(annotations));
         else localStorage.removeItem(ANN_DRAFT_KEY);
+        noteDraftSaved("mermaid", !!localStorage.getItem(DRAFT_KEY));
       } catch {
         /* storage unavailable */
       }

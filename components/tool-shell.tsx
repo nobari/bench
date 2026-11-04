@@ -1,3 +1,4 @@
+import { PersonalToolControls } from "@/components/personal-tools";
 import type { CSSProperties } from "react";
 import Link from "next/link";
 import { ReadMore } from "@/components/read-more";
@@ -101,9 +102,10 @@ export function ToolShell({ tool }: { tool: ToolDef }) {
             {tool.tagline}
           </p>
         </div>
-        <div className="flex w-full gap-2 sm:w-auto">
+        <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
+          <PersonalToolControls path={base} />
           <FocusToggle className="flex-1 justify-center sm:flex-none" />
-          <ShareButton className="flex-1 sm:flex-none" />
+          <ShareButton variant="quiet" className="flex-1 sm:flex-none" />
         </div>
       </header>
 
@@ -113,6 +115,10 @@ export function ToolShell({ tool }: { tool: ToolDef }) {
           questions and related tools remain available below.
         </p>
       </noscript>
+      {tool.examples?.length ? <div className="mt-4 flex flex-wrap items-center gap-2" data-site-chrome aria-label="Try an example">
+        <span className="text-xs text-muted">Try an example:</span>
+        {tool.examples.map((ex) => <a key={ex.query} href={`${base}?${ex.query}`} className="rounded border border-edge px-3 py-2 text-xs text-muted hover:text-accent">{ex.label}</a>)}
+      </div> : null}
       <div className="mt-5" data-tool-mount>
         <ToolMount widget={tool.widget} widgetProps={tool.widgetProps} />
       </div>
@@ -156,25 +162,6 @@ export function ToolShell({ tool }: { tool: ToolDef }) {
         </div>
 
         <aside className="min-w-0 space-y-8">
-          {tool.examples?.length ? (
-            <section>
-              <h2 className="text-[13px] font-semibold text-ink">Examples</h2>
-              <ul className="mt-2 space-y-1">
-                {tool.examples.map((ex) => (
-                  <li key={ex.query}>
-                    {/* A plain anchor: widgets read large inputs from the URL once on mount, so an
-                        example must remount the page rather than soft-navigate within it. */}
-                    <a
-                      href={`${base}?${ex.query}`}
-                      className="block rounded-[var(--radius-sm)] border border-edge bg-surface px-3 py-2 text-[13px] text-ink transition-colors hover:border-accent"
-                    >
-                      {ex.label}
-                    </a>
-                  </li>
-                ))}
-              </ul>
-            </section>
-          ) : null}
 
           {related.length ? (
             <section>

@@ -1,5 +1,6 @@
 "use client";
 
+import { ClipboardFallback } from "@/components/clipboard-fallback";
 import { useState } from "react";
 import { Check, Link2, Loader2 } from "lucide-react";
 import { MAX_URL_LENGTH, type ShortenResponse } from "@/lib/tools/web/shortlink";
@@ -75,6 +76,7 @@ interface Props {
 
 /** Copies a link to the current tool state, shortening it when long. */
 export function ShareButton({ className, variant = "primary" }: Props) {
+  const [fallback, setFallback] = useState<string | null>(null);
   const [state, setState] = useState<"idle" | "busy" | ShareResult>("idle");
 
   const share = async (e: React.MouseEvent) => {
@@ -86,9 +88,11 @@ export function ShareButton({ className, variant = "primary" }: Props) {
     if (!forceFull && href.length > SHORTEN_SHARE_ABOVE && href.length <= MAX_URL_LENGTH) setState("busy");
     try {
       const result = await copyShareLink(href, { forceFull });
+      setFallback(null);
       setState(result);
       setTimeout(() => setState("idle"), result === "long" || result === "failed" ? 4500 : 2000);
     } catch {
+      setFallback(href);
       setState("idle");
     }
   };
@@ -108,7 +112,9 @@ export function ShareButton({ className, variant = "primary" }: Props) {
               : "Share link";
 
   return (
+    <div className="min-w-0">
     <button
+      aria-live="polite"
       type="button"
       onClick={share}
       title={`Copy a link that reopens this content and the way you are looking at it. Links over ${SHORTEN_SHARE_ABOVE} characters are shortened automatically — shift-click to copy the full URL.`}
@@ -135,5 +141,7 @@ export function ShareButton({ className, variant = "primary" }: Props) {
       )}
       {label}
     </button>
+    {fallback && <ClipboardFallback value={fallback} onClose={() => setFallback(null)} />}
+    </div>
   );
 }

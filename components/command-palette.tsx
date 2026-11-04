@@ -8,6 +8,7 @@ import {
   useCallback,
 } from "react";
 import { useRouter } from "next/navigation";
+import { usePersonalTools } from "@/lib/personal-tools";
 import { Command } from "cmdk";
 import { usePathname } from "next/navigation";
 import { Maximize2, Minimize2 } from "lucide-react";
@@ -86,6 +87,7 @@ function ToolItem({ t, onSelect, showCategory }: { t: ToolDef; onSelect: () => v
 
 function CommandMenu({ open, setOpen }: { open: boolean; setOpen: (v: boolean) => void }) {
   const router = useRouter();
+  const personal = usePersonalTools();
   const pathname = usePathname();
   const onTool = /^\/[a-z-]+\/[a-z0-9-]+$/.test(pathname ?? "") && !/^\/(about|suggest)/.test(pathname ?? "");
   const { focus, toggle: toggleFocus } = useFocusMode(pathname ?? undefined);
@@ -154,16 +156,19 @@ function CommandMenu({ open, setOpen }: { open: boolean; setOpen: (v: boolean) =
               ))}
             </Command.Group>
           ) : (
-            CATEGORIES.flatMap((cat) => {
+            <>
+            {[{ title: "Favorites", paths: personal.favorites }, { title: "Recently used", paths: personal.recent.filter((p) => !personal.favorites.includes(p)) }].map(({ title, paths }) => paths.length > 0 && <Command.Group key={title} heading={title} className={GROUP}>{paths.map((path) => { const t = TOOLS.find((t) => `/${t.category}/${t.slug}` === path); return t ? <ToolItem key={path} t={t} onSelect={() => go(path)} showCategory /> : null; })}</Command.Group>)}
+            {CATEGORIES.flatMap((cat) => {
               const tree = getCategoryTree(cat.slug);
               return tree.map(({ group, tools }) => (
                 <Command.Group key={`${cat.slug}/${group.id}`} heading={tree.length > 1 ? `${cat.name} · ${group.name}` : cat.name} className={GROUP}>
-                  {tools.map((t) => (
+                  {tools.filter((t) => !personal.favorites.includes(`/${t.category}/${t.slug}`) && !personal.recent.includes(`/${t.category}/${t.slug}`)).map((t) => (
                     <ToolItem key={`${t.category}/${t.slug}`} t={t} onSelect={() => go(`/${t.category}/${t.slug}`)} />
                   ))}
                 </Command.Group>
               ));
-            })
+            })}
+            </>
           )}
 
           <Command.Group heading="More" className={GROUP}>

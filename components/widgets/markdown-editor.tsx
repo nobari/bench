@@ -1,5 +1,7 @@
 "use client";
 
+import { noteDraftSaved } from "@/lib/draft-catalog";
+
 import { useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useQueryState, parseAsStringLiteral } from "nuqs";
 import DOMPurify from "dompurify";
@@ -193,6 +195,7 @@ export function MarkdownEditorWidget() {
         if (annotations.length) localStorage.setItem(ANN_DRAFT_KEY, JSON.stringify(annotations));
         else localStorage.removeItem(ANN_DRAFT_KEY);
         setSavedAt(Date.now());
+        noteDraftSaved("markdown", !!localStorage.getItem(DRAFT_KEY));
       } catch {
         /* storage unavailable */
       }

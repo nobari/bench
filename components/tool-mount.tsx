@@ -1,5 +1,6 @@
 "use client";
 
+import { ToolErrorBoundary } from "@/components/tool-error-boundary";
 import dynamic from "next/dynamic";
 import type { WidgetKey } from "@/lib/tools/types";
 
@@ -191,5 +192,5 @@ export function ToolMount({
   widgetProps?: Record<string, unknown>;
 }) {
   const Widget = WIDGETS[widget];
-  return <Widget {...(widgetProps ?? {})} />;
+  return <ToolErrorBoundary key={widget}><Widget {...(widgetProps ?? {})} /></ToolErrorBoundary>;
 }

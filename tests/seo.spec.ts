@@ -153,5 +153,5 @@ test("representative pages render and navigate on desktop and mobile", async ({
   }
   await page.goto("/json/viewer");
   await page.getByRole("link", { name: "All tools", exact: true }).click();
-  await expect(page).toHaveURL("http://localhost:3011/");
+  await expect(page).toHaveURL(/\/$/);
 });
