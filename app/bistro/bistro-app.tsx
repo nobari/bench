@@ -513,6 +513,7 @@ export function BistroApp() {
             <RecipeNotebook key={r.id} recipeId={r.id} />
           </section>
         )}
+        {r.source.document === "menu" && <a className="b-text-link" href="/bistro/quick-reference.html#recipes">Menu sheet recipe notes ↗</a>}
         {r.reviewRequired && (
           <Notice>
             <strong>Source clarification needed.</strong> The supplied English
@@ -764,6 +765,8 @@ export function BistroApp() {
               </>
             )}
             {s.step === 1 && Ingredients({ r, interactive: true })}
+            {s.step === 1 && r.machineRequired !== false && <a className="b-text-link" href="/bistro/quick-reference.html#ingredients">Ingredient measuring and storage tips ↗</a>}
+            {last && r.completion === "machine" && /^[0-9]+$/.test(r.program) && Number(r.program) <= 24 && r.program !== "23" && <a className="b-text-link" href="/bistro/quick-reference.html#appearance">Check loaf appearance and cooling ↗</a>}
             {s.step <= 1 && Notes({ r })}{" "}
             {s.step > 1 && !last && r.machineRequired !== false && (
               <>
@@ -1016,6 +1019,7 @@ export function BistroApp() {
                 <div className="b-hero-foot">
                   <BookOpen size={15} />
                   <a href="/bistro/manual-guide/index.html">Open the machine handbook</a>
+                  <a href="/bistro/quick-reference.html">Quick reference</a>
                 </div>
               </div>
               <div className="b-hero-image">
@@ -1237,6 +1241,7 @@ export function BistroApp() {
               </p>
             </div>
             <a className="b-text-link" href="/bistro/manual-guide/index.html">Machine handbook <ArrowRight size={16} /></a>
+            <a className="b-text-link" href="/bistro/quick-reference.html#appearance">Check bread appearance <ArrowRight size={16} /></a>
             <div className="b-search">
               <Search size={20} />
               <input
