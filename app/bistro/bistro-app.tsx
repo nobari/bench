@@ -27,6 +27,7 @@ import {
 } from "lucide-react";
 import { applyRecipeBookEvidence, bookEvidence } from "@/lib/bistro/book";
 import { RecipeNotebook } from "./recipe-notebook";
+import generatedImageIds from "@/lib/bistro/generated-images.json";
 import rawRecipes from "@/lib/bistro/recipes.json";
 import rawHelp from "@/lib/bistro/help.json";
 import type {
@@ -45,7 +46,16 @@ import {
   FLOW_VERSION,
 } from "@/lib/bistro/storage";
 
-const recipes = (rawRecipes as Recipe[]).map(applyRecipeBookEvidence);
+const generatedImages = new Set(generatedImageIds);
+const recipes = (rawRecipes as Recipe[]).map((source) => {
+  const recipe = applyRecipeBookEvidence(source);
+  if (recipe.image || !generatedImages.has(recipe.id)) return recipe;
+  return {
+    ...recipe,
+    image: `/bistro/generated/${recipe.id}.webp`,
+    imageAlt: `AI-generated illustration of ${recipe.name}`,
+  };
+});
 const bookRecipes = recipes.filter((recipe) => recipe.source.document === "recipes");
 const incompleteBookRecipes = bookRecipes.filter((recipe) => recipe.reviewRequired || recipe.referenceOnly);
 const topics = rawHelp.topics as HelpTopic[];
@@ -286,7 +296,7 @@ export function BistroApp() {
               </span>
             </div>
           )}
-          <span className="b-image-label">{finishLabels[r.completion]}</span>
+          <span className="b-image-label">{finishLabels[r.completion]}{r.image?.startsWith("/bistro/generated/") && " · AI illustration"}</span>
         </Link>
         <button
           disabled={!ready}
@@ -487,11 +497,14 @@ export function BistroApp() {
             </div>
           </div>
           {r.image && (
+            <figure className="b-recipe-figure">
             <img
               className="b-detail-photo"
               src={r.image}
               alt={r.imageAlt || r.name}
             />
+            {r.image.startsWith("/bistro/generated/") && <figcaption>AI-generated recipe illustration</figcaption>}
+            </figure>
           )}
         </div>
         {bookEvidence[r.id] && (
