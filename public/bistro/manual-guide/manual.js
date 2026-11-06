@@ -69,6 +69,10 @@ async function start() {
   }
   for(const name of ['All',...sections]) { const tab=element('button',name);tab.onclick=()=>{category=name;active=null;render();};$('filters').append(tab); }
   input.oninput=()=>{category=input.value.trim()?'All':'Programs';active=null;render();};
+  const program = new URLSearchParams(location.search).get('program');
+  if (program === 'Manual') category = 'Manual modes';
+  else if (program) active = entries.find(item => item.program === program);
   render();
+  if (program && active) select(active, true);
 }
 start().catch(()=>{$('count').textContent='The handbook could not load. Reload this page to try again.';});

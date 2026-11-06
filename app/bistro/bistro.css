@@ -1570,3 +1570,7 @@
 .b-ingredient {
   overflow-wrap: anywhere;
 }
+
+.b-book-references { margin: 16px 0 24px; overflow-wrap: anywhere; }
+.b-book-references textarea { display: block; width: 100%; margin: 8px 0; padding: 12px; font: inherit; }
+.b-book-references summary { min-height: 44px; align-content: center; }

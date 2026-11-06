@@ -25,6 +25,8 @@ import {
   AlertTriangle,
   ChefHat,
 } from "lucide-react";
+import { applyRecipeBookEvidence, bookEvidence } from "@/lib/bistro/book";
+import { RecipeNotebook } from "./recipe-notebook";
 import rawRecipes from "@/lib/bistro/recipes.json";
 import rawHelp from "@/lib/bistro/help.json";
 import type {
@@ -43,7 +45,9 @@ import {
   FLOW_VERSION,
 } from "@/lib/bistro/storage";
 
-const recipes = rawRecipes as Recipe[];
+const recipes = (rawRecipes as Recipe[]).map(applyRecipeBookEvidence);
+const bookRecipes = recipes.filter((recipe) => recipe.source.document === "recipes");
+const incompleteBookRecipes = bookRecipes.filter((recipe) => recipe.reviewRequired || recipe.referenceOnly);
 const topics = rawHelp.topics as HelpTopic[];
 const docs = {
   manual: "Instruction manual",
@@ -141,7 +145,8 @@ export function BistroApp() {
   const [storageError, setStorageError] = useState("");
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState("all");
-  const [docFilter, setDocFilter] = useState("all");
+  const [docFilter, setDocFilter] = useState(params.get("source") === "recipes" ? "recipes" : "all");
+  const [shapingOnly, setShapingOnly] = useState(false);
   const [guidedOnly, setGuidedOnly] = useState(false);
   const [helpQuery, setHelpQuery] = useState("");
   const [message, setMessage] = useState("");
@@ -489,6 +494,25 @@ export function BistroApp() {
             />
           )}
         </div>
+        {bookEvidence[r.id] && (
+          <section aria-label="Recipe book references" className="b-book-references">
+            {(/^(?:d?[0-9]+|Manual)$/i.test(r.program) && r.machineRequired !== false) && (
+              <a className="b-text-link" href={"/bistro/manual-guide/index.html?program=" + encodeURIComponent(r.program)}>
+                {r.program === "Manual" ? "Manual functions" : "Settings for program " + r.program} <ArrowRight size={16} />
+              </a>
+            )}
+            <details className="b-disclosure">
+              <summary>Recipe sources and dependencies</summary>
+              <SourceLink source={r.source} />
+              <p>Extraction block references · {bookEvidence[r.id].blocks.join(", ")}</p>
+              {r.extraSources?.filter((source, index, all) => source.document === "manual" && all.findIndex((other) => other.document === source.document && other.page === source.page) === index).map((source) => (
+                <div key={source.page}>Shared machine instructions · <SourceLink source={source} /></div>
+              ))}
+              {bookEvidence[r.id].referenceText && <p className="b-source-text">{bookEvidence[r.id].referenceText}</p>}
+            </details>
+            <RecipeNotebook key={r.id} recipeId={r.id} />
+          </section>
+        )}
         {r.reviewRequired && (
           <Notice>
             <strong>Source clarification needed.</strong> The supplied English
@@ -904,10 +928,12 @@ export function BistroApp() {
     (r) =>
       (!guidedOnly || (!r.referenceOnly && !r.reviewRequired)) &&
       (filter === "all" || r.completion === filter) &&
+      (!shapingOnly || bookEvidence[r.id]?.shaping) &&
       (docFilter === "all" || r.source.document === docFilter) &&
       normalized(
         [
           r.name,
+          ...(bookEvidence[r.id]?.outline ?? []),
           r.program,
           ...(r.searchIngredients || []),
           ...r.ingredients.map((i) => i.name),
@@ -1121,6 +1147,7 @@ export function BistroApp() {
                   />{" "}
                   Guided recipes only
                 </label>
+                <label><input type="checkbox" checked={shapingOnly} onChange={(e) => setShapingOnly(e.target.checked)} /> Recipe-book shaping steps</label>
                 <div role="group" aria-label="Filter by finish">
                   {[
                     ["all", "All recipes"],
@@ -1154,6 +1181,13 @@ export function BistroApp() {
                   </select>
                 </label>
               </div>
+              {docFilter === "recipes" && (
+                <details className="b-disclosure">
+                  <summary>Recipe book coverage · {bookRecipes.length} entries</summary>
+                  <p>{bookRecipes.length - incompleteBookRecipes.length} guided entries · {incompleteBookRecipes.length} source references awaiting clarification. The custard buns and pains aux raisins share one batch. So do the manual-function chocolate and plain croissants. The two poolish breads each include a separate direct-dough alternative.</p>
+                  <ul>{incompleteBookRecipes.map((recipe) => <li key={recipe.id}><Link href={href("recipes", recipe.id)}>{recipe.name}</Link> · {recipe.verificationNotes?.join(" ")}</li>)}</ul>
+                </details>
+              )}
               <div className="b-results-label">
                 {shown.length} {shown.length === 1 ? "recipe" : "recipes"}
                 <span>
@@ -1175,6 +1209,7 @@ export function BistroApp() {
                     onClick={() => {
                       setQuery("");
                       setFilter("all");
+                      setShapingOnly(false);
                       setDocFilter("all");
                       setGuidedOnly(false);
                     }}
