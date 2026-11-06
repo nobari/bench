@@ -989,7 +989,7 @@ export function BistroApp() {
                 </Link>
                 <div className="b-hero-foot">
                   <BookOpen size={15} />
-                  Grounded in your Panasonic manuals
+                  <a href="/bistro/manual-guide/index.html">Open the machine handbook</a>
                 </div>
               </div>
               <div className="b-hero-image">
@@ -1201,6 +1201,7 @@ export function BistroApp() {
                 ready for the next bake.
               </p>
             </div>
+            <a className="b-text-link" href="/bistro/manual-guide/index.html">Machine handbook <ArrowRight size={16} /></a>
             <div className="b-search">
               <Search size={20} />
               <input
