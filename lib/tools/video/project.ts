@@ -8,11 +8,11 @@ import type { StopScan } from "./stops";
 import type { BeatGrid } from "./beats";
 
 /** Built-in conversions, plus the project's own .cube (DJI's official file, say). */
-export type LutKind = "none" | "dji-official" | "dlogm" | "dji-official-vivid" | "dji-official-vivid-sky" | "dji-official-study" | "dlogm-study" | "dlogm-natural" | "dlogm-vivid" | "dlogm-vivid-sky" | "dlog" | "custom";
-export const LUT_KINDS: LutKind[] = ["none", "dji-official", "dlogm", "dji-official-vivid", "dji-official-vivid-sky", "dji-official-study", "dlogm-study", "dlogm-natural", "dlogm-vivid", "dlogm-vivid-sky", "dlog", "custom"];
+export type LutKind = "none" | "dji-official" | "dlogm" | "dji-official-vivid" | "dji-official-vivid-sky" | "dji-official-night" | "dji-official-study" | "dlogm-study" | "dlogm-natural" | "dlogm-vivid" | "dlogm-vivid-sky" | "dlogm-night" | "dlog" | "custom";
+export const LUT_KINDS: LutKind[] = ["none", "dji-official", "dlogm", "dji-official-vivid", "dji-official-vivid-sky", "dji-official-night", "dji-official-study", "dlogm-study", "dlogm-natural", "dlogm-vivid", "dlogm-vivid-sky", "dlogm-night", "dlog", "custom"];
 /** Conversions computed from DJI's own LUT file (fetched at runtime) rather than the modelled curves. */
-export type FileLutKind = "dji-official" | "dji-official-vivid" | "dji-official-vivid-sky" | "dji-official-study";
-export const FILE_LUT_KINDS: FileLutKind[] = ["dji-official", "dji-official-vivid", "dji-official-vivid-sky", "dji-official-study"];
+export type FileLutKind = "dji-official" | "dji-official-vivid" | "dji-official-vivid-sky" | "dji-official-night" | "dji-official-study";
+export const FILE_LUT_KINDS: FileLutKind[] = ["dji-official", "dji-official-vivid", "dji-official-vivid-sky", "dji-official-night", "dji-official-study"];
 export type MathLutKind = Exclude<LutKind, "none" | "custom" | FileLutKind>;
 export const isFileLutKind = (k: LutKind): k is FileLutKind => (FILE_LUT_KINDS as LutKind[]).includes(k);
 

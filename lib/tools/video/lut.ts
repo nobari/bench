@@ -129,11 +129,13 @@ export const LUT_OPTIONS: { kind: MathLutKind | FileLutKind; name: string; hint:
   { kind: "dlogm", name: "D-Log M → Rec.709 (DJI, modelled)", hint: "A compact model of DJI's file: tone, hue and saturation measured from it. Within about two 8-bit levels of the file on real footage." },
   { kind: "dji-official-vivid", name: "D-Log M → Vivid (on DJI's file)", hint: "The attractive look for travel, drives and scenery: DJI's own colour science with the Vivid treatment on top — richer colour where it is muted (vibrance, skin tones held back), a gentle S-curve about mid grey with a soft shoulder so bright sky and clouds stay clean and nothing clips, mids a touch brighter and a hint of warmth." },
   { kind: "dji-official-vivid-sky", name: "D-Log M → Vivid, deep sky (on DJI's file)", hint: "Vivid with the sky given the depth of colour the D-Log → Rec.709 path has, at DJI's own blue (never cyan) and without clipping, and the shadows kept open: trees and hedges come out brighter than in DJI's file, not darker. Clouds, greys and skin are untouched by the sky boost. Measured on real drives: sky saturation 0.69 against DJI's 0.38 and the D-Log path's 0.72, foliage 4 % brighter than DJI's, nothing crushed." },
+  { kind: "dji-official-night", name: "D-Log M → Night (on DJI's file)", hint: "For night drives and illuminations: DJI's own colour science with the Night treatment on top — the sky and the night between the leaves taken to a true black, greys cleared of their tint and pulled down so the asphalt reads black under white lane lines, lamp-lit colour lifted a quarter of a stop and given Vivid's richness so trees glow from the lamp at their foot. Keyed on saturation rather than brightness, so lines, lamps and signs keep their light. Measured on the November night drive: asphalt 24 of 255 against DJI's 106, lane lines 154, lit foliage brighter and richer than DJI's, sky 0. Not for daylight: it blackens every grey." },
   { kind: "dji-official-study", name: "D-Log M → Study (on DJI's file)", hint: "The recommended look for long-play study, focus and work videos: DJI's own colour science with the Study treatment on top — crisp mids, a soft shoulder, sky held off cyan and neutral near white, shadows opened a touch, a hint of warmth, saturation 0.9." },
   { kind: "dlogm-study", name: "D-Log M → Study", hint: "Tuned on Osmo Action 6 footage for long-play study, focus and work videos: DJI's tone with mids kept crisp, a soft shoulder that keeps sky gradients smooth, bright sky held off cyan, shadows opened a touch, a hint of warmth and calmer saturation." },
   { kind: "dlogm-natural", name: "D-Log M → Natural", hint: "DJI's rendering with 12 % less saturation and slightly less contrast — flattering for overcast days and muted scenes." },
   { kind: "dlogm-vivid", name: "D-Log M → Vivid", hint: "The Vivid treatment on the modelled conversion: richer colour where it is muted with skin tones held back, a gentle S-curve with a soft shoulder, mids a touch brighter and a hint of warmth." },
   { kind: "dlogm-vivid-sky", name: "D-Log M → Vivid, deep sky", hint: "The deep-sky Vivid on the modelled conversion: the sky alone deepened to the D-Log path's saturation at DJI's blue, the shadows kept open, Vivid's colour everywhere else." },
+  { kind: "dlogm-night", name: "D-Log M → Night", hint: "The Night treatment on the modelled conversion: greys cleared of their tint and pulled towards black, lamp-lit colour lifted and given Vivid's richness, a toe that reaches a true black. For night footage only — in daylight it blackens every grey." },
   { kind: "dlog", name: "D-Log → Rec.709 (DJI)", hint: "DJI's published D-Log curve and D-Gamut matrix (Mavic 3 Pro Hasselblad camera, Inspire 3, Zenmuse), rendered with the same tone as the D-Log M look." },
 ];
 /**
@@ -147,7 +149,9 @@ export const LUT_OPTIONS: { kind: MathLutKind | FileLutKind; name: string; hint:
  * shoulder above a display level, a soft toe below one (so added contrast
  * deepens shadows without crushing them to black), a black lift, and a sky
  * boost: extra colour for blue-dominant pixels out of the shadows (the sky,
- * never clouds or greys), applied before everything else.
+ * never clouds or greys), applied before everything else; and the night moves
+ * (see nightPre): greys cleared of their tint and pulled down, lamp-lit colour
+ * lifted, and a toe that reaches a true black.
  */
 export interface Look {
   exposure: number;
@@ -163,8 +167,16 @@ export interface Look {
   lift: number;
   /** The sky's chroma is scaled by up to 1 + sky, by how blue a pixel is (see skyBoost); 0 leaves it alone. */
   sky: number;
+  /** How much of their tint low-saturation pixels lose (cool tints at any brightness, others out of the brights); 0 = none. */
+  greyDesat: number;
+  /** Stops of darkening for low-saturation pixels out of the brights, fading out by saturation 0.5 and by luma 0.72; 0 = none. */
+  greyPull: number;
+  /** Stops of brightening for saturated warm pixels in the mids (lamp-lit foliage), fading out before the brights; 0 = none. */
+  warmLift: number;
+  /** Display levels under this are eased to black (v × smoothstep(0, nightToe, v)); nothing above it moves; 0 = off. */
+  nightToe: number;
 }
-const PLAIN: Look = { exposure: 0, warm: 0, blueHue: 0, sat: 1, hiDesat: 0, vibrance: 0, skin: 0, con: 1, shoulder: 1, toe: 0, lift: 0, sky: 0 };
+const PLAIN: Look = { exposure: 0, warm: 0, blueHue: 0, sat: 1, hiDesat: 0, vibrance: 0, skin: 0, con: 1, shoulder: 1, toe: 0, lift: 0, sky: 0, greyDesat: 0, greyPull: 0, warmLift: 0, nightToe: 0 };
 // Measured on a sunny Tokyo drive: median 0.4 stop over grey, sky at code 0.35/0.5/0.65, p99 three stops over grey.
 export const STUDY_LOOK: Look = { ...PLAIN, exposure: -0.05, warm: 0.05, blueHue: 0.08, sat: 0.9, hiDesat: 0.35, shoulder: 0.88, lift: 0.008 };
 /**
@@ -184,16 +196,32 @@ export const VIVID_LOOK: Look = { ...PLAIN, exposure: 0.05, warm: 0.04, blueHue:
  * 1.4 % of pixels under 5 % luma (DJI's file 1.5 %, Vivid 4.1 %), nothing crushed or clipped.
  */
 export const DEEP_SKY_LOOK: Look = { ...VIVID_LOOK, blueHue: 0, exposure: 0.08, hiDesat: 0.2, con: 1.02, toe: 0.04, lift: 0.004, sky: 1.2 };
+/**
+ * Night, asked for from two renderings of the November 2026 illuminated-maples drive ("sky black, asphalt black with
+ * white lines, trees vivid and lit from the bottom up"). In DJI's file the asphalt (luma 106/255, saturation 0.17)
+ * and the lamp-lit foliage (83, saturation 0.79) sit at the same brightness, so no tone curve separates them and the
+ * look keys on saturation instead: greys lose their tint (0.8; cool tints such as headlight glare fully, at any
+ * brightness) and are pulled 2.2 stops down, saturated warm mids gain a quarter of a stop, Vivid's colour follows
+ * with skin protection off (the maples are that hue), contrast 1.12, near-white desaturation 0.3 so lines and lamps
+ * stay white, and a toe from 0.10 reaches a true black; Vivid's own toe (which keeps shadows open) and the sky boost
+ * (which finds the road at night) are off. Measured on eight real night frames: sky 1 (DJI 4), asphalt 24 (106),
+ * lane lines 154 (176), lit foliage 87 at saturation 0.89 (83 at 0.79), lit against unlit foliage ×10.7 (×5.4),
+ * nothing clipped. Chosen over a 1.5-stop and a 3-stop version as the one that reads black without hardening the
+ * foliage edges.
+ */
+export const NIGHT_LOOK: Look = { ...VIVID_LOOK, skin: 0, exposure: 0, toe: 0, lift: 0, hiDesat: 0.3, shoulder: 0.88, warm: 0.03, con: 1.12, greyDesat: 0.8, greyPull: 2.2, warmLift: 0.25, nightToe: 0.1 };
 const LOOKS: Record<MathLutKind | FileLutKind, Look> = {
   "dji-official": PLAIN,
   "dji-official-vivid": VIVID_LOOK,
   "dji-official-vivid-sky": DEEP_SKY_LOOK,
+  "dji-official-night": NIGHT_LOOK,
   "dji-official-study": STUDY_LOOK,
   dlogm: PLAIN,
   "dlogm-study": STUDY_LOOK,
   "dlogm-natural": { ...PLAIN, sat: 0.88, con: 0.94 },
   "dlogm-vivid": VIVID_LOOK,
   "dlogm-vivid-sky": DEEP_SKY_LOOK,
+  "dlogm-night": NIGHT_LOOK,
   dlog: PLAIN,
 };
 const smoothstep = (a: number, b: number, x: number) => {
@@ -241,9 +269,50 @@ export function skyBoost(rgb: [number, number, number], k: number): [number, num
   }
   return [r1, g1, b1];
 }
+/** HSV hue in degrees of a display pixel (0 for grey). */
+function hueOf(r: number, g: number, b: number): number {
+  const max = Math.max(r, g, b), c = max - Math.min(r, g, b);
+  if (c < 1e-6) return 0;
+  if (max === r) return (60 * ((g - b) / c) + 360) % 360;
+  if (max === g) return 60 * ((b - r) / c) + 120;
+  return 60 * ((r - g) / c) + 240;
+}
+/**
+ * The night moves, ahead of the rest of the look and keyed on saturation over wide bands (narrow ones posterise the
+ * road), never on position: low-saturation pixels lose their tint — cool tints such as headlight glare on the road
+ * at any brightness, up to a moderate saturation, so the glare turns white while a blue sign stays blue; other
+ * tints out of the brights, so lamplight keeps its warmth — then low-saturation pixels out of the brights are pulled
+ * down by `greyPull` stops (the asphalt, the pavement, what is left of the sky), and saturated warm pixels in the
+ * mids are lifted by `warmLift` stops (lamp-lit foliage; the unlit crown is too dark and too grey to qualify, so the
+ * light reads as climbing the tree). Lane lines, lamps and signs sit above or outside the bands. The saturation the
+ * keys read is the pixel's before any of this. Exported for the tests.
+ */
+export function nightPre(rgb: [number, number, number], L: Look): [number, number, number] {
+  let [r, g, b] = rgb;
+  const max = Math.max(r, g, b), min = Math.min(r, g, b);
+  const sat = max > 0 ? (max - min) / max : 0, y = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  if (L.greyDesat) {
+    const cool = max > 0 && b > r ? smoothstep(0, 0.08, (b - r) / max) * (1 - smoothstep(0.4, 0.65, sat)) : 0;
+    const s = 1 - Math.max(L.greyDesat * (1 - smoothstep(0.25, 0.5, sat)) * (1 - smoothstep(0.5, 0.8, y)), cool);
+    if (s < 1) {
+      r = y + s * (r - y);
+      g = y + s * (g - y);
+      b = y + s * (b - y);
+    }
+  }
+  let gain = 1;
+  if (L.greyPull) gain *= 2 ** (-L.greyPull * (1 - smoothstep(0.25, 0.5, sat)) * (1 - smoothstep(0.3, 0.72, y)));
+  if (L.warmLift && max > 0 && (max === r || (max === g && r > b))) {
+    const h = hueOf(r, g, b);
+    const hw = h <= 75 ? 1 - smoothstep(55, 75, h) : h >= 330 ? smoothstep(330, 350, h) : 0;
+    gain *= 2 ** (L.warmLift * hw * smoothstep(0.25, 0.55, sat) * (1 - smoothstep(0.45, 0.75, y)));
+  }
+  return gain === 1 ? [r, g, b] : [r * gain, g * gain, b * gain];
+}
 /** A look applied to one display-referred RGB triplet; exported for the tests and for tuning. */
 export function applyLook(rgb: [number, number, number], L: Look): [number, number, number] {
   let [r, g, b] = L.sky ? skyBoost(rgb, L.sky) : rgb;
+  if (L.greyDesat || L.greyPull || L.warmLift) [r, g, b] = nightPre([r, g, b], L);
   if (L.exposure) {
     const gain = 2 ** L.exposure;
     r *= gain;
@@ -278,7 +347,11 @@ export function applyLook(rgb: [number, number, number], L: Look): [number, numb
   const sh = (v: number) => (k < 1 && v > k ? k + (1 - k) * (1 - Math.exp(-(v - k) / (1 - k))) : v);
   // The toe mirrors the shoulder: below t it eases towards 0 instead of clipping, meeting the line at t with the same slope.
   const to = (v: number) => (t > 0 && v < t ? t * Math.exp(-(t - v) / t) : v);
-  const fin = (v: number) => clamp01(L.lift + (1 - L.lift) * clamp01(sh(to(v))));
+  const nt = L.nightToe;
+  const fin = (v: number) => {
+    const o = clamp01(L.lift + (1 - L.lift) * clamp01(sh(to(v))));
+    return nt > 0 && o < nt ? o * smoothstep(0, nt, o) : o;
+  };
   return [fin(r), fin(g), fin(b)];
 }
 
