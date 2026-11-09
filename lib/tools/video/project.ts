@@ -346,21 +346,27 @@ export function normalizeRegion(raw: unknown): SoundRegion | null {
     ramp: typeof r.ramp === "number" && r.ramp >= 0 ? Math.min(MAX_REGION_RAMP, r.ramp) : DEFAULT_REGION_RAMP,
   };
 }
+/** A stretch of the timeline with an id — a sound region, a zoom; the span helpers below serve both. */
+export interface Span {
+  id: string;
+  from: number;
+  to: number;
+}
 /**
- * Regions in time order and never overlapping: one that begins inside the one before it starts where that ends, all
- * are cut at the end of the video when it is given, and what is left shorter than the least span is dropped.
+ * Spans in time order and never overlapping: one that begins inside the one before it starts where that ends, all are
+ * cut at the end of the video when it is given, and what is left shorter than the least span is dropped.
  */
-export function tidyRegions(regions: SoundRegion[], end = Infinity): SoundRegion[] {
-  const out: SoundRegion[] = [];
-  for (const r of [...regions].sort((a, b) => a.from - b.from)) {
+export function tidySpans<T extends Span>(spans: T[], end = Infinity): T[] {
+  const out: T[] = [];
+  for (const r of [...spans].sort((a, b) => a.from - b.from)) {
     const prev = out[out.length - 1];
     const from = Math.max(r.from, prev ? prev.to : 0), to = Math.min(r.to, end);
     if (to - from >= MIN_REGION_SECONDS - 1e-9) out.push(from === r.from && to === r.to ? r : { ...r, from, to });
   }
   return out;
 }
-/** The room a region has: from the end of the region before it to the start of the one after it (a neighbour is before it when that neighbour's middle lies before its own), inside the video. */
-export function regionRoom(all: SoundRegion[], r: Pick<SoundRegion, "id" | "from" | "to">, end: number): { lo: number; hi: number } {
+/** The room a span has: from the end of the span before it to the start of the one after it (a neighbour is before it when that neighbour's middle lies before its own), inside the video. */
+export function spanRoom(all: Span[], r: Span, end: number): { lo: number; hi: number } {
   const mid = (r.from + r.to) / 2;
   const others = all.filter((x) => x.id !== r.id);
   return {
@@ -368,32 +374,115 @@ export function regionRoom(all: SoundRegion[], r: Pick<SoundRegion, "id" | "from
     hi: others.filter((x) => (x.from + x.to) / 2 >= mid).reduce((a, x) => Math.min(a, x.from), end),
   };
 }
-/** A region trimmed or set: each end held inside its room, at least the least span kept; unchanged when nothing has to give. */
-export function clampRegion(all: SoundRegion[], r: SoundRegion, end: number): SoundRegion {
-  const { lo, hi } = regionRoom(all, r, end);
+/** A span trimmed or set: each end held inside its room, at least the least span kept; unchanged when nothing has to give. */
+export function clampSpan<T extends Span>(all: T[], r: T, end: number): T {
+  const { lo, hi } = spanRoom(all, r, end);
   if (hi - lo < MIN_REGION_SECONDS) return r;
   const from = Math.max(lo, Math.min(r.from, hi - MIN_REGION_SECONDS));
   const to = Math.min(hi, Math.max(r.to, from + MIN_REGION_SECONDS));
   return from === r.from && to === r.to ? r : { ...r, from, to };
 }
-/** A region moved to begin at `from`, its length kept, stopping at its neighbours and the video's edges. */
-export function moveRegion(all: SoundRegion[], r: SoundRegion, from: number, end: number): SoundRegion {
+/** A new span fitted into the room where it is asked for; null when there is no room — less than a second of it (or half of what was asked) would fit. */
+export function fitSpan<T extends Span>(all: T[], r: T, end: number): T | null {
+  const { lo, hi } = spanRoom(all, r, end);
+  if (hi - lo < MIN_REGION_SECONDS || r.from >= end) return null;
+  const fit = clampSpan(all, r, end);
+  return fit.to - fit.from >= Math.max(MIN_REGION_SECONDS, Math.min(1, (r.to - r.from) / 2)) - 1e-9 ? fit : null;
+}
+/** A span moved to begin at `from`, its length kept, stopping at its neighbours and the video's edges. */
+export function moveSpan<T extends Span>(all: T[], r: T, from: number, end: number): T {
   const len = r.to - r.from;
-  const { lo, hi } = regionRoom(all, { id: r.id, from, to: from + len }, end);
+  const { lo, hi } = spanRoom(all, { id: r.id, from, to: from + len }, end);
   if (hi - lo < MIN_REGION_SECONDS) return r;
   const l = Math.min(len, hi - lo);
   const f = Math.max(lo, Math.min(from, hi - l));
   return f === r.from && f + l === r.to ? r : { ...r, from: f, to: f + l };
 }
-/** The regions that fall in a span of the video, cut to it and timed from its start — for a short's own project. */
-export function regionsBetween(regions: SoundRegion[] | undefined, from: number, to: number): SoundRegion[] {
-  return tidyRegions(
-    (regions ?? []).filter((r) => r.to > from && r.from < to).map((r) => ({ ...r, from: Math.max(0, r.from - from), to: Math.min(to, r.to) - from })),
+/** The spans that fall in a stretch of the video, cut to it and timed from its start — for a short's own project. */
+export function spansBetween<T extends Span>(spans: T[] | undefined, from: number, to: number): T[] {
+  return tidySpans(
+    (spans ?? []).filter((r) => r.to > from && r.from < to).map((r) => ({ ...r, from: Math.max(0, r.from - from), to: Math.min(to, r.to) - from })),
     to - from,
   );
 }
+export const regionsBetween = (regions: SoundRegion[] | undefined, from: number, to: number): SoundRegion[] => spansBetween(regions, from, to);
 /** The stretches a region keeps free of music (its music off), in time order and cut to the video. */
-export const musicFreeSpans = (regions: SoundRegion[] | undefined, end: number): { from: number; to: number }[] => tidyRegions(regions ?? [], end).filter((r) => r.music !== null && r.music <= -60).map((r) => ({ from: r.from, to: r.to }));
+export const musicFreeSpans = (regions: SoundRegion[] | undefined, end: number): { from: number; to: number }[] => tidySpans(regions ?? [], end).filter((r) => r.music !== null && r.music <= -60).map((r) => ({ from: r.from, to: r.to }));
+
+/* ---------------------------------------------------------- zooms */
+
+/**
+ * A part of the video that pushes into a point of the picture: over the first `ease` seconds the frame closes in to
+ * `zoom` times on the centre, holds, and opens out again over the last. Timeline seconds, like titles and sound
+ * regions, so a zoom spans whatever footage is under it, cuts included; the centre is a fraction of the clip's
+ * (cropped) picture, as the window keys have it. Zooms never overlap. A short cut from those seconds keeps them, the
+ * push taken inside its own window.
+ */
+export interface Zoom extends Span {
+  name?: string;
+  /** How far in, 1–MAX_REFRAME_ZOOM. */
+  zoom: number;
+  cx: number;
+  cy: number;
+  /** Seconds the push in and the pull out each take, never more than half the zoom. */
+  ease: number;
+}
+export const DEFAULT_ZOOM = 1.5;
+export const DEFAULT_ZOOM_EASE = 0.6;
+export const MAX_ZOOM_EASE = 5;
+export const newZoom = (from: number, to: number, zoom = DEFAULT_ZOOM, cx = 0.5, cy = 0.5): Zoom => ({ id: newId(), from, to, zoom, cx, cy, ease: DEFAULT_ZOOM_EASE });
+/** A saved zoom made whole; one without a span is dropped. */
+export function normalizeZoom(raw: unknown): Zoom | null {
+  const z = raw as Partial<Zoom> | null;
+  if (!z || typeof z !== "object" || typeof z.from !== "number" || typeof z.to !== "number" || !(z.to > z.from)) return null;
+  const num = (v: unknown, lo: number, hi: number, d: number) => (typeof v === "number" && Number.isFinite(v) ? Math.max(lo, Math.min(hi, v)) : d);
+  return {
+    id: typeof z.id === "string" && z.id ? z.id : newId(),
+    ...(typeof z.name === "string" && z.name.trim() ? { name: z.name } : {}),
+    from: Math.max(0, z.from),
+    to: z.to,
+    zoom: num(z.zoom, 1, MAX_REFRAME_ZOOM, DEFAULT_ZOOM),
+    cx: num(z.cx, 0, 1, 0.5),
+    cy: num(z.cy, 0, 1, 0.5),
+    ease: num(z.ease, 0, MAX_ZOOM_EASE, DEFAULT_ZOOM_EASE),
+  };
+}
+export const zoomsBetween = (zooms: Zoom[] | undefined, from: number, to: number): Zoom[] => spansBetween(zooms, from, to);
+/** How far into the picture the frame is pushed at an instant and where: a factor over 1 and a centre in picture fractions. */
+export interface Punch {
+  zoom: number;
+  cx: number;
+  cy: number;
+}
+const smooth = (u: number) => (u <= 0 ? 0 : u >= 1 ? 1 : u * u * (3 - 2 * u));
+/**
+ * The push at a timeline instant: inside a zoom, its factor eased in log zoom (an S-curve over the ease at either
+ * end, the ease never more than half the zoom) with its centre; null outside every zoom and where the factor is 1.
+ */
+export function zoomAt(zooms: Zoom[] | undefined, t: number): Punch | null {
+  for (const z of zooms ?? []) {
+    if (t < z.from || t > z.to || !(z.zoom > 1)) continue;
+    const ease = Math.min(z.ease, (z.to - z.from) / 2);
+    const u = ease > 0 ? Math.min((t - z.from) / ease, (z.to - t) / ease, 1) : 1;
+    const factor = Math.exp(Math.log(z.zoom) * smooth(u));
+    return factor > 1.0005 ? { zoom: factor, cx: z.cx, cy: z.cy } : null;
+  }
+  return null;
+}
+const fmtZoom = (z: number) => `${(Math.round(z * 100) / 100).toFixed(z * 100 % 10 ? 2 : 1)}×`;
+/** "1.5× · centre", "2× · left, up" — the factor and where in the picture. */
+export function zoomLabel(z: Pick<Zoom, "zoom" | "cx" | "cy">): string {
+  const across = z.cx < 0.4 ? "left" : z.cx > 0.6 ? "right" : "", down = z.cy < 0.4 ? "up" : z.cy > 0.6 ? "down" : "";
+  const where = [across, down].filter(Boolean).join(", ") || "centre";
+  return `${fmtZoom(z.zoom)} · ${where}`;
+}
+/** One line about the zooms: how many, the seconds they cover, the strongest. */
+export function describeZooms(zooms: Zoom[] | undefined, end: number): string {
+  const list = tidySpans(zooms ?? [], end);
+  if (!list.length) return "none yet";
+  const covered = list.reduce((a, z) => a + (z.to - z.from), 0);
+  return `${list.length} zoom${list.length === 1 ? "" : "s"} · ${fmtTime(covered)} pushed in · up to ${fmtZoom(Math.max(...list.map((z) => z.zoom)))}`;
+}
 
 /* ---------------------------------------------------------- shorts (Short mode) */
 
@@ -1236,6 +1325,8 @@ export interface Project {
   fill?: FillSettings;
   /** Parts of the video mixed their own way: the camera's sound and the music each at a level of the region's (see SoundRegion). */
   regions?: SoundRegion[];
+  /** Parts of the video pushed into a point of the picture (see Zoom). */
+  zooms?: Zoom[];
 }
 
 /** A readable location for a media file. */
@@ -1655,8 +1746,8 @@ export function mergeAdjacentSpans(spans: ExportSpan[]): ExportSpan[] {
 /**
  * Which parts of the timeline are copied from the recording as they are and which are re-encoded. Copying needs:
  * smart copy on, no grade, no transform, no watermark, the recording's own size, frame rate and codec in the export,
- * and the recording's keyframes read. Within such a clip, a title or a transition re-encodes only the frames it
- * covers, and every copied stretch is then cut to whole keyframe groups (see `splitAtKeyframes`): the few frames
+ * and the recording's keyframes read. Within such a clip, a title, a transition or a zoom re-encodes only the frames
+ * it covers, and every copied stretch is then cut to whole keyframe groups (see `splitAtKeyframes`): the few frames
  * between a cut and the keyframe beside it are re-encoded as a bridge. Neighbouring re-encoded spans merge.
  */
 export function planExport(p: Project): ExportSpan[] {
@@ -1687,11 +1778,12 @@ export function planExport(p: Project): ExportSpan[] {
       spans.push({ kind: "encode", clipId: c.id, sourceIn: c.in, sourceOut: c.out, start: c.start, end: c.end, reasons, speed });
       continue;
     }
-    // Titles and transitions only force re-encoding of the frames they cover.
+    // Titles, transitions and zooms only force re-encoding of the frames they cover.
     let cursor = c.start;
     const cuts: [number, number, string][] = [
       ...overlays.map((t) => [Math.max(c.start, t.start), Math.min(c.end, t.start + t.duration), "title"] as [number, number, string]),
       ...windows.filter((w) => w.start < c.end && w.end > c.start).map((w) => [Math.max(c.start, w.start), Math.min(c.end, w.end), "transition"] as [number, number, string]),
+      ...(p.zooms ?? []).filter((z) => z.from < c.end && z.to > c.start && z.zoom > 1).map((z) => [Math.max(c.start, z.from), Math.min(c.end, z.to), "zoom"] as [number, number, string]),
     ].sort((a, b) => a[0] - b[0]);
     for (const [ts, te, why] of cuts) {
       if (te <= cursor) continue;
@@ -1863,10 +1955,13 @@ export function deserialize(json: string): Project | null {
     const mode: EditorMode = p.mode === "short" ? "short" : "landscape";
     const songs = p.songs && typeof p.songs === "object" ? Object.fromEntries(Object.entries(p.songs).map(([id, s]) => [id, normalizeSongPrefs(s)])) : undefined;
     const fill = p.fill && typeof p.fill === "object" ? normalizeFill(p.fill) : undefined;
-    const regions = Array.isArray(p.regions) ? tidyRegions(p.regions.map((r) => normalizeRegion(r)).filter((r): r is SoundRegion => !!r)) : undefined;
+    const regions = Array.isArray(p.regions) ? tidySpans(p.regions.map((r) => normalizeRegion(r)).filter((r): r is SoundRegion => !!r)) : undefined;
+    const zooms = Array.isArray(p.zooms) ? tidySpans(p.zooms.map((z) => normalizeZoom(z)).filter((z): z is Zoom => !!z)) : undefined;
     const loaded: Project = { ...newProject(), ...p, clips, sound, layout, safeArea, shorts, mode, ...(songs ? { songs } : {}), ...(fill ? { fill } : {}), export: { ...DEFAULT_EXPORT, ...p.export, frame, tags: { ...DEFAULT_TAGS, ...(p.export?.tags ?? {}) } }, preview: { ...DEFAULT_PREVIEW, ...(p.preview ?? (Object.values(p.proxies ?? {}).some((x) => x?.ready) ? { proxyHeight: 1080 } : {})) }, transition, intro, stops, titles: (p.titles ?? []).map((t) => normalizeTitle(t)) };
     if (regions) loaded.regions = regions;
     else delete loaded.regions;
+    if (zooms) loaded.zooms = zooms;
+    else delete loaded.zooms;
     return loaded;
   } catch {
     return null;

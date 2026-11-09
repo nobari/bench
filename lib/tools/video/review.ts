@@ -8,7 +8,7 @@
 
 import { introRegion } from "./intro";
 import { stopsOnTimeline } from "./stops";
-import { SOUND_LABELS, TRANSITIONS, clipSpeed, crossfades, effectiveMusicEnd, exportRange, fmtTime, hasCard, musicFreeSpans, placeClips, soundLevels, soundState, tidyRegions, timelineDuration, visibleCuts, type Project, type Title } from "./project";
+import { SOUND_LABELS, TRANSITIONS, clipSpeed, crossfades, effectiveMusicEnd, exportRange, fmtTime, hasCard, musicFreeSpans, placeClips, soundLevels, soundState, tidySpans, timelineDuration, visibleCuts, zoomLabel, type Project, type Title } from "./project";
 import { regionLabel } from "./music-fill";
 import { YOUTUBE_LUFS } from "./loudness";
 import { YOUTUBE_AUDIO_KBPS, fmtGb, uploadLimits } from "./youtube";
@@ -144,6 +144,8 @@ export function reviewProject(p: Project, env: ReviewEnv): Review {
     story.push(item({ id: "speed", state: "look", title: `${plural(sped.length, "clip")} at another speed`, summary: `${[...bySpeed.entries()].map(([s, n]) => `${n} at ${s}×`).join(", ")}; the original sound ${[...bySpeed.keys()].some((s) => s > 4 || s < 0.25) ? "is off on the fastest or slowest ones" : "follows with its pitch shifted"}.`, action: { id: "tab:trim", label: "Speed" } }));
   }
   const stopsLeft = p.stops ? stopsOnTimeline(p.clips, p.stops).length : 0;
+  const zooms = tidySpans(p.zooms ?? [], duration);
+  if (zooms.length) story.push(item({ id: "zooms", state: "info", title: `${plural(zooms.length, "zoom")} into the picture`, summary: "Play each once more: the part it shows should be the point of the moment, and the push in and out should feel unhurried.", lines: zooms.map((z) => `${fmtTime(z.from)}–${fmtTime(z.to)} ${zoomLabel(z)}${z.name ? ` — ${z.name}` : ""}, ${z.ease.toFixed(1)} s in and out`), action: { id: "tab:transform", label: "Zooms" } }));
   story.push(item({ id: "stops", state: stopsLeft ? "look" : "info", title: p.stops ? (stopsLeft ? `${plural(stopsLeft, "stop")} still on the timeline` : "Stops scanned, none left") : "Stops not scanned", summary: p.stops ? (stopsLeft ? "Stretches where the picture stands still — a red light, a parked camera — are still in the cut; tick them in Trim and cut them out, or keep them if they are meant." : "Every stretch where the picture stood still was cut out, or none was found.") : "Scan for stops finds every stretch where the picture stands still so they can be cut out in one go.", action: { id: "scan-stops", label: p.stops ? "Stops" : "Scan for stops" } }));
   const intro = introRegion(placed);
   const card = p.intro.card;
@@ -214,7 +216,7 @@ export function reviewProject(p: Project, env: ReviewEnv): Review {
       `${xf ? `${plural(xf, "crossfade")} where tracks overlap` : "No overlaps, so no crossfades"}; ${fades} with a fade in or out${music[music.length - 1].fadeOut > 0 ? "; the last one fades out" : "; the last one ends without a fade"}`,
     ];
     if (gaps.length) lines.push(`Gaps: ${gaps.join("; ")}`);
-    const regions = tidyRegions(p.regions ?? [], duration);
+    const regions = tidySpans(p.regions ?? [], duration);
     if (regions.length) lines.push(`${plural(regions.length, "sound region")}: ${regions.map((r) => `${fmtTime(r.from)}–${fmtTime(r.to)} ${regionLabel(r).charAt(0).toLowerCase()}${regionLabel(r).slice(1)}`).join("; ")}`);
     sound.push(item({ id: "music", state: gaps.length || st.musicOther || mGains.size > 1 ? "look" : "ok", title: gaps.length ? `Music with ${plural(gaps.length, "gap")}` : `Music covers the video, ${plural(songs, "song")}`, summary: gaps.length ? "A music video should not fall silent: slide a track over each gap, or Shuffle & fill lays the songs end to end." : st.musicOther ? `${st.musicOther} ${st.musicOther === 1 ? "track sits" : "tracks sit"} at another level than the mode's ${fmtDb(levels.music)}.` : "Every stretch of the video has music under it.", lines, action: { id: "tab:audio", label: "Music" } }));
   } else sound.push(item({ id: "music", state: p.export.tags.kind === "music-video" ? "look" : "info", title: "No music", summary: p.export.tags.kind === "music-video" ? "The file is tagged as a music video but carries no music track." : "Only the camera sound will be heard.", action: { id: "tab:audio", label: "Add music" } }));

@@ -2,7 +2,7 @@
 
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import Link from "next/link";
-import { AlertTriangle, Camera, ChevronDown, ChevronRight, ChevronUp, Sparkles, Clapperboard, Crop, Download, FolderOpen, Gauge, Heart, Loader, Maximize2, Minimize2, Music, Pause, Play, Plus, Repeat, Save, Scissors, SkipBack, SkipForward, SlidersHorizontal, Smartphone, Square, StepBack, StepForward, Trash2, Type, Upload, Volume2, VolumeX, Keyboard, Search, Shuffle, X } from "lucide-react";
+import { AlertTriangle, Camera, ChevronDown, ChevronRight, ChevronUp, Sparkles, Clapperboard, Crop, Download, FolderOpen, Gauge, Heart, Loader, Maximize2, Minimize2, Music, Pause, Play, Plus, Repeat, Save, Scissors, SkipBack, SkipForward, SlidersHorizontal, Smartphone, Square, StepBack, StepForward, Trash2, Type, Upload, Volume2, VolumeX, Keyboard, Search, Shuffle, X, ZoomIn } from "lucide-react";
 import { makeRoomForAll, makeRoomForTransition, newShort, timelineDuration as shortTimelineDuration, type EditorMode, type Short } from "@/lib/tools/video/project";
 import { DEFAULT_SHORT_SECONDS, MIN_SHORT_SECONDS, SHORTS_FOLDER, clampShort, seamCandidates, seamScore, shortBytes, shortChecks, shortFileName, shortPostText, shortProject, shortStem, shortTemplate, shortTemplateProject, shortsFromMoments, suggestWindows, titlesIntoShort, viewFor } from "@/lib/tools/video/short-mode";
 import { scoreMoments as scoreShortMoments } from "@/lib/tools/video/intro";
@@ -21,7 +21,7 @@ import { TITLE_PRESETS, applyTitlePreset, copyTitlesToShorts } from "@/lib/tools
 import { beatPeriod, cutToBeats, nearestBeat, punchIns, slowStretch, timelineBeats } from "@/lib/tools/video/beat-tools";
 import { analyseBeats } from "@/lib/tools/video/beats";
 import { decodeMono } from "@/lib/tools/video/engine";
-import { DEFAULT_EXPORT, NEUTRAL_GRADE, NEUTRAL_TRANSFORM, TITLE_ALIGNS, TITLE_FAMILIES, TITLE_FONTS, TITLE_POSITIONS, TITLE_SHADOWS, TITLE_WEIGHTS, TRANSITIONS, addTransitionAt, appendMusic, applyAudioTo, applyGradeTo, applyTransitionToAll, clipAt, crossfades, dbToGain, effectiveMusicEnd, estimateExport, exportRange, fmtTime, musicGainAt, musicLength, newId, newProject, newTitle, orderRecordings, placeClips, planExport, removeRange, reorderMusic, setTransition, splitClip, timelineDuration, titleLanes, transitionAt, transitionWindows, CLIP_SPEEDS, canMergeWithNext, clipLength, clipSpeed, groupOf, sourceTimeAt, mergeWithNext, moveClip, unjoin, updateClip, visibleCuts, type Clip, type MediaRef, type MusicTrack, type Project, type ProxyHeight, type Title, type TitleFont, isFileLutKind, FILE_LUT_KINDS, type FileLutKind, type LutKind, type MathLutKind, type TitleAlign, type TitlePosition, type TitleShadow, type Transition, type TransitionKind, type ExportTags, type IntroSettings, type IntroCard, DEFAULT_CARD, cardSettings, hasCard, reorderClip, parseTime, type SteadyLights, STEADY_FRAMES, clampMusicStart, musicUnused, musicBetween, type FillOrder, type FillSettings, type SongPrefs, describeWhere, nameSome, whereSummary, type MediaWhere, exportFingerprint, SOUND_MODES, SOUND_LABELS, soundLevels, applySoundLevels, soundState, type SoundMode, type SoundLevels, FRAMES, FRAME_LABELS, MAX_REFRAME_ZOOM, MIN_CLIP_SPEED, MAX_CLIP_SPEED, type Frame, type Layout, type ReframeKey, type SoundRegion, type RegionPreset, REGION_PRESETS, MIN_REGION_SECONDS, MAX_REGION_RAMP, regionPreset, newRegion, clampRegion, moveRegion, tidyRegions, cameraGainAt, regionMusicGain } from "@/lib/tools/video/project";
+import { DEFAULT_EXPORT, NEUTRAL_GRADE, NEUTRAL_TRANSFORM, TITLE_ALIGNS, TITLE_FAMILIES, TITLE_FONTS, TITLE_POSITIONS, TITLE_SHADOWS, TITLE_WEIGHTS, TRANSITIONS, addTransitionAt, appendMusic, applyAudioTo, applyGradeTo, applyTransitionToAll, clipAt, crossfades, dbToGain, effectiveMusicEnd, estimateExport, exportRange, fmtTime, musicGainAt, musicLength, newId, newProject, newTitle, orderRecordings, placeClips, planExport, removeRange, reorderMusic, setTransition, splitClip, timelineDuration, titleLanes, transitionAt, transitionWindows, CLIP_SPEEDS, canMergeWithNext, clipLength, clipSpeed, groupOf, sourceTimeAt, mergeWithNext, moveClip, unjoin, updateClip, visibleCuts, type Clip, type MediaRef, type MusicTrack, type Project, type ProxyHeight, type Title, type TitleFont, isFileLutKind, FILE_LUT_KINDS, type FileLutKind, type LutKind, type MathLutKind, type TitleAlign, type TitlePosition, type TitleShadow, type Transition, type TransitionKind, type ExportTags, type IntroSettings, type IntroCard, DEFAULT_CARD, cardSettings, hasCard, reorderClip, parseTime, type SteadyLights, STEADY_FRAMES, clampMusicStart, musicUnused, musicBetween, type FillOrder, type FillSettings, type SongPrefs, describeWhere, nameSome, whereSummary, type MediaWhere, exportFingerprint, SOUND_MODES, SOUND_LABELS, soundLevels, applySoundLevels, soundState, type SoundMode, type SoundLevels, FRAMES, FRAME_LABELS, MAX_REFRAME_ZOOM, MIN_CLIP_SPEED, MAX_CLIP_SPEED, type Frame, type Layout, type ReframeKey, type SoundRegion, type RegionPreset, REGION_PRESETS, MIN_REGION_SECONDS, MAX_REGION_RAMP, regionPreset, newRegion, clampSpan, fitSpan, moveSpan, tidySpans, cameraGainAt, regionMusicGain, type Span, type Zoom, DEFAULT_ZOOM, MAX_ZOOM_EASE, newZoom, zoomAt, zoomLabel, describeZooms } from "@/lib/tools/video/project";
 import { gainToReach, YOUTUBE_LUFS, type Loudness } from "@/lib/tools/video/loudness";
 import { drawTransition } from "@/lib/tools/video/transitions";
 import { LUT_OPTIONS, buildDlogLut, deriveLut, fetchOfficialLut, lutToCube, parseCube, type Lut3D } from "@/lib/tools/video/lut";
@@ -148,6 +148,7 @@ const SHORTCUTS: [string, string][] = [
   ["L", "Loop the short in Short mode, else the export range or the whole timeline"],
   [", / .", "Short mode: the short's start a frame earlier or later (⇧ for its end, ⌥ for a second)"],
   ["K", "Key the window here (⇧K deletes the key here)"],
+  ["Z", "Zoom in on the part at the playhead (to the next cut when it is near, else 4 s)"],
   ["⌥ ← / →", "The previous or next window key"],
   ["M", "Mute the preview"],
   ["S", "Save a thumbnail of the frame (⇧S full-size JPEG, ⌥S PNG)"],
@@ -305,6 +306,10 @@ function Slider({ label, value, min, max, step, onChange, format }: { label: str
     </label>
   );
 }
+
+/** A drag on a lane of spans (sound regions, zooms): the span moved or trimmed, or a new one being drawn. */
+type SpanDrag = { id: string | null; kind: "move" | "from" | "to" | "draw"; startT: number; from: number; to: number; moved: boolean };
+const unit01 = (v: number) => Math.min(1, Math.max(0, v));
 
 export function VideoEditorWidget() {
   const [status, setStatus] = useState<string>("");
@@ -542,7 +547,14 @@ export function VideoEditorWidget() {
   const [hoverSong, setHoverSong] = useState<string | null>(null);
   // Sound regions: the selected one (its settings in the Audio tab; Delete removes it) and a drag on the Sound lane.
   const [selectedRegion, setSelectedRegion] = useState<string | null>(null);
-  const regionDragRef = useRef<{ id: string | null; kind: "move" | "from" | "to" | "draw"; startT: number; from: number; to: number; moved: boolean } | null>(null);
+  const regionDragRef = useRef<SpanDrag | null>(null);
+  // Zooms: the selected one (its settings in the Crop tab; Delete removes it), a drag on the Zoom lane, "Pick the area" and the box being dragged on the picture.
+  const [selectedZoom, setSelectedZoom] = useState<string | null>(null);
+  const zoomDragRef = useRef<SpanDrag | null>(null);
+  const [pickArea, setPickArea] = useState(true);
+  const [dragZoom, setDragZoom] = useState<{ cx: number; cy: number; zoom: number } | null>(null);
+  const zoomBoxRef = useRef<{ id: string; startX: number; startY: number; cx: number; cy: number; zoom: number; moved: boolean } | null>(null);
+  const zoomActionsRef = useRef<{ addAtPlayhead: () => void }>({ addAtPlayhead: () => undefined });
   const [auditioning, setAuditioning] = useState<string | null>(null);
   const auditionRef = useRef<{ id: string; src: AudioBufferSourceNode; gain: GainNode } | null>(null);
   /** A landscape music track being dragged along its lane. */
@@ -730,7 +742,15 @@ export function VideoEditorWidget() {
   const previewFrame = shortMode ? "9:16" : project.export.frame;
   const framedPreview = framed(previewFrame);
   /** The whole-picture view: the clip's own picture with the frame's window drawn over it, to place by hand. */
-  const pictureView = windowView && framedPreview;
+  /* Zooms (Zoom in project.ts): the selected one and, while Pick the area is on and the playhead is inside it, the one whose box the preview shows over the whole picture. */
+  const zooms = project.zooms ?? [];
+  const currentZoom = selectedZoom ? zooms.find((z) => z.id === selectedZoom) : undefined;
+  const pickingZoom = !shortMode && pickArea && currentZoom && playhead >= currentZoom.from - 1e-6 && playhead <= currentZoom.to + 1e-6 ? currentZoom : null;
+  const pickingZoomRef = useRef(pickingZoom);
+  useEffect(() => {
+    pickingZoomRef.current = pickingZoom;
+  }, [pickingZoom]);
+  const pictureView = (windowView && framedPreview) || !!pickingZoom;
   const spans = useMemo(() => planExport(landscape), [landscape]);
   const range = useMemo(() => exportRange(project), [project]);
   const rangeRef = useRef<{ from: number; to: number } | null>(null);
@@ -1549,6 +1569,20 @@ export function VideoEditorWidget() {
       setSelectedRegion(null);
       return true;
     },
+    /** The selected zoom off the Zoom lane (Delete when nothing else is selected). */
+    deleteSelectedZoom: () => {
+      if (!selectedZoom) return false;
+      const id = selectedZoom;
+      setProject((p) => {
+        const left = (p.zooms ?? []).filter((z) => z.id !== id);
+        if (left.length) return { ...p, zooms: left };
+        const { zooms: gone, ...rest } = p;
+        void gone;
+        return rest;
+      });
+      setSelectedZoom(null);
+      return true;
+    },
     mergeSelected: () => {
       if (!selected || !canMergeWithNext(project.clips, selected)) return false;
       const id = selected;
@@ -1592,7 +1626,7 @@ export function VideoEditorWidget() {
         setSelectedTransition(null);
       } else if ((e.key === "Delete" || e.key === "Backspace") && !inField(e) && !e.metaKey && !e.ctrlKey) {
         e.preventDefault();
-        if (!e.repeat && !trimActionsRef.current.deleteSelected() && !trimActionsRef.current.deleteSelectedMusic()) trimActionsRef.current.deleteSelectedRegion();
+        if (!e.repeat && !trimActionsRef.current.deleteSelected() && !trimActionsRef.current.deleteSelectedMusic() && !trimActionsRef.current.deleteSelectedRegion()) trimActionsRef.current.deleteSelectedZoom();
       } else if (e.key === "Control" && !inField(e)) {
         if (!e.repeat) beginSkim();
       } else if (e.key === " " && !inField(e)) {
@@ -1618,6 +1652,7 @@ export function VideoEditorWidget() {
           setSelectedMusic(null);
           setSelectedTransition(null);
           setSelectedRegion(null);
+          setSelectedZoom(null);
         }
         else if (e.key === "m" || e.key === "M") setPreviewMuted((m) => !m);
         else if (e.key === "s" || e.key === "S") void saveFrame(e.altKey ? "png" : e.shiftKey ? "jpeg" : "thumb");
@@ -1633,6 +1668,7 @@ export function VideoEditorWidget() {
         else if (e.key === "n" || e.key === "N") { if (!e.repeat) shortActionsRef.current.newAt(); }
         else if (e.code === "Comma" || e.code === "Period") shortActionsRef.current.nudge(e.shiftKey ? "to" : "from", (e.altKey ? 1 : frame) * (e.code === "Comma" ? -1 : 1));
         else if (e.key === "k" || e.key === "K") { if (!e.repeat) (e.shiftKey ? windowActionsRef.current.removeKey : windowActionsRef.current.keyHere)(); }
+        else if ((e.key === "z" || e.key === "Z") && !e.metaKey && !e.ctrlKey) { if (!e.repeat) zoomActionsRef.current.addAtPlayhead(); }
         else return;
         e.preventDefault();
       }
@@ -2163,6 +2199,8 @@ export function VideoEditorWidget() {
         try {
           // The composer is the export's: the frame's shape, the layout and each clip's window, from the proxy or the file.
           const composeFrame = pictureView ? "source" : previewFrame;
+          // The zoom on the timeline here — none while its area is being picked, so the whole picture shows under the box.
+          const punch = pickingZoom ? null : zoomAt(project.zooms, playhead);
           const frameKey = `${w}x${h}:${composeFrame ?? "source"}:${layoutChoice(project.layout)}`;
           if (!graderRef.current || graderRef.current.key !== frameKey) graderRef.current = { key: frameKey, composer: new FrameComposer(w, h, composeFrame, project.layout) };
           const grader = graderRef.current.composer;
@@ -2196,8 +2234,8 @@ export function VideoEditorWidget() {
               if (alt.readyState >= 2) {
                 if (!scratchRef.current || scratchRef.current.w !== w || scratchRef.current.h !== h) scratchRef.current = { a: new OffscreenCanvas(w, h), b: new OffscreenCanvas(w, h), s: new OffscreenCanvas(w, h), w, h };
                 const sc = scratchRef.current;
-                sc.a.getContext("2d")!.drawImage(grader.compose(v, gradeFor(under.clip), under.clip, under.sourceTime, v.videoWidth, v.videoHeight), 0, 0);
-                sc.b.getContext("2d")!.drawImage(grader.compose(alt, gradeFor(other), other, want, alt.videoWidth, alt.videoHeight), 0, 0);
+                sc.a.getContext("2d")!.drawImage(grader.compose(v, gradeFor(under.clip), under.clip, under.sourceTime, v.videoWidth, v.videoHeight, punch), 0, 0);
+                sc.b.getContext("2d")!.drawImage(grader.compose(alt, gradeFor(other), other, want, alt.videoWidth, alt.videoHeight, punch), 0, 0);
                 drawTransition(ctx, outgoingIsUnder ? sc.a : sc.b, outgoingIsUnder ? sc.b : sc.a, w, h, tr.window.kind, tr.progress, sc.s);
                 composed = true;
               }
@@ -2215,7 +2253,7 @@ export function VideoEditorWidget() {
               }
             }
           }
-          if (!composed) ctx.drawImage(grader.compose(v, gradeFor(under.clip), under.clip, under.sourceTime, v.videoWidth, v.videoHeight), 0, 0);
+          if (!composed) ctx.drawImage(grader.compose(v, gradeFor(under.clip), under.clip, under.sourceTime, v.videoWidth, v.videoHeight, punch), 0, 0);
           if (intro) {
             if (!fxScratchRef.current || fxScratchRef.current.w !== w || fxScratchRef.current.h !== h) fxScratchRef.current = { a: new OffscreenCanvas(w, h), b: new OffscreenCanvas(w, h), w, h };
             drawIntroFx(ctx, w, h, intro, project, fxScratchRef.current, introBlendAt(project, placed, tr, playhead));
@@ -2246,7 +2284,7 @@ export function VideoEditorWidget() {
     };
     raf = requestAnimationFrame(draw);
     return () => cancelAnimationFrame(raf);
-  }, [under, playhead, project, view, shortMode, pictureView, previewFrame, placed, logo, duration, windows, playing, rate, previewUrlFor, customLut, fileLuts, timelineMusic, musicEnd]);
+  }, [under, playhead, project, view, shortMode, pictureView, pickingZoom, previewFrame, placed, logo, duration, windows, playing, rate, previewUrlFor, customLut, fileLuts, timelineMusic, musicEnd]);
 
   // Grade, crop and audio changes reach every clip of a joined run, so a hidden cut stays invisible.
   const update = (id: string, patch: Partial<Clip>) => setProject((p) => ({ ...p, clips: updateClip(p.clips, id, patch) }));
@@ -2310,8 +2348,8 @@ export function VideoEditorWidget() {
       const all = p.regions ?? [];
       const r = all.find((x) => x.id === id);
       if (!r) return p;
-      const next = clampRegion(all, { ...r, ...patch }, durationRef.current);
-      return withRegions(p, tidyRegions(all.map((x) => (x.id === id ? next : x)), durationRef.current));
+      const next = clampSpan(all, { ...r, ...patch }, durationRef.current);
+      return withRegions(p, tidySpans(all.map((x) => (x.id === id ? next : x)), durationRef.current));
     });
   /** A region slid along the lane to begin at `from`, its length kept, stopping at its neighbours. */
   const moveRegionTo = (id: string, from: number) =>
@@ -2319,8 +2357,8 @@ export function VideoEditorWidget() {
       const all = p.regions ?? [];
       const r = all.find((x) => x.id === id);
       if (!r) return p;
-      const next = moveRegion(all, r, from, durationRef.current);
-      return next === r ? p : withRegions(p, tidyRegions(all.map((x) => (x.id === id ? next : x)), durationRef.current));
+      const next = moveSpan(all, r, from, durationRef.current);
+      return next === r ? p : withRegions(p, tidySpans(all.map((x) => (x.id === id ? next : x)), durationRef.current));
     });
   /** Work on a region: selected on its own, the Audio tab, and (for a click) the playhead at its start. */
   const selectRegion = (id: string | null, jump = false) => {
@@ -2328,6 +2366,7 @@ export function VideoEditorWidget() {
     if (!id) return;
     setSelected(null);
     setSelectedMusic(null);
+    setSelectedZoom(null);
     setTab("audio");
     const r = (projectRef.current?.regions ?? []).find((x) => x.id === id);
     if (jump && r) stepTo(r.from);
@@ -2336,14 +2375,12 @@ export function VideoEditorWidget() {
   const addRegion = (from: number, to: number, preset: RegionPreset = "camera"): SoundRegion | null => {
     const end = durationRef.current;
     const all = projectRef.current?.regions ?? [];
-    const made = clampRegion(all, newRegion(Math.max(0, from), Math.min(end, to), preset), end);
-    // Squeezed to less than a second, or to under half of what was asked, there is no room for it.
-    const asked = Math.min(end, to) - Math.max(0, from);
-    if (!(made.to - made.from >= Math.max(MIN_REGION_SECONDS, Math.min(1, asked / 2)) - 1e-9) || made.from >= end) {
+    const made = fitSpan(all, newRegion(Math.max(0, from), Math.min(end, to), preset), end);
+    if (!made) {
       setStatus("No room for a sound region there");
       return null;
     }
-    setProject((p) => withRegions(p, tidyRegions([...(p.regions ?? []), made], end)));
+    setProject((p) => withRegions(p, tidySpans([...(p.regions ?? []), made], end)));
     selectRegion(made.id);
     setStatus(`${regionLabel(made)} from ${fmtTime(made.from)} to ${fmtTime(made.to)} — its levels are in the Audio tab; drag it on the Sound lane`);
     return made;
@@ -2367,6 +2404,82 @@ export function VideoEditorWidget() {
     setSelectedRegion(null);
     setStatus("Every sound region removed — the clips and the music play at their own levels again");
   };
+  /* Zooms: parts of the video pushed into a point of the picture (Zoom in project.ts); the list stays absent when empty. */
+  const withZooms = (p: Project, list: Zoom[]): Project => {
+    if (list.length) return { ...p, zooms: list };
+    const { zooms: gone, ...rest } = p;
+    void gone;
+    return rest;
+  };
+  /** A zoom's new span, factor, centre or ease; trimmed, it is held at its neighbours and inside the video. */
+  const updateZoom = (id: string, patch: Partial<Zoom>) =>
+    setProject((p) => {
+      const all = p.zooms ?? [];
+      const z = all.find((x) => x.id === id);
+      if (!z) return p;
+      const next = clampSpan(all, { ...z, ...patch }, durationRef.current);
+      return withZooms(p, tidySpans(all.map((x) => (x.id === id ? next : x)), durationRef.current));
+    });
+  const moveZoomTo = (id: string, from: number) =>
+    setProject((p) => {
+      const all = p.zooms ?? [];
+      const z = all.find((x) => x.id === id);
+      if (!z) return p;
+      const next = moveSpan(all, z, from, durationRef.current);
+      return next === z ? p : withZooms(p, tidySpans(all.map((x) => (x.id === id ? next : x)), durationRef.current));
+    });
+  /** Work on a zoom: selected on its own, the Crop tab with Pick the area on, and (for a click) the playhead in its middle, where the push is full. */
+  const selectZoom = (id: string | null, jump = false) => {
+    setSelectedZoom(id);
+    if (!id) return;
+    setSelected(null);
+    setSelectedMusic(null);
+    setSelectedRegion(null);
+    setPickArea(true);
+    setTab("transform");
+    const z = (projectRef.current?.zooms ?? []).find((x) => x.id === id);
+    if (jump && z) stepTo((z.from + z.to) / 2);
+  };
+  /** A new zoom of 1.5× on the centre, kept off its neighbours; selected with its area ready to pick. Null when there is no room. */
+  const addZoom = (from: number, to: number): Zoom | null => {
+    const end = durationRef.current;
+    const all = projectRef.current?.zooms ?? [];
+    const made = fitSpan(all, newZoom(Math.max(0, from), Math.min(end, to)), end);
+    if (!made) {
+      setStatus("No room for a zoom there");
+      return null;
+    }
+    setProject((p) => withZooms(p, tidySpans([...(p.zooms ?? []), made], end)));
+    selectZoom(made.id);
+    setStatus(`Zoom ${zoomLabel(made)} from ${fmtTime(made.from)} to ${fmtTime(made.to)} — drag the box on the picture to the part to show, wheel to push further in; the Crop tab has the sliders`);
+    return made;
+  };
+  /** From the playhead to the next cut when that is within 30 s, else four seconds; the playhead goes to its middle. */
+  const addZoomAtPlayhead = () => {
+    const t = playheadRef.current, end = durationRef.current;
+    const cut = visibleCuts(placed).find((c) => c > t + MIN_REGION_SECONDS);
+    const z = addZoom(t, cut !== undefined && cut - t <= 30 ? cut : Math.min(end, t + 4));
+    if (z) stepTo((z.from + z.to) / 2);
+  };
+  const addZoomOverClip = () => {
+    const c = current ? placed.find((x) => x.id === current.id) : undefined;
+    if (!c) return;
+    const z = addZoom(c.start, c.end);
+    if (z) stepTo((z.from + z.to) / 2);
+  };
+  const removeZoom = (id: string) => {
+    setProject((p) => withZooms(p, (p.zooms ?? []).filter((z) => z.id !== id)));
+    setSelectedZoom((s) => (s === id ? null : s));
+  };
+  const removeAllZooms = () => {
+    setProject((p) => (p.zooms?.length ? withZooms(p, []) : p));
+    setSelectedZoom(null);
+    setStatus("Every zoom removed — the picture plays whole again");
+  };
+  const zoomActions = { addAtPlayhead: addZoomAtPlayhead };
+  useEffect(() => {
+    zoomActionsRef.current = zoomActions;
+  });
   /** The regions' marks over a lane: hatched where that sound is off inside them, tinted where it is held at a level. */
   const regionTints = (which: "camera" | "music") =>
     regions.map((r) => {
@@ -2804,6 +2917,17 @@ export function VideoEditorWidget() {
       removeAllRegions,
       selectRegion,
       getSelectedRegion: () => selectedRegion,
+      getZooms: () => zooms,
+      addZoom,
+      setZoom: updateZoom,
+      moveZoom: moveZoomTo,
+      removeZoom,
+      removeAllZooms,
+      selectZoom,
+      getSelectedZoom: () => selectedZoom,
+      zoomAt: (t: number) => zoomAt(project.zooms, t),
+      setPickArea: (v: boolean) => setPickArea(v),
+      getPicking: () => pickingZoom?.id ?? null,
       /** The gains the mix uses at a timeline instant, regions included: the clip under it and every track on the lanes. */
       mixAt: (t: number) => {
         const here = clipAt(project.clips, t);
@@ -3035,40 +3159,64 @@ export function VideoEditorWidget() {
   useEffect(() => {
     windowActionsRef.current = windowActions;
   });
-  /** A drag on the picture moves the window; a click centres it there; the key at the playhead takes the result. */
+  /** A drag on the picture moves the window — or the zoom's box while its area is picked; a click centres it there; the key at the playhead, or the zoom, takes the result. */
   const onWindowPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     if (e.button !== 0 || !under) return;
     e.preventDefault();
     e.currentTarget.setPointerCapture(e.pointerId);
+    if (pickingZoom) {
+      zoomBoxRef.current = { id: pickingZoom.id, startX: e.clientX, startY: e.clientY, cx: pickingZoom.cx, cy: pickingZoom.cy, zoom: pickingZoom.zoom, moved: false };
+      setDragZoom({ cx: pickingZoom.cx, cy: pickingZoom.cy, zoom: pickingZoom.zoom });
+      return;
+    }
     const key = keyFor(under.clip.reframe?.keys, under.sourceTime);
     windowDragRef.current = { startX: e.clientX, startY: e.clientY, key, clipId: under.clip.id, moved: false };
     setDragKey(key);
   };
   const onWindowPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    const r = e.currentTarget.getBoundingClientRect();
+    const zb = zoomBoxRef.current;
+    if (zb) {
+      if (!zb.moved && Math.hypot(e.clientX - zb.startX, e.clientY - zb.startY) < 3) return;
+      zb.moved = true;
+      setDragZoom({ cx: unit01(zb.cx + (e.clientX - zb.startX) / r.width), cy: unit01(zb.cy + (e.clientY - zb.startY) / r.height), zoom: zb.zoom });
+      return;
+    }
     const d = windowDragRef.current;
     if (!d) return;
-    const r = e.currentTarget.getBoundingClientRect();
     const dx = (e.clientX - d.startX) / r.width, dy = (e.clientY - d.startY) / r.height;
     if (!d.moved && Math.hypot(e.clientX - d.startX, e.clientY - d.startY) < 3) return;
     d.moved = true;
     setDragKey(movedKey(d.key, dx, dy));
   };
   const onWindowPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    const r = e.currentTarget.getBoundingClientRect();
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
+    const zb = zoomBoxRef.current;
+    if (zb) {
+      zoomBoxRef.current = null;
+      updateZoom(zb.id, zb.moved ? { cx: unit01(zb.cx + (e.clientX - zb.startX) / r.width), cy: unit01(zb.cy + (e.clientY - zb.startY) / r.height) } : { cx: unit01((e.clientX - r.left) / r.width), cy: unit01((e.clientY - r.top) / r.height) });
+      setDragZoom(null);
+      return;
+    }
     const d = windowDragRef.current;
     if (!d) return;
     windowDragRef.current = null;
-    if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
-    const r = e.currentTarget.getBoundingClientRect();
     if (d.moved) writeWindowKey(d.clipId, movedKey(d.key, (e.clientX - d.startX) / r.width, (e.clientY - d.startY) / r.height));
     else writeWindowKey(d.clipId, { ...d.key, cx: (e.clientX - r.left) / r.width, cy: (e.clientY - r.top) / r.height });
     setDragKey(null);
   };
-  // The wheel zooms the window; a native listener, so the page does not scroll under it.
+  // The wheel zooms the window, or pushes a zoom further in while its area is picked; a native listener, so the page does not scroll under it.
   useEffect(() => {
     const el = windowOverlayRef.current;
     if (!el) return;
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
+      const z = pickingZoomRef.current;
+      if (z) {
+        updateZoom(z.id, { zoom: Math.min(MAX_REFRAME_ZOOM, Math.max(1.05, Math.round(z.zoom * (e.deltaY < 0 ? 1.08 : 1 / 1.08) * 100) / 100)) });
+        return;
+      }
       const u = underRef.current;
       if (!u) return;
       writeWindowKey(u.clip.id, zoomedKey(keyFor(u.clip.reframe?.keys, u.sourceTime), e.deltaY < 0 ? 1.08 : 1 / 1.08));
@@ -3853,51 +4001,58 @@ export function VideoEditorWidget() {
     if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
     if (!d.moved && d.id) selectShort(d.id, true);
   };
-  /* The Sound lane: a region is dragged to move it, its edges to trim it; the empty lane draws a new one with the video's sound only. */
-  const onRegionLanePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (e.button !== 0 || !timelineRef.current) return;
-    e.stopPropagation();
-    const t = timeAtPointer(timelineRef.current, e.clientX, !e.altKey);
-    const target = e.target as HTMLElement;
-    const id = (target.closest("[data-sound-region]") as HTMLElement | null)?.dataset.soundRegion ?? null;
-    const handle = target.dataset.regionHandle as "from" | "to" | undefined;
-    const r = id ? (projectRef.current?.regions ?? []).find((x) => x.id === id) : null;
-    e.currentTarget.setPointerCapture(e.pointerId);
-    if (r) {
-      regionDragRef.current = { id: r.id, kind: handle ?? "move", startT: t, from: r.from, to: r.to, moved: false };
-      selectRegion(r.id);
-    } else regionDragRef.current = { id: null, kind: "draw", startT: t, from: t, to: t, moved: false };
-  };
-  const onRegionLanePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
-    const d = regionDragRef.current;
-    if (!d || !timelineRef.current) return;
-    const t = timeAtPointer(timelineRef.current, e.clientX, !e.altKey);
-    const delta = t - d.startT;
-    if (!d.moved && Math.abs(delta) * pxPerSec < 3) return;
-    d.moved = true;
-    if (d.kind === "draw") {
-      const from = Math.min(d.startT, t), to = Math.max(d.startT, t);
-      if (!d.id) {
-        if (to - from < MIN_REGION_SECONDS) return;
-        d.id = addRegion(from, to)?.id ?? null;
-      } else updateRegion(d.id, { from, to });
-    } else if (d.kind === "move") moveRegionTo(d.id!, d.from + delta);
-    else if (d.kind === "from") updateRegion(d.id!, { from: Math.min(d.to - MIN_REGION_SECONDS, d.from + delta) });
-    else updateRegion(d.id!, { to: Math.max(d.from + MIN_REGION_SECONDS, d.to + delta) });
-    showHoverTime(t);
-  };
-  const onRegionLanePointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
-    const d = regionDragRef.current;
-    if (!d) return;
-    regionDragRef.current = null;
-    if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
-    if (!d.id) return;
-    if (!d.moved) selectRegion(d.id, true);
-    else {
-      const r = (projectRef.current?.regions ?? []).find((x) => x.id === d.id);
-      if (r) setStatus(d.kind === "draw" ? `${regionLabel(r)} from ${fmtTime(r.from)} to ${fmtTime(r.to)} — its levels are in the Audio tab; drag it along the Sound lane, its edges to trim it` : `${regionLabel(r)} now from ${fmtTime(r.from)} to ${fmtTime(r.to)}`);
-    }
-  };
+  /**
+   * The pointer handling of a lane of spans (the Sound and Zoom lanes): a span is dragged to move it, its edges to trim
+   * it, a click selects it; the empty lane draws a new one.
+   */
+  const spanLane = <T extends Span>(dragRef: { current: SpanDrag | null }, lane: { attr: string; handleAttr: string; list: () => T[]; add: (from: number, to: number) => T | null; update: (id: string, patch: { from?: number; to?: number }) => void; move: (id: string, from: number) => void; select: (id: string, jump?: boolean) => void; label: (s: T) => string; drawn: string }) => ({
+    onPointerDown: (e: React.PointerEvent<HTMLDivElement>) => {
+      if (e.button !== 0 || !timelineRef.current) return;
+      e.stopPropagation();
+      const t = timeAtPointer(timelineRef.current, e.clientX, !e.altKey);
+      const target = e.target as HTMLElement;
+      const id = (target.closest(`[${lane.attr}]`) as HTMLElement | null)?.getAttribute(lane.attr) ?? null;
+      const handle = (target.getAttribute(lane.handleAttr) as "from" | "to" | null) ?? undefined;
+      const s = id ? lane.list().find((x) => x.id === id) : null;
+      e.currentTarget.setPointerCapture(e.pointerId);
+      if (s) {
+        dragRef.current = { id: s.id, kind: handle ?? "move", startT: t, from: s.from, to: s.to, moved: false };
+        lane.select(s.id);
+      } else dragRef.current = { id: null, kind: "draw", startT: t, from: t, to: t, moved: false };
+    },
+    onPointerMove: (e: React.PointerEvent<HTMLDivElement>) => {
+      const d = dragRef.current;
+      if (!d || !timelineRef.current) return;
+      const t = timeAtPointer(timelineRef.current, e.clientX, !e.altKey);
+      const delta = t - d.startT;
+      if (!d.moved && Math.abs(delta) * pxPerSec < 3) return;
+      d.moved = true;
+      if (d.kind === "draw") {
+        const from = Math.min(d.startT, t), to = Math.max(d.startT, t);
+        if (!d.id) {
+          if (to - from < MIN_REGION_SECONDS) return;
+          d.id = lane.add(from, to)?.id ?? null;
+        } else lane.update(d.id, { from, to });
+      } else if (d.kind === "move") lane.move(d.id!, d.from + delta);
+      else if (d.kind === "from") lane.update(d.id!, { from: Math.min(d.to - MIN_REGION_SECONDS, d.from + delta) });
+      else lane.update(d.id!, { to: Math.max(d.from + MIN_REGION_SECONDS, d.to + delta) });
+      showHoverTime(t);
+    },
+    onPointerUp: (e: React.PointerEvent<HTMLDivElement>) => {
+      const d = dragRef.current;
+      if (!d) return;
+      dragRef.current = null;
+      if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
+      if (!d.id) return;
+      if (!d.moved) lane.select(d.id, true);
+      else {
+        const s = lane.list().find((x) => x.id === d.id);
+        if (s) setStatus(d.kind === "draw" ? `${lane.label(s)} from ${fmtTime(s.from)} to ${fmtTime(s.to)} — ${lane.drawn}` : `${lane.label(s)} now from ${fmtTime(s.from)} to ${fmtTime(s.to)}`);
+      }
+    },
+  });
+  const soundLane = spanLane(regionDragRef, { attr: "data-sound-region", handleAttr: "data-region-handle", list: () => projectRef.current?.regions ?? [], add: (from, to) => addRegion(from, to), update: updateRegion, move: moveRegionTo, select: selectRegion, label: regionLabel, drawn: "its levels are in the Audio tab; drag it along the Sound lane, its edges to trim it" });
+  const zoomLane = spanLane(zoomDragRef, { attr: "data-zoom-span", handleAttr: "data-zoom-handle", list: () => projectRef.current?.zooms ?? [], add: addZoom, update: updateZoom, move: moveZoomTo, select: selectZoom, label: (z) => `Zoom ${zoomLabel(z)}`, drawn: "drag the box on the picture to the part to show, wheel to push further in; the Crop tab has the sliders" });
   /* The Music lane in Short mode: the active short's bar is dragged to slide the song under the short, its edges to set where the music begins and ends; another short's bar selects that short. */
   const musicDragRef = useRef<{ shortId: string; trackId: string; kind: "slip" | "from" | "to"; startT: number; track0: MusicTrack; moved: boolean; label?: string } | null>(null);
   const onMusicLanePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
@@ -4142,10 +4297,17 @@ export function VideoEditorWidget() {
   const previewAspect = pictureView && under && underMedia?.width && underMedia.height ? pictureAspect(under.clip.transform, underMedia.width, underMedia.height) : frameAspect(previewFrame, first?.width || 16, first?.height || 9);
   /** The window on the clip under the playhead, as fractions of its picture: the overlay of the picture view (a drag shows where it is going). */
   const windowRect = useMemo(() => {
-    if (!under || !framedPreview || !underMedia?.width || !underMedia.height) return null;
+    if (!under || !underMedia?.width || !underMedia.height) return null;
+    const quarter = under.clip.transform.rotate % 2 === 1;
+    // Picking a zoom's area: the box of its full push, wherever the playhead is inside it.
+    if (pickingZoom) {
+      const z = dragZoom ?? pickingZoom;
+      return windowInPicture(under.clip.transform.crop, reframeAt(under.clip.reframe?.keys, under.sourceTime), frameAspect(previewFrame, underMedia.width, underMedia.height), underMedia.width, underMedia.height, quarter, { zoom: z.zoom, cx: z.cx, cy: z.cy });
+    }
+    if (!framedPreview) return null;
     const key = dragKey ?? reframeAt(under.clip.reframe?.keys, under.sourceTime);
-    return windowInPicture(under.clip.transform.crop, key, frameAspect(previewFrame, underMedia.width, underMedia.height), underMedia.width, underMedia.height, under.clip.transform.rotate % 2 === 1);
-  }, [under, framedPreview, underMedia, dragKey, previewFrame]);
+    return windowInPicture(under.clip.transform.crop, key, frameAspect(previewFrame, underMedia.width, underMedia.height), underMedia.width, underMedia.height, quarter);
+  }, [under, framedPreview, underMedia, dragKey, previewFrame, pickingZoom, dragZoom]);
   const thumbH = Math.min(THUMB_HEIGHT, first?.height ?? THUMB_HEIGHT);
   const thumbSize = `${Math.round((sourceAspect * thumbH) / 2) * 2}×${thumbH}`;
 
@@ -4165,7 +4327,7 @@ export function VideoEditorWidget() {
   const laneRegions = { flex: "1 1 0px", minHeight: 20 } as const;
   // The smallest the timeline pane may be: every lane at its floor plus the header, the hint line and padding. The rows
   // split holds it as a hard floor, so a notice or a result card above the rows squeezes the preview, never the lanes.
-  const timelineFloor = 216 + 20 * titleLaneOf.count + (showShortsLane ? 26 : 0) + (showSoundLane ? 24 : 0) - (shortMode ? 32 : 0);
+  const timelineFloor = 216 + 20 * titleLaneOf.count + (showShortsLane ? 26 : 0) + (showSoundLane ? 48 : 0) - (shortMode ? 32 : 0);
   const timelinePanel = (
       <div className="panel flex h-full min-h-0 flex-col select-none overflow-hidden p-2" data-timeline>
         <div className="mb-1.5 flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1">
@@ -4188,6 +4350,8 @@ export function VideoEditorWidget() {
             <div className="mt-1 flex items-center justify-end" style={laneVideo}>Video</div>
             {showShortsLane && <div className="mt-1 flex items-center justify-end" style={laneShorts}>Shorts</div>}
             <div className="mt-1 flex items-center justify-end" style={laneTitles}>Titles</div>
+            {showSoundLane && <div className="mt-1 flex items-center justify-end" style={laneRegions} title="Sound regions: parts of the video mixed their own way (Audio tab)">Sound</div>}
+            {showSoundLane && <div className="mt-1 flex items-center justify-end" style={laneRegions} title="Zooms: parts of the video pushed into a point of the picture (Crop tab)">Zoom</div>}
             {shortMode ? (
               <div className="mt-1 flex items-center justify-end" style={laneShortMusic} title="Each short's own song; the landscape lanes play no part in a short">Music</div>
             ) : (
@@ -4235,6 +4399,7 @@ export function VideoEditorWidget() {
                       setSelectedMusic(null);
                       setSelectedTransition(null);
                       setSelectedRegion(null);
+                      setSelectedZoom(null);
                       setPlayhead(c.start);
                       setSeekToken((t) => t + 1);
                     }}
@@ -4342,7 +4507,7 @@ export function VideoEditorWidget() {
             </div>
             {/* sound lane: each region a span to drag or trim; the empty lane draws a new one */}
             {showSoundLane && (
-              <div className="relative mt-1" style={laneRegions} data-sound-lane onPointerDown={onRegionLanePointerDown} onPointerMove={onRegionLanePointerMove} onPointerUp={onRegionLanePointerUp} onPointerCancel={onRegionLanePointerUp}>
+              <div className="relative mt-1" style={laneRegions} data-sound-lane onPointerDown={soundLane.onPointerDown} onPointerMove={soundLane.onPointerMove} onPointerUp={soundLane.onPointerUp} onPointerCancel={soundLane.onPointerUp}>
                 {!regions.length && <div className="pointer-events-none absolute inset-0 flex items-center rounded-[3px] border border-dashed border-edge px-2 text-[10.5px] text-faint">Sound: drag here to mark a part with the video&apos;s own sound, or quieter music — the Audio tab sets its levels</div>}
                 {regions.map((r) => {
                   const sel = selectedRegion === r.id;
@@ -4351,6 +4516,22 @@ export function VideoEditorWidget() {
                       <span className="pointer-events-none truncate">{r.name ? `${r.name} · ` : ""}{regionLabel(r)}</span>
                       <span className="absolute inset-y-0 left-0 w-1.5 cursor-ew-resize bg-[#3fb27f]/70" data-region-handle="from" />
                       <span className="absolute inset-y-0 right-0 w-1.5 cursor-ew-resize bg-[#3fb27f]/70" data-region-handle="to" />
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+            {/* zoom lane: each zoom a span to drag or trim; the empty lane draws a new one */}
+            {showSoundLane && (
+              <div className="relative mt-1" style={laneRegions} data-zoom-lane onPointerDown={zoomLane.onPointerDown} onPointerMove={zoomLane.onPointerMove} onPointerUp={zoomLane.onPointerUp} onPointerCancel={zoomLane.onPointerUp}>
+                {!zooms.length && <div className="pointer-events-none absolute inset-0 flex items-center rounded-[3px] border border-dashed border-edge px-2 text-[10.5px] text-faint">Zoom: drag here to push into a part of the picture, or press Z at the playhead — then drag the box on the preview to the part to show</div>}
+                {zooms.map((z) => {
+                  const sel = selectedZoom === z.id;
+                  return (
+                    <div key={z.id} role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === "Enter") selectZoom(z.id, true); }} className={cn("absolute top-0 flex h-full cursor-grab items-center overflow-hidden rounded-[3px] border px-1.5 text-[10.5px] select-none", sel ? "z-10 border-ink bg-[#d97706]/40 text-ink" : "border-transparent bg-[#d97706]/25 text-muted hover:bg-[#d97706]/35")} style={{ left: z.from * pxPerSec, width: Math.max(4, (z.to - z.from) * pxPerSec) }} title={`Zoom ${zoomLabel(z)} · ${fmtTime(z.from)}–${fmtTime(z.to)} — drag to move it, its edges to trim it, click to select it and go to its middle; Delete removes it once selected`} data-zoom-span={z.id}>
+                      <span className="pointer-events-none truncate">{z.name ? `${z.name} · ` : ""}{zoomLabel(z)}</span>
+                      <span className="absolute inset-y-0 left-0 w-1.5 cursor-ew-resize bg-[#d97706]/70" data-zoom-handle="from" />
+                      <span className="absolute inset-y-0 right-0 w-1.5 cursor-ew-resize bg-[#d97706]/70" data-zoom-handle="to" />
                     </div>
                   );
                 })}
@@ -4425,6 +4606,7 @@ export function VideoEditorWidget() {
                       setSelectedMusic(m.id);
                       setSelected(null);
                       setSelectedRegion(null);
+                      setSelectedZoom(null);
                       setTab("audio");
                     }}
                     className={cn("absolute top-0 h-full cursor-grab truncate rounded-[3px] border px-1.5 text-left text-[11px] active:cursor-grabbing", selectedMusic === m.id ? "border-ink" : "border-transparent", hoverSong === m.media && "ring-2 ring-accent", m.muted && "opacity-40")}
@@ -4621,7 +4803,7 @@ export function VideoEditorWidget() {
               <div ref={windowOverlayRef} className="absolute inset-0 cursor-move touch-none select-none" data-window-view onPointerDown={onWindowPointerDown} onPointerMove={onWindowPointerMove} onPointerUp={onWindowPointerUp} onPointerCancel={onWindowPointerUp}>
                 <div className="pointer-events-none absolute rounded-[2px] border-2 border-accent shadow-[0_0_0_9999px_rgba(0,0,0,0.55)]" style={{ left: `${windowRect.x * 100}%`, top: `${windowRect.y * 100}%`, width: `${windowRect.w * 100}%`, height: `${windowRect.h * 100}%` }} data-window-rect />
                 <div className="pointer-events-none absolute right-2 bottom-2 rounded bg-black/60 px-2 py-0.5 text-[11px] text-white" data-window-hint>
-                  drag to place the window · wheel to zoom · click to centre it there · K keys it here
+                  {pickingZoom ? "drag the box to the part to show · wheel to push further in or out · click to centre it there" : "drag to place the window · wheel to zoom · click to centre it there · K keys it here"}
                 </div>
               </div>
             )}
@@ -5478,6 +5660,92 @@ export function VideoEditorWidget() {
                 </div>
               </>
             ) : <p className="text-muted">Select a clip to rotate, straighten or crop it.</p>)}
+            {tab === "transform" && !shortMode && (
+              <div className="space-y-2 rounded-[var(--radius-sm)] border border-edge p-2" data-zooms>
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                  <span className="font-medium text-ink">Zooms</span>
+                  <span className="text-[12px] text-faint" data-zooms-summary>{describeZooms(project.zooms, duration)}</span>
+                </div>
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <button type="button" onClick={addZoomAtPlayhead} disabled={!duration} className={GHOST} title={`A zoom from the playhead to the next cut (when that is within 30 s, else 4 s long), ${DEFAULT_ZOOM}× on the centre — then drag the box on the picture (Z)`} data-add-zoom-playhead>
+                    <ZoomIn size={13} /> At the playhead
+                  </button>
+                  <button type="button" onClick={addZoomOverClip} disabled={!current} className={GHOST} title="A zoom over the whole of the selected clip" data-add-zoom-clip>
+                    <ZoomIn size={13} /> Over the selected clip
+                  </button>
+                  <button type="button" onClick={removeAllZooms} disabled={!zooms.length} className={cn(GHOST, "hover:border-danger hover:text-danger")} title="Take every zoom away; the picture plays whole again" data-remove-all-zooms>
+                    <Trash2 size={13} /> Remove all
+                  </button>
+                  <button type="button" onClick={() => setPickArea((v) => !v)} aria-pressed={pickArea} disabled={!currentZoom} className={cn(GHOST, "ml-auto", pickArea && currentZoom && "border-accent text-accent")} title="On: the preview shows the whole picture with the selected zoom's box to drag (wheel to push further in). Off: the preview plays the zoomed result." data-zoom-pick>
+                    {pickArea && currentZoom ? "Picking the area" : "Pick the area"}
+                  </button>
+                </div>
+                {zooms.length > 0 && (
+                  <ul className="divide-y divide-edge rounded-[var(--radius-sm)] border border-edge" data-zoom-list>
+                    {zooms.map((z, i) => {
+                      const sel = selectedZoom === z.id;
+                      const maxEase = Math.max(0.1, Math.min(MAX_ZOOM_EASE, Math.round(((z.to - z.from) / 2) * 10) / 10));
+                      const pos = (v: number) => (Math.abs(v - 0.5) < 0.0025 ? "centre" : `${v > 0.5 ? "+" : ""}${Math.round((v - 0.5) * 200)}%`);
+                      return (
+                        <li key={z.id} className={cn("space-y-1.5 px-2 py-1.5 text-[12.5px]", sel && "bg-accent/10")} data-zoom-row={z.id} data-zoom-selected={sel ? "1" : "0"}>
+                          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                            <button type="button" onClick={() => selectZoom(z.id, true)} className={cn("font-medium text-ink hover:underline", sel && "text-accent")} title="Select the zoom and go to its middle, where the push is full" data-zoom-select>
+                              {i + 1}. {fmtTime(z.from)}–{fmtTime(z.to)}
+                            </button>
+                            <span className="text-faint tabular">{fmtTime(z.to - z.from)}</span>
+                            <label className="flex items-center gap-1 text-[12px] text-muted">
+                              from
+                              <input type="text" key={`from-${z.from}`} defaultValue={fmtTime(z.from)} onBlur={(e) => { const t = parseTime(e.target.value); if (Number.isFinite(t)) updateZoom(z.id, { from: Math.min(t, z.to - MIN_REGION_SECONDS) }); }} onKeyDown={(e) => { e.stopPropagation(); if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }} className={cn(INPUT, "h-7 w-16 font-mono text-[12px]")} aria-label="Zoom start" data-zoom-from />
+                            </label>
+                            <label className="flex items-center gap-1 text-[12px] text-muted">
+                              to
+                              <input type="text" key={`to-${z.to}`} defaultValue={fmtTime(z.to)} onBlur={(e) => { const t = parseTime(e.target.value); if (Number.isFinite(t)) updateZoom(z.id, { to: Math.max(t, z.from + MIN_REGION_SECONDS) }); }} onKeyDown={(e) => { e.stopPropagation(); if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }} className={cn(INPUT, "h-7 w-16 font-mono text-[12px]")} aria-label="Zoom end" data-zoom-to />
+                            </label>
+                            <input type="text" value={z.name ?? ""} onChange={(e) => updateZoom(z.id, { name: e.target.value || undefined })} onKeyDown={(e) => e.stopPropagation()} placeholder="a name, if you like" className={cn(INPUT, "h-7 w-36 text-[12px]")} aria-label="Zoom name" data-zoom-name />
+                            <button type="button" onClick={() => removeZoom(z.id)} className="ml-auto text-faint hover:text-danger" title="Remove this zoom" aria-label={`Remove zoom ${i + 1}`} data-zoom-remove>
+                              <Trash2 size={13} />
+                            </button>
+                          </div>
+                          <div className="grid gap-x-4 gap-y-1 sm:grid-cols-4">
+                            <label className="block text-[12.5px] text-muted">
+                              <span className="flex items-center justify-between gap-2">
+                                Zoom
+                                <span className="font-mono tabular text-ink" data-zoom-factor={z.zoom}>{z.zoom.toFixed(2)}×</span>
+                              </span>
+                              <input type="range" min={1} max={MAX_REFRAME_ZOOM} step={0.05} value={z.zoom} onChange={(e) => updateZoom(z.id, { zoom: Number(e.target.value) })} className={cn(RANGE, "mt-1")} aria-label="How far in" data-zoom-factor-slider />
+                            </label>
+                            <label className="block text-[12.5px] text-muted">
+                              <span className="flex items-center justify-between gap-2">
+                                Ease
+                                <span className="font-mono tabular text-ink" data-zoom-ease={z.ease}>{Math.min(z.ease, maxEase).toFixed(1)} s</span>
+                              </span>
+                              <input type="range" min={0} max={maxEase} step={0.1} value={Math.min(z.ease, maxEase)} onChange={(e) => updateZoom(z.id, { ease: Number(e.target.value) })} className={cn(RANGE, "mt-1")} aria-label="Seconds the push in and the pull out each take" title="Seconds the push in and the pull out each take; 0 cuts straight in" data-zoom-ease-slider />
+                            </label>
+                            <label className="block text-[12.5px] text-muted">
+                              <span className="flex items-center justify-between gap-2">
+                                Across
+                                <span className="font-mono tabular text-ink" data-zoom-cx={z.cx}>{pos(z.cx)}</span>
+                              </span>
+                              <input type="range" min={0} max={1} step={0.005} value={z.cx} onChange={(e) => updateZoom(z.id, { cx: Number(e.target.value) })} className={cn(RANGE, "mt-1")} aria-label="Where across the picture" data-zoom-cx-slider />
+                            </label>
+                            <label className="block text-[12.5px] text-muted">
+                              <span className="flex items-center justify-between gap-2">
+                                Up / down
+                                <span className="font-mono tabular text-ink" data-zoom-cy={z.cy}>{pos(z.cy)}</span>
+                              </span>
+                              <input type="range" min={0} max={1} step={0.005} value={z.cy} onChange={(e) => updateZoom(z.id, { cy: Number(e.target.value) })} className={cn(RANGE, "mt-1")} aria-label="Where up or down the picture" data-zoom-cy-slider />
+                            </label>
+                          </div>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                )}
+                <p className="text-[12px] text-faint">
+                  Mark the parts of the video that should push into a point of the picture: the frame closes in over the ease, holds on the part you chose, and opens out again. Select a zoom and drag its box on the preview (wheel to push further in), or set the sliders; Z marks one at the playhead. Smart copy re-encodes only the zoomed stretch, and a short cut from these seconds keeps the zooms inside its own window.
+                </p>
+              </div>
+            )}
             {tab === "colour" && (current ? (
               <>
                 <label className="flex items-center justify-between gap-2 text-muted">

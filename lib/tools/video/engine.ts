@@ -47,6 +47,8 @@ import {
   keyTolerance,
   musicGainAt,
   regionMusicGain,
+  zoomAt,
+  type Punch,
   placeClips,
   planExport,
   transitionAt,
@@ -555,12 +557,12 @@ export class FrameComposer {
    * Draws the clip's frame at a source instant and returns the canvas holding it (the grader's own on the plain
    * path), sized to the export frame.
    */
-  compose(src: Parameters<Grader["draw"]>[0], grade: Grade, clip: Pick<Clip, "transform" | "reframe">, sourceT: number, srcW: number, srcH: number): OffscreenCanvas {
+  compose(src: Parameters<Grader["draw"]>[0], grade: Grade, clip: Pick<Clip, "transform" | "reframe">, sourceT: number, srcW: number, srcH: number, punch: Punch | null = null): OffscreenCanvas {
     const { width: w, height: h } = this;
     const panes = framed(this.frame) ? framePanes(this.layout, w, h, pictureAspect(clip.transform, srcW, srcH)) : null;
     const main = this.graderFor(w, h);
     if (!panes || (panes.length === 1 && panes[0].source === "window" && !panes[0].blur)) {
-      main.draw(src, grade, transformAt(clip, sourceT, this.frame, w / h, srcW, srcH), srcW, srcH);
+      main.draw(src, grade, transformAt(clip, sourceT, this.frame, w / h, srcW, srcH, punch), srcW, srcH);
       return main.canvas;
     }
     const ctx = this.ctx;
@@ -577,7 +579,7 @@ export class FrameComposer {
       const pw = even(pane.w), ph = even(pane.h);
       if (pane.source === "window") {
         const g = this.graderFor(pw, ph);
-        g.draw(src, grade, transformAt(clip, sourceT, this.frame, pane.w / pane.h, srcW, srcH), srcW, srcH);
+        g.draw(src, grade, transformAt(clip, sourceT, this.frame, pane.w / pane.h, srcW, srcH, punch), srcW, srcH);
         if (pane.blur) {
           // The blur reads past the edges as transparent; drawn a little larger, that fringe falls outside the frame.
           const grow = pane.blur * 2;
@@ -2036,8 +2038,8 @@ async function exportWithPulse(
           tmpB ??= new OffscreenCanvas(outW, outH);
           scratch ??= new OffscreenCanvas(outW, outH);
           const om = project.media[other.media];
-          tmpA.getContext("2d")!.drawImage(grader.compose(sample.toCanvasImageSource(), gradeFor(clip, timelineT), clip, sample.timestamp, srcW, srcH), 0, 0, outW, outH);
-          tmpB.getContext("2d")!.drawImage(grader.compose(frame.toCanvasImageSource(), gradeFor(other, timelineT), other, sourceTimeAt(other, timelineT), om?.width ?? frame.displayWidth, om?.height ?? frame.displayHeight), 0, 0, outW, outH);
+          tmpA.getContext("2d")!.drawImage(grader.compose(sample.toCanvasImageSource(), gradeFor(clip, timelineT), clip, sample.timestamp, srcW, srcH, zoomAt(project.zooms, timelineT)), 0, 0, outW, outH);
+          tmpB.getContext("2d")!.drawImage(grader.compose(frame.toCanvasImageSource(), gradeFor(other, timelineT), other, sourceTimeAt(other, timelineT), om?.width ?? frame.displayWidth, om?.height ?? frame.displayHeight, zoomAt(project.zooms, timelineT)), 0, 0, outW, outH);
           drawTransition(
             ctx2d,
             outgoingIsThis ? tmpA : tmpB,
@@ -2052,7 +2054,7 @@ async function exportWithPulse(
         }
       }
       if (!composed && span.kind === "encode") {
-        ctx2d.drawImage(grader.compose(sample.toCanvasImageSource(), gradeFor(clip, timelineT), clip, sample.timestamp, srcW, srcH), 0, 0, outW, outH);
+        ctx2d.drawImage(grader.compose(sample.toCanvasImageSource(), gradeFor(clip, timelineT), clip, sample.timestamp, srcW, srcH, zoomAt(project.zooms, timelineT)), 0, 0, outW, outH);
       } else if (!composed) {
         ctx2d.drawImage(sample.toCanvasImageSource(), 0, 0, outW, outH);
       }
@@ -2523,8 +2525,8 @@ export async function renderFrame(opts: FrameOptions): Promise<RenderedFrame> {
         b = new OffscreenCanvas(outW, outH),
         scratch = new OffscreenCanvas(outW, outH);
       const om = project.media[other.media];
-      a.getContext("2d")!.drawImage(grader.compose(main.toCanvasImageSource(), gradeFor(under.clip), under.clip, under.sourceTime, srcW, srcH), 0, 0, outW, outH);
-      b.getContext("2d")!.drawImage(grader.compose(frame.toCanvasImageSource(), gradeFor(other), other, sourceTimeAt(other, t), om?.width ?? frame.displayWidth, om?.height ?? frame.displayHeight), 0, 0, outW, outH);
+      a.getContext("2d")!.drawImage(grader.compose(main.toCanvasImageSource(), gradeFor(under.clip), under.clip, under.sourceTime, srcW, srcH, zoomAt(project.zooms, t)), 0, 0, outW, outH);
+      b.getContext("2d")!.drawImage(grader.compose(frame.toCanvasImageSource(), gradeFor(other), other, sourceTimeAt(other, t), om?.width ?? frame.displayWidth, om?.height ?? frame.displayHeight, zoomAt(project.zooms, t)), 0, 0, outW, outH);
       drawTransition(
         ctx,
         outgoingIsThis ? a : b,
@@ -2539,7 +2541,7 @@ export async function renderFrame(opts: FrameOptions): Promise<RenderedFrame> {
       composed = true;
     }
   }
-  if (!composed) ctx.drawImage(grader.compose(main.toCanvasImageSource(), gradeFor(under.clip), under.clip, under.sourceTime, srcW, srcH), 0, 0, outW, outH);
+  if (!composed) ctx.drawImage(grader.compose(main.toCanvasImageSource(), gradeFor(under.clip), under.clip, under.sourceTime, srcW, srcH, zoomAt(project.zooms, t)), 0, 0, outW, outH);
   if (intro)
     drawIntroFx(
       ctx,

@@ -5,7 +5,7 @@
  * over a blurred copy, or the two share it. Pure maths on fractions and pixels; the engine draws from it.
  */
 
-import { layoutSettings, MAX_REFRAME_ZOOM, type Clip, type ExportSettings, type Frame, type Layout, type ReframeKey, type Transform, FRAME_ASPECT } from "./project";
+import { layoutSettings, MAX_REFRAME_ZOOM, type Clip, type ExportSettings, type Frame, type Layout, type Punch, type ReframeKey, type Transform, FRAME_ASPECT } from "./project";
 
 /** Even pixel counts, as encoders want. */
 export const even = (n: number) => Math.max(2, Math.round(n / 2) * 2);
@@ -79,10 +79,11 @@ function tangentAt(sorted: ReframeKey[], i: number, read: (k: ReframeKey) => num
 /**
  * The crop a frame of this shape shows: a window of the clip's cropped picture with the frame's aspect, centred where
  * the key says and `zoom` times smaller than the largest window that fits, kept inside the picture. A quarter turn
- * swaps the window's sides, since the crop is taken before the rotation. Fractions of the source frame, as the grader
- * takes them.
+ * swaps the window's sides, since the crop is taken before the rotation. A punch (a zoom on the timeline) then takes
+ * a window `punch.zoom` times smaller again inside that one, on the punch's centre, kept inside it. Fractions of the
+ * source frame, as the grader takes them.
  */
-export function windowCrop(base: Transform["crop"], key: ReframeKey, outAspect: number, srcW: number, srcH: number, quarter: boolean): Transform["crop"] {
+export function windowCrop(base: Transform["crop"], key: ReframeKey, outAspect: number, srcW: number, srcH: number, quarter: boolean, punch?: Punch | null): Transform["crop"] {
   const want = quarter ? 1 / outAspect : outAspect;
   const baseAspect = (srcW * base.w) / (srcH * base.h);
   let w = 1, h = 1;
@@ -92,7 +93,12 @@ export function windowCrop(base: Transform["crop"], key: ReframeKey, outAspect: 
   w /= z;
   h /= z;
   const cx = Math.min(1 - w / 2, Math.max(w / 2, key.cx)), cy = Math.min(1 - h / 2, Math.max(h / 2, key.cy));
-  return { x: base.x + base.w * (cx - w / 2), y: base.y + base.h * (cy - h / 2), w: base.w * w, h: base.h * h };
+  const c = { x: base.x + base.w * (cx - w / 2), y: base.y + base.h * (cy - h / 2), w: base.w * w, h: base.h * h };
+  if (!punch || !(punch.zoom > 1)) return c;
+  const pz = Math.min(MAX_REFRAME_ZOOM, punch.zoom);
+  const pw = c.w / pz, ph = c.h / pz;
+  const tx = base.x + base.w * punch.cx, ty = base.y + base.h * punch.cy;
+  return { x: Math.min(c.x + c.w - pw, Math.max(c.x, tx - pw / 2)), y: Math.min(c.y + c.h - ph, Math.max(c.y, ty - ph / 2)), w: pw, h: ph };
 }
 
 /** Whether a frame of this shape shows a window of the clip rather than its whole (cropped) picture. */
@@ -100,13 +106,13 @@ export const framed = (frame: Frame | undefined) => !!frame && frame !== "source
 
 /**
  * The clip's transform at a source instant for a frame of this shape: its own when the frame is the recording's and
- * nothing is reframed, else with the window crop in place of its crop.
+ * nothing is reframed or pushed into, else with the window crop (and the punch's window inside it) in place of its crop.
  */
-export function transformAt(clip: Pick<Clip, "transform" | "reframe">, sourceT: number, frame: Frame | undefined, outAspect: number, srcW: number, srcH: number): Transform {
-  if (!framed(frame) && !clip.reframe?.keys.length) return clip.transform;
+export function transformAt(clip: Pick<Clip, "transform" | "reframe">, sourceT: number, frame: Frame | undefined, outAspect: number, srcW: number, srcH: number, punch?: Punch | null): Transform {
+  if (!framed(frame) && !clip.reframe?.keys.length && !punch) return clip.transform;
   const key = reframeAt(clip.reframe?.keys, sourceT);
   const quarter = clip.transform.rotate % 2 === 1;
-  return { ...clip.transform, crop: windowCrop(clip.transform.crop, key, outAspect, srcW, srcH, quarter) };
+  return { ...clip.transform, crop: windowCrop(clip.transform.crop, key, outAspect, srcW, srcH, quarter, punch) };
 }
 
 /** The clip's whole (cropped) picture's width over its height in pixels, after its quarter turns. */

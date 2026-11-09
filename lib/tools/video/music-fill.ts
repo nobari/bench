@@ -6,7 +6,7 @@
  * project; the editor owns the state and the files.
  */
 import type { BeatGrid } from "./beats";
-import { DEFAULT_FILL, DEFAULT_SONG_PREFS, LIKE_WEIGHTS, REGION_PRESETS, effectiveMusicEnd, fmtTime, musicFreeSpans, musicLength, newId, regionPreset, soundLevels, tidyRegions, type FillOrder, type FillSettings, type MediaRef, type MusicTrack, type Project, type SongLike, type SongPrefs, type SoundRegion } from "./project";
+import { DEFAULT_FILL, DEFAULT_SONG_PREFS, LIKE_WEIGHTS, REGION_PRESETS, effectiveMusicEnd, fmtTime, musicFreeSpans, musicLength, newId, regionPreset, soundLevels, tidySpans, type FillOrder, type FillSettings, type MediaRef, type MusicTrack, type Project, type SongLike, type SongPrefs, type SoundRegion } from "./project";
 
 /** A song as the library lists it: the file, its preferences and what it covers on the lanes. */
 export interface LibrarySong {
@@ -343,7 +343,7 @@ export function regionLabel(r: SoundRegion): string {
 }
 /** One line about the regions: how many, and the seconds under each kind of mix. */
 export function describeRegions(p: Project, timelineEnd: number): string {
-  const regions = tidyRegions(p.regions ?? [], timelineEnd);
+  const regions = tidySpans(p.regions ?? [], timelineEnd);
   if (!regions.length) return "none yet";
   const by = new Map<string, number>();
   for (const r of regions) by.set(regionLabel(r), (by.get(regionLabel(r)) ?? 0) + (r.to - r.from));

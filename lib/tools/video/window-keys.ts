@@ -3,7 +3,7 @@
  * instant (centre and zoom), the window eases between keys or holds. Pure helpers for the editor's keys lane, the
  * drag on the preview, the sliders, Smooth, Thin and the tracking assists that write many keys at once.
  */
-import { MAX_REFRAME_ZOOM, type ReframeKey, type Transform } from "./project";
+import { MAX_REFRAME_ZOOM, type Punch, type ReframeKey, type Transform } from "./project";
 import { reframeAt, windowCrop } from "./reframe";
 
 /** Two keys closer than this in source seconds are the same key (half a frame at 60 fps). */
@@ -109,8 +109,8 @@ export function carryKeys(keys: ReframeKey[], fromIn: number, toIn: number, toOu
  * fractions of it: x, y, w, h. A quarter-turned clip shows its window transposed, since the crop is taken before
  * the turn.
  */
-export function windowInPicture(base: Transform["crop"], key: ReframeKey, outAspect: number, srcW: number, srcH: number, quarter: boolean): { x: number; y: number; w: number; h: number } {
-  const c = windowCrop(base, key, outAspect, srcW, srcH, quarter);
+export function windowInPicture(base: Transform["crop"], key: ReframeKey, outAspect: number, srcW: number, srcH: number, quarter: boolean, punch?: Punch | null): { x: number; y: number; w: number; h: number } {
+  const c = windowCrop(base, key, outAspect, srcW, srcH, quarter, punch);
   const r = { x: (c.x - base.x) / base.w, y: (c.y - base.y) / base.h, w: c.w / base.w, h: c.h / base.h };
   return quarter ? { x: r.y, y: r.x, w: r.h, h: r.w } : r;
 }
