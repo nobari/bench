@@ -293,6 +293,108 @@ export function normalizeFill(raw: unknown): FillSettings {
   return { overlap: typeof f.overlap === "number" && f.overlap >= 0 ? Math.min(10, f.overlap) : DEFAULT_FILL.overlap, first: typeof f.first === "string" ? f.first : null, last: typeof f.last === "string" ? f.last : null, order: FILL_ORDERS.includes(f.order as FillOrder) ? (f.order as FillOrder) : "shuffle" };
 }
 
+/* ---------------------------------------------------------- sound regions */
+
+/**
+ * A stretch of the video mixed its own way: the camera's sound at a level of its own (or as the clips are), the music
+ * held under a level (or off, or as placed), the levels easing in over a ramp before the region and out over one
+ * after it, so the whole region sits at its levels. Regions never overlap. They shape the landscape export, the
+ * preview and any short cut from those seconds; Shuffle & fill leaves a region with the music off empty.
+ */
+export interface SoundRegion {
+  id: string;
+  name?: string;
+  /** Timeline seconds. */
+  from: number;
+  to: number;
+  /** The camera's sound inside, in dB (−60 off); null leaves the clips at their own levels. A muted or switched-off clip stays silent. */
+  camera: number | null;
+  /** The most the music may be inside, in dB (−60 off); null leaves the tracks as placed. Fades and crossfades keep their shape under it. */
+  music: number | null;
+  /** Seconds the levels take to change, before the region begins and again after it ends. */
+  ramp: number;
+}
+export const DEFAULT_REGION_RAMP = 1;
+export const MAX_REGION_RAMP = 5;
+/** The least a region may span, seconds. */
+export const MIN_REGION_SECONDS = 0.5;
+export type RegionPreset = "camera" | "quiet" | "music";
+/** The three mixes a region is usually for; the levels stay editable. */
+export const REGION_PRESETS: { id: RegionPreset; name: string; hint: string; camera: number | null; music: number | null }[] = [
+  { id: "camera", name: "The video's sound only", hint: "The music steps aside and the camera's sound plays at full level.", camera: 0, music: -60 },
+  { id: "quiet", name: "Quieter video, a little music", hint: "The camera's sound a touch down, the music far under it.", camera: -6, music: -24 },
+  { id: "music", name: "Music only", hint: "The camera's sound goes out; the music plays as placed.", camera: -60, music: null },
+];
+/** Which preset a region's levels are, if any. */
+export const regionPreset = (r: Pick<SoundRegion, "camera" | "music">): RegionPreset | null => REGION_PRESETS.find((p) => p.camera === r.camera && p.music === r.music)?.id ?? null;
+export function newRegion(from: number, to: number, preset: RegionPreset = "camera"): SoundRegion {
+  const p = REGION_PRESETS.find((x) => x.id === preset) ?? REGION_PRESETS[0];
+  return { id: newId(), from, to, camera: p.camera, music: p.music, ramp: DEFAULT_REGION_RAMP };
+}
+const dbOrNull = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? Math.max(-60, Math.min(12, v)) : null);
+/** A saved region made whole; one without a span is dropped. */
+export function normalizeRegion(raw: unknown): SoundRegion | null {
+  const r = raw as Partial<SoundRegion> | null;
+  if (!r || typeof r !== "object" || typeof r.from !== "number" || typeof r.to !== "number" || !(r.to > r.from)) return null;
+  return {
+    id: typeof r.id === "string" && r.id ? r.id : newId(),
+    ...(typeof r.name === "string" && r.name.trim() ? { name: r.name } : {}),
+    from: Math.max(0, r.from),
+    to: r.to,
+    camera: dbOrNull(r.camera),
+    music: dbOrNull(r.music),
+    ramp: typeof r.ramp === "number" && r.ramp >= 0 ? Math.min(MAX_REGION_RAMP, r.ramp) : DEFAULT_REGION_RAMP,
+  };
+}
+/**
+ * Regions in time order and never overlapping: one that begins inside the one before it starts where that ends, all
+ * are cut at the end of the video when it is given, and what is left shorter than the least span is dropped.
+ */
+export function tidyRegions(regions: SoundRegion[], end = Infinity): SoundRegion[] {
+  const out: SoundRegion[] = [];
+  for (const r of [...regions].sort((a, b) => a.from - b.from)) {
+    const prev = out[out.length - 1];
+    const from = Math.max(r.from, prev ? prev.to : 0), to = Math.min(r.to, end);
+    if (to - from >= MIN_REGION_SECONDS - 1e-9) out.push(from === r.from && to === r.to ? r : { ...r, from, to });
+  }
+  return out;
+}
+/** The room a region has: from the end of the region before it to the start of the one after it (a neighbour is before it when that neighbour's middle lies before its own), inside the video. */
+export function regionRoom(all: SoundRegion[], r: Pick<SoundRegion, "id" | "from" | "to">, end: number): { lo: number; hi: number } {
+  const mid = (r.from + r.to) / 2;
+  const others = all.filter((x) => x.id !== r.id);
+  return {
+    lo: others.filter((x) => (x.from + x.to) / 2 < mid).reduce((a, x) => Math.max(a, x.to), 0),
+    hi: others.filter((x) => (x.from + x.to) / 2 >= mid).reduce((a, x) => Math.min(a, x.from), end),
+  };
+}
+/** A region trimmed or set: each end held inside its room, at least the least span kept; unchanged when nothing has to give. */
+export function clampRegion(all: SoundRegion[], r: SoundRegion, end: number): SoundRegion {
+  const { lo, hi } = regionRoom(all, r, end);
+  if (hi - lo < MIN_REGION_SECONDS) return r;
+  const from = Math.max(lo, Math.min(r.from, hi - MIN_REGION_SECONDS));
+  const to = Math.min(hi, Math.max(r.to, from + MIN_REGION_SECONDS));
+  return from === r.from && to === r.to ? r : { ...r, from, to };
+}
+/** A region moved to begin at `from`, its length kept, stopping at its neighbours and the video's edges. */
+export function moveRegion(all: SoundRegion[], r: SoundRegion, from: number, end: number): SoundRegion {
+  const len = r.to - r.from;
+  const { lo, hi } = regionRoom(all, { id: r.id, from, to: from + len }, end);
+  if (hi - lo < MIN_REGION_SECONDS) return r;
+  const l = Math.min(len, hi - lo);
+  const f = Math.max(lo, Math.min(from, hi - l));
+  return f === r.from && f + l === r.to ? r : { ...r, from: f, to: f + l };
+}
+/** The regions that fall in a span of the video, cut to it and timed from its start — for a short's own project. */
+export function regionsBetween(regions: SoundRegion[] | undefined, from: number, to: number): SoundRegion[] {
+  return tidyRegions(
+    (regions ?? []).filter((r) => r.to > from && r.from < to).map((r) => ({ ...r, from: Math.max(0, r.from - from), to: Math.min(to, r.to) - from })),
+    to - from,
+  );
+}
+/** The stretches a region keeps free of music (its music off), in time order and cut to the video. */
+export const musicFreeSpans = (regions: SoundRegion[] | undefined, end: number): { from: number; to: number }[] => tidyRegions(regions ?? [], end).filter((r) => r.music !== null && r.music <= -60).map((r) => ({ from: r.from, to: r.to }));
+
 /* ---------------------------------------------------------- shorts (Short mode) */
 
 /** The platforms a short is made for — the same ids as shorts.ts's PlatformId. */
@@ -1132,6 +1234,8 @@ export interface Project {
   songs?: Record<string, SongPrefs>;
   /** How "Shuffle & fill" lays the songs out; missing: the defaults. */
   fill?: FillSettings;
+  /** Parts of the video mixed their own way: the camera's sound and the music each at a level of the region's (see SoundRegion). */
+  regions?: SoundRegion[];
 }
 
 /** A readable location for a media file. */
@@ -1341,6 +1445,57 @@ export function musicGainAt(track: MusicTrack, all: MusicTrack[], timelineT: num
     g *= tStart <= oStart ? Math.cos((f * Math.PI) / 2) : Math.sin((f * Math.PI) / 2);
   }
   return g;
+}
+
+/* ----------------------------------------------------------- sound regions in the mix */
+
+/**
+ * The region that counts at a timeline instant and how far it has come in (0–1): 1 inside it, rising over the ramp
+ * before it and falling over the ramp after it; where two regions sit closer than a ramp, the nearer one counts.
+ */
+export function regionAt(regions: SoundRegion[] | undefined, t: number): { region: SoundRegion; w: number } | null {
+  let best: { region: SoundRegion; w: number } | null = null;
+  for (const r of regions ?? []) {
+    let w: number;
+    if (t >= r.from && t <= r.to) w = 1;
+    else {
+      const d = t < r.from ? r.from - t : t - r.to;
+      if (!(r.ramp > 0) || d >= r.ramp) continue;
+      w = 1 - d / r.ramp;
+    }
+    if (!best || w > best.w) best = { region: r, w };
+  }
+  return best;
+}
+
+/**
+ * Gain (linear) for a clip's own sound at a timeline instant: its gain, or inside a region that sets the camera's
+ * level, that level — reached linearly in dB over the ramp, or with an equal-power fade when the region takes the
+ * sound out. A muted or switched-off clip stays silent whatever the region says.
+ */
+export function cameraGainAt(regions: SoundRegion[] | undefined, clip: Pick<Clip, "gainDb" | "muted">, t: number): number {
+  if (clip.muted || clip.gainDb <= -60) return 0;
+  const hit = regionAt(regions, t);
+  const level = hit?.region.camera ?? null;
+  if (!hit || level === null) return dbToGain(clip.gainDb);
+  if (level <= -60) return hit.w >= 1 ? 0 : dbToGain(clip.gainDb) * Math.cos((hit.w * Math.PI) / 2);
+  return dbToGain(clip.gainDb + hit.w * (level - clip.gainDb));
+}
+
+/**
+ * What the regions do to a music track's gain at a timeline instant, as a factor on musicGainAt: 1 outside them, an
+ * equal-power fade to 0 into a region with the music off, and under a region's level a pull-down — in dB, over the
+ * ramp — from the track's own level (its gain and keyframes) to that level, so its fades and crossfades keep their
+ * shape beneath. A track already under the level is left alone.
+ */
+export function regionMusicGain(regions: SoundRegion[] | undefined, track: Pick<MusicTrack, "gainDb" | "keyframes" | "start">, t: number): number {
+  const hit = regionAt(regions, t);
+  const level = hit?.region.music ?? null;
+  if (!hit || level === null) return 1;
+  if (level <= -60) return hit.w >= 1 ? 0 : Math.cos((hit.w * Math.PI) / 2);
+  const own = keyframeDb(track.keyframes, t - track.start, track.gainDb);
+  const duck = Math.max(0, own - level);
+  return duck > 0 ? 10 ** (-(hit.w * duck) / 20) : 1;
 }
 
 /** Where a track actually stops: its own end, or the end of the video if that comes first. */
@@ -1708,7 +1863,11 @@ export function deserialize(json: string): Project | null {
     const mode: EditorMode = p.mode === "short" ? "short" : "landscape";
     const songs = p.songs && typeof p.songs === "object" ? Object.fromEntries(Object.entries(p.songs).map(([id, s]) => [id, normalizeSongPrefs(s)])) : undefined;
     const fill = p.fill && typeof p.fill === "object" ? normalizeFill(p.fill) : undefined;
-    return { ...newProject(), ...p, clips, sound, layout, safeArea, shorts, mode, ...(songs ? { songs } : {}), ...(fill ? { fill } : {}), export: { ...DEFAULT_EXPORT, ...p.export, frame, tags: { ...DEFAULT_TAGS, ...(p.export?.tags ?? {}) } }, preview: { ...DEFAULT_PREVIEW, ...(p.preview ?? (Object.values(p.proxies ?? {}).some((x) => x?.ready) ? { proxyHeight: 1080 } : {})) }, transition, intro, stops, titles: (p.titles ?? []).map((t) => normalizeTitle(t)) };
+    const regions = Array.isArray(p.regions) ? tidyRegions(p.regions.map((r) => normalizeRegion(r)).filter((r): r is SoundRegion => !!r)) : undefined;
+    const loaded: Project = { ...newProject(), ...p, clips, sound, layout, safeArea, shorts, mode, ...(songs ? { songs } : {}), ...(fill ? { fill } : {}), export: { ...DEFAULT_EXPORT, ...p.export, frame, tags: { ...DEFAULT_TAGS, ...(p.export?.tags ?? {}) } }, preview: { ...DEFAULT_PREVIEW, ...(p.preview ?? (Object.values(p.proxies ?? {}).some((x) => x?.ready) ? { proxyHeight: 1080 } : {})) }, transition, intro, stops, titles: (p.titles ?? []).map((t) => normalizeTitle(t)) };
+    if (regions) loaded.regions = regions;
+    else delete loaded.regions;
+    return loaded;
   } catch {
     return null;
   }

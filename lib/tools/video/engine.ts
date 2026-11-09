@@ -38,7 +38,7 @@ import {
   clipAt,
   clipSpeed,
   sourceTimeAt,
-  dbToGain,
+  cameraGainAt,
   exportTags,
   fontFamilyCss,
   exportRange,
@@ -46,6 +46,7 @@ import {
   FILE_LUT_KINDS,
   keyTolerance,
   musicGainAt,
+  regionMusicGain,
   placeClips,
   planExport,
   transitionAt,
@@ -1161,15 +1162,22 @@ export async function mixAudio(
         hereSpeed >= MIN_AUDIBLE_SPEED &&
         hereSpeed <= MAX_AUDIBLE_SPEED
       ) {
-        const g = dbToGain(here.gainDb);
+        // The clip's gain, or a sound region's level for the camera; a ramp changes across the block, so it is read at both ends.
+        const g0 = cameraGainAt(project.regions, here, t), g1 = cameraGainAt(project.regions, here, t + n / sampleRate);
+        const gainAt = (i: number) => (g1 === g0 ? g0 : g0 + ((g1 - g0) * i) / n);
         if (hereSpeed === 1) {
           const s = await pull(here.media, sourceTimeAt(here, t), n);
-          for (let i = 0; i < n * 2; i++) mix[i] += s[i] * g;
+          for (let i = 0; i < n; i++) {
+            const g = gainAt(i);
+            mix[i * 2] += s[i * 2] * g;
+            mix[i * 2 + 1] += s[i * 2 + 1] * g;
+          }
         } else {
           // Sped-up or slowed footage: read the matching stretch of source audio and resample it to this block (pitch follows).
           const srcN = Math.ceil(n * hereSpeed) + 1;
           const s = await pull(here.media, sourceTimeAt(here, t), srcN);
           for (let i = 0; i < n; i++) {
+            const g = gainAt(i);
             const x = i * hereSpeed,
               j = Math.min(srcN - 2, Math.floor(x)),
               f = x - j;
@@ -1188,7 +1196,8 @@ export async function mixAudio(
           continue;
         const s = await pull(m.media, m.in + (t - m.start), n);
         for (let i = 0; i < n; i++) {
-          const g = musicGainAt(m, project.music, t + i / sampleRate, to);
+          const at = t + i / sampleRate;
+          const g = musicGainAt(m, project.music, at, to) * regionMusicGain(project.regions, m, at);
           mix[i * 2] += s[i * 2] * g;
           mix[i * 2 + 1] += s[i * 2 + 1] * g;
         }

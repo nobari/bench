@@ -8,7 +8,8 @@
 
 import { introRegion } from "./intro";
 import { stopsOnTimeline } from "./stops";
-import { SOUND_LABELS, TRANSITIONS, clipSpeed, crossfades, effectiveMusicEnd, exportRange, fmtTime, hasCard, placeClips, soundLevels, soundState, timelineDuration, visibleCuts, type Project, type Title } from "./project";
+import { SOUND_LABELS, TRANSITIONS, clipSpeed, crossfades, effectiveMusicEnd, exportRange, fmtTime, hasCard, musicFreeSpans, placeClips, soundLevels, soundState, tidyRegions, timelineDuration, visibleCuts, type Project, type Title } from "./project";
+import { regionLabel } from "./music-fill";
 import { YOUTUBE_LUFS } from "./loudness";
 import { YOUTUBE_AUDIO_KBPS, fmtGb, uploadLimits } from "./youtube";
 
@@ -193,11 +194,14 @@ export function reviewProject(p: Project, env: ReviewEnv): Review {
       if (last && from <= last.to + 0.01) last.to = Math.max(last.to, to);
       else covered.push({ from, to });
     }
+    // A stretch a sound region keeps free of music is meant to be silent, so it is no gap.
+    const free = musicFreeSpans(p.regions, duration);
+    const outsideFree = (a: number, b: number) => b - a - free.reduce((s, f) => s + Math.max(0, Math.min(b, f.to) - Math.max(a, f.from)), 0);
     const gaps: string[] = [];
-    if (covered[0].from - exportFrom > 1) gaps.push(`no music for the first ${fmtTime(covered[0].from - exportFrom)}`);
-    for (let i = 1; i < covered.length; i++) if (covered[i].from - covered[i - 1].to > 1) gaps.push(`silence from ${fmtTime(covered[i - 1].to)} to ${fmtTime(covered[i].from)}`);
+    if (outsideFree(exportFrom, covered[0].from) > 1) gaps.push(`no music for the first ${fmtTime(covered[0].from - exportFrom)}`);
+    for (let i = 1; i < covered.length; i++) if (outsideFree(covered[i - 1].to, covered[i].from) > 1) gaps.push(`silence from ${fmtTime(covered[i - 1].to)} to ${fmtTime(covered[i].from)}`);
     const end = covered[covered.length - 1].to;
-    if (exportTo - end > 1) gaps.push(`no music for the last ${fmtTime(exportTo - end)}`);
+    if (outsideFree(end, exportTo) > 1) gaps.push(`no music for the last ${fmtTime(exportTo - end)}`);
     const mGains = new Map<number, number>();
     for (const m of music) if (!m.muted) mGains.set(m.gainDb, (mGains.get(m.gainDb) ?? 0) + 1);
     const keyframed = music.filter((m) => m.keyframes.length).length;
@@ -210,6 +214,8 @@ export function reviewProject(p: Project, env: ReviewEnv): Review {
       `${xf ? `${plural(xf, "crossfade")} where tracks overlap` : "No overlaps, so no crossfades"}; ${fades} with a fade in or out${music[music.length - 1].fadeOut > 0 ? "; the last one fades out" : "; the last one ends without a fade"}`,
     ];
     if (gaps.length) lines.push(`Gaps: ${gaps.join("; ")}`);
+    const regions = tidyRegions(p.regions ?? [], duration);
+    if (regions.length) lines.push(`${plural(regions.length, "sound region")}: ${regions.map((r) => `${fmtTime(r.from)}–${fmtTime(r.to)} ${regionLabel(r).charAt(0).toLowerCase()}${regionLabel(r).slice(1)}`).join("; ")}`);
     sound.push(item({ id: "music", state: gaps.length || st.musicOther || mGains.size > 1 ? "look" : "ok", title: gaps.length ? `Music with ${plural(gaps.length, "gap")}` : `Music covers the video, ${plural(songs, "song")}`, summary: gaps.length ? "A music video should not fall silent: slide a track over each gap, or Shuffle & fill lays the songs end to end." : st.musicOther ? `${st.musicOther} ${st.musicOther === 1 ? "track sits" : "tracks sit"} at another level than the mode's ${fmtDb(levels.music)}.` : "Every stretch of the video has music under it.", lines, action: { id: "tab:audio", label: "Music" } }));
   } else sound.push(item({ id: "music", state: p.export.tags.kind === "music-video" ? "look" : "info", title: "No music", summary: p.export.tags.kind === "music-video" ? "The file is tagged as a music video but carries no music track." : "Only the camera sound will be heard.", action: { id: "tab:audio", label: "Add music" } }));
   sound.push(item({ id: "mode", state: "info", title: `${SOUND_LABELS[p.sound ?? "footage"]}: camera ${fmtDb(levels.camera)}, music ${fmtDb(levels.music)}`, summary: p.sound === "music-video" ? "The music carries the video at full level; the camera sound sits well under it, there for texture." : "The camera sound stays in front with the music under it.", action: { id: "section:sound", label: "Sound mode" } }));

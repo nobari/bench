@@ -2,13 +2,13 @@
 
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import Link from "next/link";
-import { AlertTriangle, Camera, ChevronDown, ChevronRight, ChevronUp, Sparkles, Clapperboard, Crop, Download, FolderOpen, Gauge, Heart, Loader, Maximize2, Minimize2, Music, Pause, Play, Repeat, Save, Scissors, SkipBack, SkipForward, SlidersHorizontal, Smartphone, Square, StepBack, StepForward, Trash2, Type, Upload, Volume2, VolumeX, Keyboard, Search, Shuffle, X } from "lucide-react";
+import { AlertTriangle, Camera, ChevronDown, ChevronRight, ChevronUp, Sparkles, Clapperboard, Crop, Download, FolderOpen, Gauge, Heart, Loader, Maximize2, Minimize2, Music, Pause, Play, Plus, Repeat, Save, Scissors, SkipBack, SkipForward, SlidersHorizontal, Smartphone, Square, StepBack, StepForward, Trash2, Type, Upload, Volume2, VolumeX, Keyboard, Search, Shuffle, X } from "lucide-react";
 import { makeRoomForAll, makeRoomForTransition, newShort, timelineDuration as shortTimelineDuration, type EditorMode, type Short } from "@/lib/tools/video/project";
 import { DEFAULT_SHORT_SECONDS, MIN_SHORT_SECONDS, SHORTS_FOLDER, clampShort, seamCandidates, seamScore, shortBytes, shortChecks, shortFileName, shortPostText, shortProject, shortStem, shortTemplate, shortTemplateProject, shortsFromMoments, suggestWindows, titlesIntoShort, viewFor } from "@/lib/tools/video/short-mode";
 import { scoreMoments as scoreShortMoments } from "@/lib/tools/video/intro";
 import { ShortsPanel, type SeamState } from "@/components/widgets/short-mode-panel";
 import { ShortMusicBlock, WaveBars } from "@/components/widgets/short-music";
-import { LIKE_LABELS, beatsOfSong, clearLanes, cycleLike, describeFill, describeLibrary, fillPool, fillProject, fillSettings, removeSongs, seededRng, setFill as setFillOf, setSongPrefs as setSongPrefsOf, songLibrary } from "@/lib/tools/video/music-fill";
+import { LIKE_LABELS, beatsOfSong, clearLanes, cycleLike, describeFill, describeLibrary, describeRegions, fillPool, fillProject, fillSettings, regionLabel, removeSongs, seededRng, setFill as setFillOf, setSongPrefs as setSongPrefsOf, songLibrary } from "@/lib/tools/video/music-fill";
 import { SHORT_FADE_IN, SHORT_FADE_OUT, carryThrough, continueTrack, musicForNewShort, placeShortMusic, shortMusicOf, slipTrack, songTrack, songsOf, trimTrackEnd, trimTrackStart, spreadToAll } from "@/lib/tools/video/short-music";
 import { peakBins, peaksOf } from "@/lib/tools/video/waveform";
 import { SafeGhost } from "@/components/widgets/shorts-parts";
@@ -21,7 +21,7 @@ import { TITLE_PRESETS, applyTitlePreset, copyTitlesToShorts } from "@/lib/tools
 import { beatPeriod, cutToBeats, nearestBeat, punchIns, slowStretch, timelineBeats } from "@/lib/tools/video/beat-tools";
 import { analyseBeats } from "@/lib/tools/video/beats";
 import { decodeMono } from "@/lib/tools/video/engine";
-import { DEFAULT_EXPORT, NEUTRAL_GRADE, NEUTRAL_TRANSFORM, TITLE_ALIGNS, TITLE_FAMILIES, TITLE_FONTS, TITLE_POSITIONS, TITLE_SHADOWS, TITLE_WEIGHTS, TRANSITIONS, addTransitionAt, appendMusic, applyAudioTo, applyGradeTo, applyTransitionToAll, clipAt, crossfades, dbToGain, effectiveMusicEnd, estimateExport, exportRange, fmtTime, musicGainAt, musicLength, newId, newProject, newTitle, orderRecordings, placeClips, planExport, removeRange, reorderMusic, setTransition, splitClip, timelineDuration, titleLanes, transitionAt, transitionWindows, CLIP_SPEEDS, canMergeWithNext, clipLength, clipSpeed, groupOf, sourceTimeAt, mergeWithNext, moveClip, unjoin, updateClip, visibleCuts, type Clip, type MediaRef, type MusicTrack, type Project, type ProxyHeight, type Title, type TitleFont, isFileLutKind, FILE_LUT_KINDS, type FileLutKind, type LutKind, type MathLutKind, type TitleAlign, type TitlePosition, type TitleShadow, type Transition, type TransitionKind, type ExportTags, type IntroSettings, type IntroCard, DEFAULT_CARD, cardSettings, hasCard, reorderClip, parseTime, type SteadyLights, STEADY_FRAMES, clampMusicStart, musicUnused, musicBetween, type FillOrder, type FillSettings, type SongPrefs, describeWhere, nameSome, whereSummary, type MediaWhere, exportFingerprint, SOUND_MODES, SOUND_LABELS, soundLevels, applySoundLevels, soundState, type SoundMode, type SoundLevels, FRAMES, FRAME_LABELS, MAX_REFRAME_ZOOM, MIN_CLIP_SPEED, MAX_CLIP_SPEED, type Frame, type Layout, type ReframeKey } from "@/lib/tools/video/project";
+import { DEFAULT_EXPORT, NEUTRAL_GRADE, NEUTRAL_TRANSFORM, TITLE_ALIGNS, TITLE_FAMILIES, TITLE_FONTS, TITLE_POSITIONS, TITLE_SHADOWS, TITLE_WEIGHTS, TRANSITIONS, addTransitionAt, appendMusic, applyAudioTo, applyGradeTo, applyTransitionToAll, clipAt, crossfades, dbToGain, effectiveMusicEnd, estimateExport, exportRange, fmtTime, musicGainAt, musicLength, newId, newProject, newTitle, orderRecordings, placeClips, planExport, removeRange, reorderMusic, setTransition, splitClip, timelineDuration, titleLanes, transitionAt, transitionWindows, CLIP_SPEEDS, canMergeWithNext, clipLength, clipSpeed, groupOf, sourceTimeAt, mergeWithNext, moveClip, unjoin, updateClip, visibleCuts, type Clip, type MediaRef, type MusicTrack, type Project, type ProxyHeight, type Title, type TitleFont, isFileLutKind, FILE_LUT_KINDS, type FileLutKind, type LutKind, type MathLutKind, type TitleAlign, type TitlePosition, type TitleShadow, type Transition, type TransitionKind, type ExportTags, type IntroSettings, type IntroCard, DEFAULT_CARD, cardSettings, hasCard, reorderClip, parseTime, type SteadyLights, STEADY_FRAMES, clampMusicStart, musicUnused, musicBetween, type FillOrder, type FillSettings, type SongPrefs, describeWhere, nameSome, whereSummary, type MediaWhere, exportFingerprint, SOUND_MODES, SOUND_LABELS, soundLevels, applySoundLevels, soundState, type SoundMode, type SoundLevels, FRAMES, FRAME_LABELS, MAX_REFRAME_ZOOM, MIN_CLIP_SPEED, MAX_CLIP_SPEED, type Frame, type Layout, type ReframeKey, type SoundRegion, type RegionPreset, REGION_PRESETS, MIN_REGION_SECONDS, MAX_REGION_RAMP, regionPreset, newRegion, clampRegion, moveRegion, tidyRegions, cameraGainAt, regionMusicGain } from "@/lib/tools/video/project";
 import { gainToReach, YOUTUBE_LUFS, type Loudness } from "@/lib/tools/video/loudness";
 import { drawTransition } from "@/lib/tools/video/transitions";
 import { LUT_OPTIONS, buildDlogLut, deriveLut, fetchOfficialLut, lutToCube, parseCube, type Lut3D } from "@/lib/tools/video/lut";
@@ -540,6 +540,9 @@ export function VideoEditorWidget() {
   const [stopDefaults, setStopDefaults] = useState({ minSeconds: DEFAULT_STOPS.minSeconds, margin: DEFAULT_STOPS.margin });
   // The song library (Audio tab): the song whose placements light up on the lanes, and the one being listened to on its own.
   const [hoverSong, setHoverSong] = useState<string | null>(null);
+  // Sound regions: the selected one (its settings in the Audio tab; Delete removes it) and a drag on the Sound lane.
+  const [selectedRegion, setSelectedRegion] = useState<string | null>(null);
+  const regionDragRef = useRef<{ id: string | null; kind: "move" | "from" | "to" | "draw"; startT: number; from: number; to: number; moved: boolean } | null>(null);
   const [auditioning, setAuditioning] = useState<string | null>(null);
   const auditionRef = useRef<{ id: string; src: AudioBufferSourceNode; gain: GainNode } | null>(null);
   /** A landscape music track being dragged along its lane. */
@@ -1532,6 +1535,20 @@ export function VideoEditorWidget() {
       setSelectedMusic(null);
       return true;
     },
+    /** The selected sound region off the Sound lane (Delete when neither a clip nor a track is selected). */
+    deleteSelectedRegion: () => {
+      if (!selectedRegion) return false;
+      const id = selectedRegion;
+      setProject((p) => {
+        const left = (p.regions ?? []).filter((r) => r.id !== id);
+        if (left.length) return { ...p, regions: left };
+        const { regions: gone, ...rest } = p;
+        void gone;
+        return rest;
+      });
+      setSelectedRegion(null);
+      return true;
+    },
     mergeSelected: () => {
       if (!selected || !canMergeWithNext(project.clips, selected)) return false;
       const id = selected;
@@ -1575,7 +1592,7 @@ export function VideoEditorWidget() {
         setSelectedTransition(null);
       } else if ((e.key === "Delete" || e.key === "Backspace") && !inField(e) && !e.metaKey && !e.ctrlKey) {
         e.preventDefault();
-        if (!e.repeat && !trimActionsRef.current.deleteSelected()) trimActionsRef.current.deleteSelectedMusic();
+        if (!e.repeat && !trimActionsRef.current.deleteSelected() && !trimActionsRef.current.deleteSelectedMusic()) trimActionsRef.current.deleteSelectedRegion();
       } else if (e.key === "Control" && !inField(e)) {
         if (!e.repeat) beginSkim();
       } else if (e.key === " " && !inField(e)) {
@@ -1600,6 +1617,7 @@ export function VideoEditorWidget() {
           setSelected(null);
           setSelectedMusic(null);
           setSelectedTransition(null);
+          setSelectedRegion(null);
         }
         else if (e.key === "m" || e.key === "M") setPreviewMuted((m) => !m);
         else if (e.key === "s" || e.key === "S") void saveFrame(e.altKey ? "png" : e.shiftKey ? "jpeg" : "thumb");
@@ -2028,14 +2046,14 @@ export function VideoEditorWidget() {
     if (v.src !== previewSrc) v.src = previewSrc;
     // While playing, small drift is fine; paused, land on the exact frame so stepping works.
     if (Math.abs(v.currentTime - under.sourceTime) > (playing ? 0.3 : 0.5 / fpsRef.current)) v.currentTime = under.sourceTime;
-    // The clip's own sound, at its gain (an element can't go above unity; export can).
-    const gain = under.clip.muted ? 0 : Math.min(1, dbToGain(under.clip.gainDb));
+    // The clip's own sound, at its gain or a sound region's level here (an element can't go above unity; export can).
+    const gain = Math.min(1, cameraGainAt(project.regions, under.clip, playheadRef.current));
     v.volume = gain;
-    v.muted = gain === 0 || previewMuted;
+    v.muted = (gain === 0 && !project.regions?.length) || previewMuted;
     v.playbackRate = Math.min(MAX_PREVIEW_RATE, rate * clipSpeed(under.clip));
     if (playing) void v.play().catch(() => undefined);
     else v.pause();
-  }, [previewSrc, under, playing, rate, previewMuted]);
+  }, [previewSrc, under, playing, rate, previewMuted, project.regions]);
 
   // Music in the preview: Web Audio sources started at the right offsets whenever playback (re)starts or the user seeks.
   useEffect(() => {
@@ -2210,10 +2228,15 @@ export function VideoEditorWidget() {
             steadyRef.current.apply(c);
             ctx.drawImage(steadyRef.current.canvas, 0, 0, w, h);
           } else steadyRef.current?.reset();
-          // Music gains follow the playhead so fades and crossfades are audible in the preview.
+          // Music gains follow the playhead so fades, crossfades and the sound regions are audible in the preview.
           for (const [id, node] of musicNodes.current) {
             const m = timelineMusic.find((x) => x.id === id);
-            node.gain.gain.value = m && !previewMutedRef.current ? musicGainAt(m, timelineMusic, playhead, musicEnd) : 0;
+            node.gain.gain.value = m && !previewMutedRef.current ? musicGainAt(m, timelineMusic, playhead, musicEnd) * regionMusicGain(project.regions, m, playhead) : 0;
+          }
+          // So does the clip's own sound, where regions set its level (an element can't go above unity; export can).
+          if (project.regions?.length) {
+            const g = Math.min(1, cameraGainAt(project.regions, under.clip, playhead));
+            if (Math.abs(v.volume - g) > 0.002) v.volume = g;
           }
         } catch {
           /* WebGL unavailable: fall back to the raw video element behind the canvas */
@@ -2272,6 +2295,85 @@ export function VideoEditorWidget() {
   };
   const patchSongPrefs = (id: string, patch: Partial<SongPrefs>) => setProject((p) => setSongPrefsOf(p, id, patch));
   const patchFill = (patch: Partial<FillSettings>) => setProject((p) => setFillOf(p, patch));
+
+  /* Sound regions: parts of the video mixed their own way (SoundRegion in project.ts); the list stays absent when empty. */
+  const regions = project.regions ?? [];
+  const withRegions = (p: Project, list: SoundRegion[]): Project => {
+    if (list.length) return { ...p, regions: list };
+    const { regions: gone, ...rest } = p;
+    void gone;
+    return rest;
+  };
+  /** A region's new span or levels; trimmed, it is held at its neighbours and inside the video. */
+  const updateRegion = (id: string, patch: Partial<SoundRegion>) =>
+    setProject((p) => {
+      const all = p.regions ?? [];
+      const r = all.find((x) => x.id === id);
+      if (!r) return p;
+      const next = clampRegion(all, { ...r, ...patch }, durationRef.current);
+      return withRegions(p, tidyRegions(all.map((x) => (x.id === id ? next : x)), durationRef.current));
+    });
+  /** A region slid along the lane to begin at `from`, its length kept, stopping at its neighbours. */
+  const moveRegionTo = (id: string, from: number) =>
+    setProject((p) => {
+      const all = p.regions ?? [];
+      const r = all.find((x) => x.id === id);
+      if (!r) return p;
+      const next = moveRegion(all, r, from, durationRef.current);
+      return next === r ? p : withRegions(p, tidyRegions(all.map((x) => (x.id === id ? next : x)), durationRef.current));
+    });
+  /** Work on a region: selected on its own, the Audio tab, and (for a click) the playhead at its start. */
+  const selectRegion = (id: string | null, jump = false) => {
+    setSelectedRegion(id);
+    if (!id) return;
+    setSelected(null);
+    setSelectedMusic(null);
+    setTab("audio");
+    const r = (projectRef.current?.regions ?? []).find((x) => x.id === id);
+    if (jump && r) stepTo(r.from);
+  };
+  /** A new region with the video's sound only, kept off its neighbours; selected, with its settings open. Null when there is no room. */
+  const addRegion = (from: number, to: number, preset: RegionPreset = "camera"): SoundRegion | null => {
+    const end = durationRef.current;
+    const all = projectRef.current?.regions ?? [];
+    const made = clampRegion(all, newRegion(Math.max(0, from), Math.min(end, to), preset), end);
+    // Squeezed to less than a second, or to under half of what was asked, there is no room for it.
+    const asked = Math.min(end, to) - Math.max(0, from);
+    if (!(made.to - made.from >= Math.max(MIN_REGION_SECONDS, Math.min(1, asked / 2)) - 1e-9) || made.from >= end) {
+      setStatus("No room for a sound region there");
+      return null;
+    }
+    setProject((p) => withRegions(p, tidyRegions([...(p.regions ?? []), made], end)));
+    selectRegion(made.id);
+    setStatus(`${regionLabel(made)} from ${fmtTime(made.from)} to ${fmtTime(made.to)} — its levels are in the Audio tab; drag it on the Sound lane`);
+    return made;
+  };
+  /** From the playhead to the next cut when that is within 30 s, else ten seconds. */
+  const addRegionAtPlayhead = () => {
+    const t = playheadRef.current, end = durationRef.current;
+    const cut = visibleCuts(placed).find((c) => c > t + MIN_REGION_SECONDS);
+    addRegion(t, cut !== undefined && cut - t <= 30 ? cut : Math.min(end, t + 10));
+  };
+  const addRegionOverClip = () => {
+    const c = current ? placed.find((x) => x.id === current.id) : undefined;
+    if (c) addRegion(c.start, c.end);
+  };
+  const removeRegion = (id: string) => {
+    setProject((p) => withRegions(p, (p.regions ?? []).filter((r) => r.id !== id)));
+    setSelectedRegion((s) => (s === id ? null : s));
+  };
+  const removeAllRegions = () => {
+    setProject((p) => (p.regions?.length ? withRegions(p, []) : p));
+    setSelectedRegion(null);
+    setStatus("Every sound region removed — the clips and the music play at their own levels again");
+  };
+  /** The regions' marks over a lane: hatched where that sound is off inside them, tinted where it is held at a level. */
+  const regionTints = (which: "camera" | "music") =>
+    regions.map((r) => {
+      const level = which === "camera" ? r.camera : r.music;
+      if (level === null) return null;
+      return <div key={r.id} className={cn("pointer-events-none absolute inset-y-0 z-10 rounded-[2px]", level <= -60 ? "bg-[repeating-linear-gradient(135deg,rgba(63,178,127,0.45)_0_4px,transparent_4px_8px)]" : "bg-[#3fb27f]/20")} style={{ left: r.from * pxPerSec, width: Math.max(2, (r.to - r.from) * pxPerSec) }} title={`${regionLabel(r)}: ${which === "camera" ? "the video's sound" : "the music"} ${level <= -60 ? "is off here" : `is held at ${fmtDb(level)} here`}`} data-region-tint={r.id} data-region-tint-of={which} />;
+    });
   /** The song being listened to on its own fades out and stops. */
   const stopAudition = () => {
     const a = auditionRef.current;
@@ -2694,6 +2796,19 @@ export function VideoEditorWidget() {
       getAuditioning: () => auditioning,
       getSelectedMusic: () => selectedMusic,
       selectMusic: (id: string | null) => setSelectedMusic(id),
+      getRegions: () => regions,
+      addRegion,
+      setRegion: updateRegion,
+      moveRegion: moveRegionTo,
+      removeRegion,
+      removeAllRegions,
+      selectRegion,
+      getSelectedRegion: () => selectedRegion,
+      /** The gains the mix uses at a timeline instant, regions included: the clip under it and every track on the lanes. */
+      mixAt: (t: number) => {
+        const here = clipAt(project.clips, t);
+        return { camera: here ? cameraGainAt(project.regions, here.clip, t) : null, music: timelineMusic.map((m) => ({ id: m.id, media: m.media, gain: musicGainAt(m, timelineMusic, t, musicEnd) * regionMusicGain(project.regions, m, t) })) };
+      },
       pickShortSong,
       songStartAt,
       slipShortSong,
@@ -3738,6 +3853,51 @@ export function VideoEditorWidget() {
     if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
     if (!d.moved && d.id) selectShort(d.id, true);
   };
+  /* The Sound lane: a region is dragged to move it, its edges to trim it; the empty lane draws a new one with the video's sound only. */
+  const onRegionLanePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0 || !timelineRef.current) return;
+    e.stopPropagation();
+    const t = timeAtPointer(timelineRef.current, e.clientX, !e.altKey);
+    const target = e.target as HTMLElement;
+    const id = (target.closest("[data-sound-region]") as HTMLElement | null)?.dataset.soundRegion ?? null;
+    const handle = target.dataset.regionHandle as "from" | "to" | undefined;
+    const r = id ? (projectRef.current?.regions ?? []).find((x) => x.id === id) : null;
+    e.currentTarget.setPointerCapture(e.pointerId);
+    if (r) {
+      regionDragRef.current = { id: r.id, kind: handle ?? "move", startT: t, from: r.from, to: r.to, moved: false };
+      selectRegion(r.id);
+    } else regionDragRef.current = { id: null, kind: "draw", startT: t, from: t, to: t, moved: false };
+  };
+  const onRegionLanePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    const d = regionDragRef.current;
+    if (!d || !timelineRef.current) return;
+    const t = timeAtPointer(timelineRef.current, e.clientX, !e.altKey);
+    const delta = t - d.startT;
+    if (!d.moved && Math.abs(delta) * pxPerSec < 3) return;
+    d.moved = true;
+    if (d.kind === "draw") {
+      const from = Math.min(d.startT, t), to = Math.max(d.startT, t);
+      if (!d.id) {
+        if (to - from < MIN_REGION_SECONDS) return;
+        d.id = addRegion(from, to)?.id ?? null;
+      } else updateRegion(d.id, { from, to });
+    } else if (d.kind === "move") moveRegionTo(d.id!, d.from + delta);
+    else if (d.kind === "from") updateRegion(d.id!, { from: Math.min(d.to - MIN_REGION_SECONDS, d.from + delta) });
+    else updateRegion(d.id!, { to: Math.max(d.from + MIN_REGION_SECONDS, d.to + delta) });
+    showHoverTime(t);
+  };
+  const onRegionLanePointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    const d = regionDragRef.current;
+    if (!d) return;
+    regionDragRef.current = null;
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
+    if (!d.id) return;
+    if (!d.moved) selectRegion(d.id, true);
+    else {
+      const r = (projectRef.current?.regions ?? []).find((x) => x.id === d.id);
+      if (r) setStatus(d.kind === "draw" ? `${regionLabel(r)} from ${fmtTime(r.from)} to ${fmtTime(r.to)} — its levels are in the Audio tab; drag it along the Sound lane, its edges to trim it` : `${regionLabel(r)} now from ${fmtTime(r.from)} to ${fmtTime(r.to)}`);
+    }
+  };
   /* The Music lane in Short mode: the active short's bar is dragged to slide the song under the short, its edges to set where the music begins and ends; another short's bar selects that short. */
   const musicDragRef = useRef<{ shortId: string; trackId: string; kind: "slip" | "from" | "to"; startT: number; track0: MusicTrack; moved: boolean; label?: string } | null>(null);
   const onMusicLanePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
@@ -4000,9 +4160,12 @@ export function VideoEditorWidget() {
   // The shorts lane shows whenever there are shorts, and in Short mode from the start.
   const showShortsLane = shortMode || shorts.length > 0;
   const laneShorts = { flex: "1 1 0px", minHeight: 22 } as const;
+  // The Sound lane (regions) shows in landscape whenever there is footage to mark.
+  const showSoundLane = !shortMode && project.clips.length > 0;
+  const laneRegions = { flex: "1 1 0px", minHeight: 20 } as const;
   // The smallest the timeline pane may be: every lane at its floor plus the header, the hint line and padding. The rows
   // split holds it as a hard floor, so a notice or a result card above the rows squeezes the preview, never the lanes.
-  const timelineFloor = 216 + 20 * titleLaneOf.count + (showShortsLane ? 26 : 0) - (shortMode ? 32 : 0);
+  const timelineFloor = 216 + 20 * titleLaneOf.count + (showShortsLane ? 26 : 0) + (showSoundLane ? 24 : 0) - (shortMode ? 32 : 0);
   const timelinePanel = (
       <div className="panel flex h-full min-h-0 flex-col select-none overflow-hidden p-2" data-timeline>
         <div className="mb-1.5 flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1">
@@ -4048,6 +4211,7 @@ export function VideoEditorWidget() {
             </div>
             {/* video lane */}
             <div className="relative mt-1" style={laneVideo} data-video-lane>
+              {regionTints("camera")}
               {placed.map((c, i) => {
                 // Joined clips draw as one continuous bar: no edge or gap at the hidden cut, and only the first carries a label.
                 const { joinsNext, runCount, runEnd } = runInfo[i];
@@ -4070,6 +4234,7 @@ export function VideoEditorWidget() {
                       setSelected(c.id);
                       setSelectedMusic(null);
                       setSelectedTransition(null);
+                      setSelectedRegion(null);
                       setPlayhead(c.start);
                       setSeekToken((t) => t + 1);
                     }}
@@ -4175,6 +4340,22 @@ export function VideoEditorWidget() {
                 </button>
               ))}
             </div>
+            {/* sound lane: each region a span to drag or trim; the empty lane draws a new one */}
+            {showSoundLane && (
+              <div className="relative mt-1" style={laneRegions} data-sound-lane onPointerDown={onRegionLanePointerDown} onPointerMove={onRegionLanePointerMove} onPointerUp={onRegionLanePointerUp} onPointerCancel={onRegionLanePointerUp}>
+                {!regions.length && <div className="pointer-events-none absolute inset-0 flex items-center rounded-[3px] border border-dashed border-edge px-2 text-[10.5px] text-faint">Sound: drag here to mark a part with the video&apos;s own sound, or quieter music — the Audio tab sets its levels</div>}
+                {regions.map((r) => {
+                  const sel = selectedRegion === r.id;
+                  return (
+                    <div key={r.id} role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === "Enter") selectRegion(r.id, true); }} className={cn("absolute top-0 flex h-full cursor-grab items-center overflow-hidden rounded-[3px] border px-1.5 text-[10.5px] select-none", sel ? "z-10 border-ink bg-[#3fb27f]/40 text-ink" : "border-transparent bg-[#3fb27f]/25 text-muted hover:bg-[#3fb27f]/35")} style={{ left: r.from * pxPerSec, width: Math.max(4, (r.to - r.from) * pxPerSec) }} title={`${regionLabel(r)} · ${fmtTime(r.from)}–${fmtTime(r.to)} — drag to move it, its edges to trim it; Delete removes it once selected`} data-sound-region={r.id}>
+                      <span className="pointer-events-none truncate">{r.name ? `${r.name} · ` : ""}{regionLabel(r)}</span>
+                      <span className="absolute inset-y-0 left-0 w-1.5 cursor-ew-resize bg-[#3fb27f]/70" data-region-handle="from" />
+                      <span className="absolute inset-y-0 right-0 w-1.5 cursor-ew-resize bg-[#3fb27f]/70" data-region-handle="to" />
+                    </div>
+                  );
+                })}
+              </div>
+            )}
             {/* music: in Short mode one lane with every short's own song; otherwise the three landscape lanes */}
             {shortMode && (
               <div className="relative mt-1" style={laneShortMusic} data-short-music-lane onPointerDown={onMusicLanePointerDown} onPointerMove={onMusicLanePointerMove} onPointerUp={onMusicLanePointerUp} onPointerCancel={onMusicLanePointerUp} onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); }} onDrop={(e) => { e.preventDefault(); e.stopPropagation(); addDropped(e.dataTransfer); }}>
@@ -4226,6 +4407,7 @@ export function VideoEditorWidget() {
             )}
             {!shortMode && [0, 1, 2].map((lane) => (
               <div key={lane} className="relative mt-1" style={laneMusic} data-music-lane={lane}>
+                {regionTints("music")}
                 {lane === 0 && !project.music.length && project.clips.length > 0 && <div className="pointer-events-none absolute inset-0 flex items-center rounded-[3px] border border-dashed border-edge px-2 text-[10.5px] text-faint">Drop music onto the preview, or add it from the Audio tab</div>}
                 {project.music.filter((m) => m.lane === lane).map((m) => (
                   <Fragment key={m.id}>
@@ -4242,6 +4424,7 @@ export function VideoEditorWidget() {
                       }
                       setSelectedMusic(m.id);
                       setSelected(null);
+                      setSelectedRegion(null);
                       setTab("audio");
                     }}
                     className={cn("absolute top-0 h-full cursor-grab truncate rounded-[3px] border px-1.5 text-left text-[11px] active:cursor-grabbing", selectedMusic === m.id ? "border-ink" : "border-transparent", hoverSong === m.media && "ring-2 ring-accent", m.muted && "opacity-40")}
@@ -5465,6 +5648,95 @@ export function VideoEditorWidget() {
                   )}
                   <p className="text-[12px] text-faint">
                     Add as many songs as you like, then shuffle: they are laid end to end from the start of the video to its end, crossfading between them — a liked song comes round about twice as often, a favourite four times, never twice in a row. Opens puts a song first; Closes ends the video with one, the song before it cut where the crossfade begins. Hover a song to see its placements on the lanes, drag a placement to move it, Delete removes the selected one. Shuffle replaces the lanes; ⌘Z brings them back.
+                  </p>
+                </div>
+                )}
+                {!shortMode && (
+                <div className="space-y-2 rounded-[var(--radius-sm)] border border-edge p-2" data-sound-regions>
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                    <span className="font-medium text-ink">Sound regions</span>
+                    <span className="text-[12px] text-faint" data-sound-regions-summary>{describeRegions(project, duration)}</span>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <button type="button" onClick={addRegionAtPlayhead} disabled={!duration} className={GHOST} title="A region from the playhead to the next cut (when that is within 30 s, else 10 s long), with the video's sound only" data-add-region-playhead>
+                      <Plus size={13} /> At the playhead
+                    </button>
+                    <button type="button" onClick={addRegionOverClip} disabled={!current} className={GHOST} title="A region over the selected clip, with the video's sound only" data-add-region-clip>
+                      <Plus size={13} /> Over the selected clip
+                    </button>
+                    <button type="button" onClick={removeAllRegions} disabled={!regions.length} className={cn(GHOST, "hover:border-danger hover:text-danger")} title="Take every region away; the clips and the music play at their own levels again" data-remove-all-regions>
+                      <Trash2 size={13} /> Remove all
+                    </button>
+                  </div>
+                  {regions.length > 0 && (
+                    <ul className="divide-y divide-edge rounded-[var(--radius-sm)] border border-edge" data-region-list>
+                      {regions.map((r, i) => {
+                        const sel = selectedRegion === r.id;
+                        const preset = regionPreset(r);
+                        return (
+                          <li key={r.id} className={cn("space-y-1.5 px-2 py-1.5 text-[12.5px]", sel && "bg-accent/10")} data-region-row={r.id} data-region-preset={preset ?? "custom"} data-region-selected={sel ? "1" : "0"}>
+                            <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                              <button type="button" onClick={() => selectRegion(r.id, true)} className={cn("font-medium text-ink hover:underline", sel && "text-accent")} title="Select the region and go to its start" data-region-select>
+                                {i + 1}. {fmtTime(r.from)}–{fmtTime(r.to)}
+                              </button>
+                              <span className="text-faint tabular">{fmtTime(r.to - r.from)}</span>
+                              <label className="flex items-center gap-1 text-[12px] text-muted">
+                                from
+                                <input type="text" key={`from-${r.from}`} defaultValue={fmtTime(r.from)} onBlur={(e) => { const t = parseTime(e.target.value); if (Number.isFinite(t)) updateRegion(r.id, { from: Math.min(t, r.to - MIN_REGION_SECONDS) }); }} onKeyDown={(e) => { e.stopPropagation(); if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }} className={cn(INPUT, "h-7 w-16 font-mono text-[12px]")} aria-label="Region start" data-region-from />
+                              </label>
+                              <label className="flex items-center gap-1 text-[12px] text-muted">
+                                to
+                                <input type="text" key={`to-${r.to}`} defaultValue={fmtTime(r.to)} onBlur={(e) => { const t = parseTime(e.target.value); if (Number.isFinite(t)) updateRegion(r.id, { to: Math.max(t, r.from + MIN_REGION_SECONDS) }); }} onKeyDown={(e) => { e.stopPropagation(); if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }} className={cn(INPUT, "h-7 w-16 font-mono text-[12px]")} aria-label="Region end" data-region-to />
+                              </label>
+                              <input type="text" value={r.name ?? ""} onChange={(e) => updateRegion(r.id, { name: e.target.value || undefined })} onKeyDown={(e) => e.stopPropagation()} placeholder="a name, if you like" className={cn(INPUT, "h-7 w-36 text-[12px]")} aria-label="Region name" data-region-name />
+                              <button type="button" onClick={() => removeRegion(r.id)} className="ml-auto text-faint hover:text-danger" title="Remove this region" aria-label={`Remove region ${i + 1}`} data-region-remove>
+                                <Trash2 size={13} />
+                              </button>
+                            </div>
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              {REGION_PRESETS.map((p) => (
+                                <button key={p.id} type="button" onClick={() => updateRegion(r.id, { camera: p.camera, music: p.music })} aria-pressed={preset === p.id} className={cn(GHOST, "h-6 px-1.5 text-[11.5px]", preset === p.id && "border-accent text-accent")} title={p.hint} data-region-preset-button={p.id}>
+                                  {p.name}
+                                </button>
+                              ))}
+                              {!preset && <span className="text-[11.5px] text-faint">custom levels</span>}
+                            </div>
+                            <div className="grid gap-x-4 gap-y-1 sm:grid-cols-3">
+                              <label className="block text-[12.5px] text-muted">
+                                <span className="flex items-center justify-between gap-2">
+                                  <span className="flex items-center gap-1">
+                                    <input type="checkbox" checked={r.camera !== null} onChange={(e) => updateRegion(r.id, { camera: e.target.checked ? 0 : null })} className="accent-[var(--accent)]" title="Ticked, the video's own sound plays at this level inside the region; unticked, the clips keep their own levels" data-region-camera-set />
+                                    Video&apos;s sound
+                                  </span>
+                                  <span className="font-mono tabular text-ink" data-region-camera={r.camera ?? "as-is"}>{r.camera === null ? "as the clips are" : fmtDb(r.camera)}</span>
+                                </span>
+                                <input type="range" min={-60} max={12} step={0.5} value={r.camera ?? levels.camera} disabled={r.camera === null} onChange={(e) => updateRegion(r.id, { camera: Number(e.target.value) })} className={cn(RANGE, "mt-1")} aria-label="The video's sound inside the region" data-region-camera-slider />
+                              </label>
+                              <label className="block text-[12.5px] text-muted">
+                                <span className="flex items-center justify-between gap-2">
+                                  <span className="flex items-center gap-1">
+                                    <input type="checkbox" checked={r.music !== null} onChange={(e) => updateRegion(r.id, { music: e.target.checked ? -24 : null })} className="accent-[var(--accent)]" title="Ticked, the music is held under this level inside the region (off at the far left); unticked, it plays as placed" data-region-music-set />
+                                    Music
+                                  </span>
+                                  <span className="font-mono tabular text-ink" data-region-music={r.music ?? "as-is"}>{r.music === null ? "as placed" : fmtDb(r.music)}</span>
+                                </span>
+                                <input type="range" min={-60} max={12} step={0.5} value={r.music ?? levels.music} disabled={r.music === null} onChange={(e) => updateRegion(r.id, { music: Number(e.target.value) })} className={cn(RANGE, "mt-1")} aria-label="The music inside the region" data-region-music-slider />
+                              </label>
+                              <label className="block text-[12.5px] text-muted">
+                                <span className="flex items-center justify-between gap-2">
+                                  Ramp
+                                  <span className="font-mono tabular text-ink" data-region-ramp={r.ramp}>{r.ramp.toFixed(1)} s</span>
+                                </span>
+                                <input type="range" min={0} max={MAX_REGION_RAMP} step={0.1} value={r.ramp} onChange={(e) => updateRegion(r.id, { ramp: Number(e.target.value) })} className={cn(RANGE, "mt-1")} aria-label="Seconds the levels take to change before and after the region" title="The levels ease in over this many seconds before the region and out over as many after it" data-region-ramp-slider />
+                              </label>
+                            </div>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  )}
+                  <p className="text-[12px] text-faint">
+                    Mark the parts of the video that should be heard on their own, or with the music far under them. Inside a region the video&apos;s sound plays at the level set here and the music is held under its own, the change easing in over the ramp before the region and out after it; a muted clip stays silent. Shuffle &amp; fill leaves the parts with the music off empty and starts a fresh song after each; a short cut from these seconds keeps the same regions.
                   </p>
                 </div>
                 )}

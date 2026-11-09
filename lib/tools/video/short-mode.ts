@@ -7,7 +7,7 @@
 import { EXPORT_PRESETS, applyPreset } from "./export-presets";
 import type { Moment } from "./intro";
 import type { PreflightItem } from "./preflight";
-import { GLIMPSE_SECONDS, clipSpeed, newId, newShort, placeClips, timelineDuration, type Clip, type Project, type Short, type Title } from "./project";
+import { GLIMPSE_SECONDS, clipSpeed, newId, newShort, placeClips, regionsBetween, timelineDuration, type Clip, type Project, type Short, type Title } from "./project";
 import { shortMusicOf } from "./short-music";
 export { musicBetween } from "./project";
 import { PLATFORMS, lengthFor, postCopy, safeAreaFor, shortLimits, type PlatformId, type ShortEnv } from "./shorts";
@@ -87,8 +87,9 @@ export function titlesBetween(titles: Title[], from: number, to: number): Title[
 /**
  * The project an export of one short renders: its clips cut to the span (a glimpse loop repeats the first fraction of
  * a second at the end under a short dissolve), its titles moved to start from zero, its own music (already timed from
- * its start; the landscape lanes play no part), the vertical frame, the short's preset and safe area, no range, no
- * review, the quick check — an ordinary Project the engine already knows.
+ * its start; the landscape lanes play no part), the sound regions under its seconds timed from its start, the vertical
+ * frame, the short's preset and safe area, no range, no review, the quick check — an ordinary Project the engine
+ * already knows.
  */
 export function shortProject(project: Project, short: Short): Project {
   const s = clampShort(short, timelineDuration(project));
@@ -114,6 +115,7 @@ export function shortProject(project: Project, short: Short): Project {
     titles: fillTitles(titlesBetween(titlesOf(project.titles, s.id), s.from, s.to), placeholdersFor(project, s)),
     music,
     media,
+    regions: regionsBetween(project.regions, s.from, s.to),
     export: { ...applyPreset(project.export, preset), frame: "9:16", range: null, smartCopy: false, review: "off", check: "quick", tags: { ...project.export.tags, title: s.name } },
     safeArea: safeAreaFor(s.targets as PlatformId[]),
     stops: null,

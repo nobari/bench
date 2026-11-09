@@ -1,11 +1,12 @@
 /**
  * The song library and "Shuffle & fill" of the landscape lanes: every song a project knows, with how it is liked and
  * whether the shuffle may place it; the lay-out of songs end to end over the whole video — the opener first, liked
- * songs more often, the closer ending with the video, crossfades between them — and the ways to clear the lanes or
- * take songs out of the project. Pure arithmetic over the project; the editor owns the state and the files.
+ * songs more often, the closer ending with the video, crossfades between them, the stretches a sound region keeps free
+ * of music left empty — and the ways to clear the lanes or take songs out of the project. Pure arithmetic over the
+ * project; the editor owns the state and the files.
  */
 import type { BeatGrid } from "./beats";
-import { DEFAULT_FILL, DEFAULT_SONG_PREFS, LIKE_WEIGHTS, clampMusicStart, effectiveMusicEnd, fmtTime, musicLength, newId, soundLevels, type FillOrder, type FillSettings, type MediaRef, type MusicTrack, type Project, type SongLike, type SongPrefs } from "./project";
+import { DEFAULT_FILL, DEFAULT_SONG_PREFS, LIKE_WEIGHTS, REGION_PRESETS, effectiveMusicEnd, fmtTime, musicFreeSpans, musicLength, newId, regionPreset, soundLevels, tidyRegions, type FillOrder, type FillSettings, type MediaRef, type MusicTrack, type Project, type SongLike, type SongPrefs, type SoundRegion } from "./project";
 
 /** A song as the library lists it: the file, its preferences and what it covers on the lanes. */
 export interface LibrarySong {
@@ -23,8 +24,10 @@ export interface LibrarySong {
 /** What the library says about each like level. */
 export const LIKE_LABELS: Record<SongLike, string> = { 0: "Like it: placed about twice as often", 1: "Liked · placed about twice as often — click for a favourite, four times", 2: "Favourite · placed about four times as often — click to like it no more than the others" };
 
-/** The least a song cut short before the closer still plays, seconds; a shorter piece is left out. */
+/** The least a song cut short before the closer or a music-free region still plays, seconds; a shorter piece is left out. */
 const MIN_PIECE = 1;
+/** The least a free stretch between music-free regions must span for a song to be placed in it, seconds. */
+const MIN_SPAN = 3;
 
 /** An audio file: it has a length and no picture (the logo has no length). */
 export const isSong = (m: MediaRef) => m.duration > 0 && !m.width && !m.height;
@@ -64,6 +67,30 @@ export function coveredSeconds(music: MusicTrack[], timelineEnd: number): number
   if (to > from) total += to - from;
   return total;
 }
+
+/** Seconds of the video with no music under them outside the stretches kept free of music on purpose. */
+export function silentSeconds(music: MusicTrack[], free: { from: number; to: number }[], timelineEnd: number): number {
+  const spans = music
+    .filter((m) => !m.muted && m.gainDb > -60)
+    .map((m) => [Math.min(m.start, timelineEnd), effectiveMusicEnd(m, timelineEnd)] as [number, number])
+    .filter(([a, b]) => b > a)
+    .sort((x, y) => x[0] - y[0]);
+  const gaps: [number, number][] = [];
+  let at = 0;
+  for (const [a, b] of spans) {
+    if (a > at) gaps.push([at, a]);
+    at = Math.max(at, b);
+  }
+  if (at < timelineEnd) gaps.push([at, timelineEnd]);
+  let total = 0;
+  for (const [a, b] of gaps) {
+    let inFree = 0;
+    for (const f of free) inFree += Math.max(0, Math.min(b, f.to) - Math.max(a, f.from));
+    total += b - a - inFree;
+  }
+  return Math.max(0, total);
+}
+export const freeSeconds = (free: { from: number; to: number }[]) => free.reduce((a, f) => a + Math.max(0, f.to - f.from), 0);
 
 /** The beats found for a song on any of its tracks — the landscape lanes first, then the shorts'. */
 export function beatsOfSong(p: Project, mediaId: string): BeatGrid | null {
@@ -164,14 +191,19 @@ export interface FillPlanOptions {
   last: string | null;
   order: FillOrder;
   weights?: Record<string, number>;
+  /** Stretches kept free of music (regions with the music off): songs stop at their edges and a fresh one starts after. */
+  free?: { from: number; to: number }[];
 }
 
 /**
  * Songs laid end to end over the whole video, all on the first lane: the opener at the start, then the order's songs
  * each overlapping the one before by `overlap` seconds (never more than half a song) for the crossfade, until the
  * video is covered — the last one is cut at the end by playback as usual. With a closer, it sits so that it ends with
- * the video and the song before it is cut where the crossfade into it begins. Templates give each song its trim,
- * gain and fades. Empty when there is nothing to place.
+ * the video and the song before it is cut where the crossfade into it begins. Stretches kept free of music are left
+ * empty: the song reaching one is cut at its edge, the next song in the order starts where that stretch ends, and the order
+ * runs on across it so the weights and the no-repeat rule hold; a free stretch shorter than MIN_SPAN stays empty, and
+ * a closer longer than the last stretch loses its head so it still ends with the video. Templates give each song its
+ * trim, gain and fades. Empty when there is nothing to place.
  */
 export function planFill(songs: Record<string, MediaRef>, templates: Record<string, Omit<MusicTrack, "id" | "start" | "lane">>, pool: MediaRef[], o: FillPlanOptions, rng: () => number = Math.random): MusicTrack[] {
   const end = o.timelineEnd;
@@ -181,50 +213,84 @@ export function planFill(songs: Record<string, MediaRef>, templates: Record<stri
   const poolOk = pool.filter((m) => usable(m.id));
   if (!first && !last && !poolOk.length) return [];
   const ovOf = (t: Omit<MusicTrack, "id" | "start" | "lane">) => Math.min(Math.max(0, o.overlap), musicLength(t as MusicTrack) / 2);
+  // The stretches to fill: the video less what is kept free of music; a sliver between two free stretches stays empty.
+  const spans: { from: number; to: number }[] = [];
+  let at = 0;
+  for (const g of [...(o.free ?? [])].sort((a, b) => a.from - b.from)) {
+    if (g.from > at) spans.push({ from: at, to: Math.min(g.from, end) });
+    at = Math.max(at, g.to);
+  }
+  if (at < end) spans.push({ from: at, to: end });
+  const fillable = spans.filter((s) => spans.length === 1 || s.to - s.from >= MIN_SPAN);
+  if (!fillable.length) return [];
   const out: MusicTrack[] = [];
-  let covered = 0;
-  const place = (id: string, start: number) => {
+  const place = (id: string, start: number, inPoint?: number) => {
     const t = templates[id];
-    const track: MusicTrack = { ...t, id: newId(), lane: 0, start, muted: false, keyframes: [] };
+    const track: MusicTrack = { ...t, id: newId(), lane: 0, start, muted: false, keyframes: [], ...(inPoint !== undefined ? { in: inPoint } : {}) };
     out.push(track);
-    covered = start + musicLength(track);
     return track;
   };
-  // The closer's geometry sets where the fillers must reach: the start of the crossfade into it.
-  const closerLen = last ? musicLength(templates[last] as MusicTrack) : 0;
-  const closerStart = last ? Math.max(0, end - closerLen) : end;
-  const closerOv = last ? ovOf(templates[last]) : 0;
-  const target = last ? closerStart + closerOv : end;
-  const order = songOrder(poolOk, { first, order: o.order, weights: o.weights }, rng);
-  for (let guard = 0; guard < 5000 && covered < target - 1e-6; guard++) {
-    const next = order.next();
-    if (next.done) break;
-    const id = next.value;
-    if (!usable(id)) continue;
-    const t = templates[id];
-    const start = clampMusicStart(out.length ? covered - ovOf(t) : 0, t, end);
-    if (out.length && start <= out[out.length - 1].start) break; // no room left at all
-    place(id, start);
-  }
-  if (!last) return out;
-  // The song before the closer is cut where the crossfade into the closer begins; a sliver is left out instead.
-  // The closer never follows itself: a filler of the same song right before it gives way to another song long enough.
-  const prev = out[out.length - 1];
-  if (prev && prev.media === last && poolOk.length > 1) {
-    const need = target - prev.start;
-    const others = poolOk.filter((m) => m.id !== last && musicLength(templates[m.id] as MusicTrack) >= need);
-    if (others.length) {
-      const swap = others[Math.floor(rng() * others.length)];
-      out[out.length - 1] = { ...templates[swap.id], id: newId(), lane: 0, start: prev.start, muted: false, keyframes: [] };
+  // What runs past a limit is cut there; a sliver is left out instead. Returns how many tracks of the span remain.
+  const cutBack = (limit: number, count: number) => {
+    while (count > 0) {
+      const tail = out[out.length - 1];
+      if (tail.start + musicLength(tail) <= limit + 1e-6) break;
+      const keep = limit - tail.start;
+      if (keep >= MIN_PIECE) {
+        out[out.length - 1] = { ...tail, out: tail.in + keep };
+        break;
+      }
+      out.pop();
+      count--;
     }
+    return count;
+  };
+  const lastSpan = fillable[fillable.length - 1];
+  // The closer's geometry in the last stretch: it ends with the video; a stretch too short for it takes its tail.
+  const closerT = last ? templates[last] : null;
+  const closerLen = closerT ? musicLength(closerT as MusicTrack) : 0;
+  const closerStart = closerT ? Math.max(lastSpan.from, end - closerLen) : end;
+  const closerIn = closerT ? closerT.in + (closerLen - (end - closerStart)) : 0;
+  const closerOv = closerT ? Math.min(ovOf(closerT), (end - closerStart) / 2) : 0;
+  const order = songOrder(poolOk, { first, order: o.order, weights: o.weights }, rng);
+  for (const span of fillable) {
+    const isLast = span === lastSpan;
+    const target = isLast && closerT ? closerStart + closerOv : span.to;
+    let covered = span.from, count = 0;
+    // A last stretch the closer fills on its own (or all but a sliver of) takes no filler before it.
+    const fillers = !(isLast && closerT) || target - span.from >= MIN_SPAN;
+    for (let guard = 0; fillers && guard < 5000 && covered < target - 1e-6; guard++) {
+      const next = order.next();
+      if (next.done) break;
+      const id = next.value;
+      if (!usable(id)) continue;
+      const t = templates[id];
+      const start = count ? Math.max(span.from, covered - ovOf(t)) : span.from;
+      if (count && start <= out[out.length - 1].start) break; // no room left at all
+      place(id, start);
+      count++;
+      covered = start + musicLength(t as MusicTrack);
+    }
+    if (!closerT || !isLast) {
+      // A song reaching a music-free region is cut at its edge; the last one may run past the end of the video, where
+      // playback cuts it as usual.
+      if (span.to < end - 1e-9) cutBack(span.to, count);
+      continue;
+    }
+    // The song before the closer is cut where the crossfade into the closer begins; a sliver is left out instead.
+    // The closer never follows itself: a filler of the same song right before it gives way to another song long enough.
+    const prev = out[out.length - 1];
+    if (count && prev.media === last && poolOk.length > 1) {
+      const need = target - prev.start;
+      const others = poolOk.filter((m) => m.id !== last && musicLength(templates[m.id] as MusicTrack) >= need);
+      if (others.length) {
+        const swap = others[Math.floor(rng() * others.length)];
+        out[out.length - 1] = { ...templates[swap.id], id: newId(), lane: 0, start: prev.start, muted: false, keyframes: [] };
+      }
+    }
+    count = cutBack(target, count);
+    if (!count || closerStart > out[out.length - 1].start) place(last!, closerStart, closerIn > closerT.in + 1e-9 ? closerIn : undefined);
   }
-  const before = out[out.length - 1];
-  if (before && before.start + musicLength(before) > target + 1e-6) {
-    const keep = target - before.start;
-    if (keep >= MIN_PIECE) out[out.length - 1] = { ...before, out: before.in + keep };
-    else out.pop();
-  }
-  if (!out.length || closerStart > out[out.length - 1].start) place(last, closerStart);
   return out;
 }
 
@@ -235,7 +301,7 @@ export function fillProject(p: Project, timelineEnd: number, rng: () => number =
   const songs = Object.fromEntries(library.map((s) => [s.media.id, s.media]));
   const templates = Object.fromEntries(library.map((s) => [s.media.id, songTemplate(p, s.media)]));
   const weights = Object.fromEntries(library.map((s) => [s.media.id, LIKE_WEIGHTS[s.prefs.like]]));
-  const tracks = planFill(songs, templates, fillPool(p), { timelineEnd, overlap: fill.overlap, first: fill.first, last: fill.last, order: fill.order, weights }, rng);
+  const tracks = planFill(songs, templates, fillPool(p), { timelineEnd, overlap: fill.overlap, first: fill.first, last: fill.last, order: fill.order, weights, free: musicFreeSpans(p.regions, timelineEnd) }, rng);
   return tracks.length ? { ...p, music: tracks } : p;
 }
 
@@ -248,6 +314,8 @@ export function describeFill(p: Project, timelineEnd: number): string {
   if (firstName) parts.push(`opens with ${firstName}`);
   if (lastName) parts.push(`closes with ${lastName}`);
   if (fill.overlap > 0) parts.push(`${fill.overlap} s crossfades`);
+  const free = freeSeconds(musicFreeSpans(p.regions, timelineEnd));
+  if (free > 0.5) parts.push(`${fmtTime(free)} kept free of music`);
   return parts.join(" · ");
 }
 
@@ -256,7 +324,28 @@ export function describeLibrary(p: Project, timelineEnd: number): string {
   const library = songLibrary(p, timelineEnd);
   if (!library.length) return "no songs yet";
   const covered = coveredSeconds(p.music, timelineEnd);
-  const gap = Math.max(0, timelineEnd - covered);
+  const free = musicFreeSpans(p.regions, timelineEnd);
+  const gap = silentSeconds(p.music, free, timelineEnd);
+  const kept = freeSeconds(free);
   const head = `${library.length} song${library.length === 1 ? "" : "s"} · ${p.music.length ? `${p.music.length} placement${p.music.length === 1 ? "" : "s"} cover ${fmtTime(covered)} of ${fmtTime(timelineEnd)}` : "nothing on the lanes"}`;
-  return p.music.length && gap > 0.5 ? `${head} · ${fmtTime(gap)} without music` : head;
+  return [head, ...(p.music.length && gap > 0.5 ? [`${fmtTime(gap)} without music`] : []), ...(p.music.length && kept > 0.5 ? [`${fmtTime(kept)} kept free of music`] : [])].join(" · ");
+}
+
+/* ------------------------------------------------------------- sound regions */
+
+const dbText = (v: number) => (v <= -60 ? "off" : `${v > 0 ? "+" : ""}${v} dB`);
+/** A region's mix in a few words: its preset's name, else the two levels. */
+export function regionLabel(r: SoundRegion): string {
+  const preset = regionPreset(r);
+  if (preset) return REGION_PRESETS.find((p) => p.id === preset)!.name;
+  const camera = r.camera === null ? "as the clips are" : dbText(r.camera), music = r.music === null ? "as placed" : dbText(r.music);
+  return `video ${camera} · music ${music}`;
+}
+/** One line about the regions: how many, and the seconds under each kind of mix. */
+export function describeRegions(p: Project, timelineEnd: number): string {
+  const regions = tidyRegions(p.regions ?? [], timelineEnd);
+  if (!regions.length) return "none yet";
+  const by = new Map<string, number>();
+  for (const r of regions) by.set(regionLabel(r), (by.get(regionLabel(r)) ?? 0) + (r.to - r.from));
+  return [`${regions.length} region${regions.length === 1 ? "" : "s"}`, ...[...by.entries()].map(([label, s]) => `${fmtTime(s)} ${label.charAt(0).toLowerCase()}${label.slice(1)}`)].join(" · ");
 }
