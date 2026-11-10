@@ -2019,6 +2019,8 @@ export function VideoEditorWidget() {
   const addMusic = async (inputs: (File | FileSystemFileHandle)[]) => {
     const into = projectRef.current?.mode === "short" ? (activeShortRef.current?.id ?? null) : null;
     let first = true;
+    /** On the landscape lanes: whether each song added found a place (set by the update, which may run twice). */
+    const placed = new Map<string, boolean>();
     for (const h of inputs) {
       const id = newId();
       const f = h instanceof File ? h : await h.getFile();
@@ -2035,13 +2037,23 @@ export function VideoEditorWidget() {
             if (!toShort || !(p.shorts ?? []).some((x) => x.id === toShort)) return { ...p, media };
             return { ...p, media, shorts: (p.shorts ?? []).map((x) => (x.id === toShort ? { ...x, music: [songTrack(ref, 0, shortMusicOf(x)[0] ?? { gainDb: soundLevels(p).music, fadeIn: SHORT_FADE_IN, fadeOut: SHORT_FADE_OUT, muted: false })] } : x)) };
           }
-          return { ...p, media, music: [...p.music, appendMusic(p.music, { id: newId(), media: id, lane: 0, in: 0, out: info.duration, gainDb: soundLevels(p).music, muted: false, fadeIn: 2, fadeOut: 3, keyframes: [] }, 2, timelineDuration(p))] };
+          // A song the lane has no room for is not placed: it stays in the songs, for Shuffle & fill or a later pick.
+          const track = appendMusic(p.music, { id: newId(), media: id, lane: 0, in: 0, out: info.duration, gainDb: soundLevels(p).music, muted: false, fadeIn: 2, fadeOut: 3, keyframes: [] }, 2, timelineDuration(p));
+          placed.set(id, !!track);
+          return track ? { ...p, media, music: [...p.music, track] } : { ...p, media };
         });
         if (toShort) setStatus(`${f.name} plays in ${activeShortRef.current?.name ?? "the short"} — drag the song strip in the Shorts tab, or the bar on the Music lane, to choose where in it the short starts`);
         await decodeMusic(id, f);
       } catch (e) {
         setError(`${f.name}: ${e instanceof Error ? e.message : "couldn't read the file."}`);
       }
+    }
+    const kept = [...placed.values()].filter((on) => !on).length;
+    if (kept) {
+      const on = placed.size - kept;
+      const many = (n: number) => `${n} song${n === 1 ? "" : "s"}`;
+      const why = timelineDuration(projectRef.current ?? project) > 0 ? "the music already reaches the end of the video" : "there is no video yet";
+      setStatus(`${many(placed.size)} added: ${on} on the Music lane, ${kept} kept in Songs without a place — ${why}. Shuffle & fill picks from all of them.`);
     }
     // Remembered like recordings, so music outside the project folder comes back after a reload without asking.
     void store.persistHandles(project.id);

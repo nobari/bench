@@ -1855,26 +1855,18 @@ export function crossfades(music: MusicTrack[]): { a: string; b: string; from: n
   return out;
 }
 
-/** Drop a track so that it overlaps the previous one on the lane by `overlap` seconds. */
 /**
  * Where a new track lands: after the last one on its lane, overlapping by `overlap` seconds for a crossfade. It must
- * start inside the video (see clampMusicStart): a lane that is already full hands the track to the first lane with
- * room, and when every lane is full it goes as late as the video allows on the lane asked for.
+ * start inside the video (see clampMusicStart). When the lane already reaches the end of the video there is no place
+ * for it and the answer is null: the song stays in the project's songs, unplaced. It is never handed to another lane,
+ * where it would play on top of the music already there — a second lane is the user's choice, not a spill-over.
  */
-export function appendMusic(music: MusicTrack[], track: Omit<MusicTrack, "start">, overlap = 2, timelineEnd = Infinity): MusicTrack {
+export function appendMusic(music: MusicTrack[], track: Omit<MusicTrack, "start">, overlap = 2, timelineEnd = Infinity): MusicTrack | null {
   const latest = timelineEnd === Infinity ? Infinity : clampMusicStart(Infinity, track, timelineEnd);
-  const startOn = (lane: number) => {
-    const on = music.filter((m) => m.lane === lane);
-    const end = on.reduce((m, t) => Math.max(m, t.start + musicLength(t)), 0);
-    return Math.max(0, end - (on.length ? overlap : 0));
-  };
-  const own = startOn(track.lane);
-  if (own <= latest) return { ...track, start: own };
-  for (const lane of [0, 1, 2]) {
-    const start = startOn(lane);
-    if (start <= latest) return { ...track, lane, start };
-  }
-  return { ...track, start: latest };
+  const on = music.filter((m) => m.lane === track.lane);
+  const end = on.reduce((m, t) => Math.max(m, t.start + musicLength(t)), 0);
+  const start = Math.max(0, end - (on.length ? overlap : 0));
+  return start <= latest ? { ...track, start } : null;
 }
 
 /* ---------------------------------------------------------- export plan */
