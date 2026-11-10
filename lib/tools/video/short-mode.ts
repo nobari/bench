@@ -7,14 +7,14 @@
 import { EXPORT_PRESETS, applyPreset } from "./export-presets";
 import type { Moment } from "./intro";
 import type { PreflightItem } from "./preflight";
-import { GLIMPSE_SECONDS, clipSpeed, newId, newShort, placeClips, regionsBetween, timelineDuration, zoomsBetween, type Clip, type Project, type Short, type Title } from "./project";
+import { GLIMPSE_SECONDS, MIN_LABEL_SECONDS, clipSpeed, labelsBetween, newId, newShort, placeClips, regionsBetween, timelineDuration, zoomsBetween, type Clip, type Label, type Project, type Short, type Title } from "./project";
 import { shortMusicOf } from "./short-music";
 export { musicBetween } from "./project";
 import { PLATFORMS, lengthFor, postCopy, safeAreaFor, shortLimits, type PlatformId, type ShortEnv } from "./shorts";
 import { candidatesIn, stretches } from "./shortplan";
 import { shortFolderName } from "./shortset";
 import { fillTitles, placeholdersFor } from "./title-tools";
-import { videoTemplate } from "./template";
+import { LABELS_INSTRUCTION, videoTemplate } from "./template";
 import { titlesTemplate } from "./project";
 
 /** The sub-folder of the project folder the shorts' files go into. */
@@ -47,10 +47,15 @@ export const titlesOf = (titles: Title[], shortId: string) => titles.filter((t) 
 export function viewFor(project: Project, short: Short | null): Project {
   if (!short) {
     const titles = fillTitles(landscapeTitles(project.titles), placeholdersFor(project, null));
-    return titles.length === project.titles.length && titles.every((t, i) => t === project.titles[i]) ? project : { ...project, titles };
+    const sameTitles = titles.length === project.titles.length && titles.every((t, i) => t === project.titles[i]);
+    const tagged = !!project.labels?.some((l) => l.short);
+    return sameTitles && !tagged ? project : { ...project, titles: sameTitles ? project.titles : titles, ...(tagged ? { labels: labelsOf(project.labels, null) } : {}) };
   }
-  return { ...project, titles: fillTitles(titlesOf(project.titles, short.id), placeholdersFor(project, short)), safeArea: safeAreaFor(short.targets as PlatformId[]) };
+  return { ...project, titles: fillTitles(titlesOf(project.titles, short.id), placeholdersFor(project, short)), ...(project.labels ? { labels: labelsOf(project.labels, short.id) } : {}), safeArea: safeAreaFor(short.targets as PlatformId[]) };
 }
+
+/** The labels one mode shows and exports: a short's own (tagged with its id), or the landscape edit's (untagged). */
+export const labelsOf = (labels: Label[] | undefined, shortId: string | null) => (labels ?? []).filter((l) => (shortId ? l.short === shortId : !l.short));
 
 /** The timeline's clips between two instants, trimmed at both ends; the first loses its incoming transition. */
 export function clipsBetween(clips: Clip[], from: number, to: number): Clip[] {
@@ -86,7 +91,7 @@ export function titlesBetween(titles: Title[], from: number, to: number): Title[
 
 /**
  * The project an export of one short renders: its clips cut to the span (a glimpse loop repeats the first fraction of
- * a second at the end under a short dissolve), its titles moved to start from zero, its own music (already timed from
+ * a second at the end under a short dissolve), its titles and labels moved to start from zero, its own music (already timed from
  * its start; the landscape lanes play no part), the sound regions and zooms under its seconds timed from its start, the vertical
  * frame, the short's preset and safe area, no range, no review, the quick check — an ordinary Project the engine
  * already knows.
@@ -104,7 +109,8 @@ export function shortProject(project: Project, short: Short): Project {
     clips.push({ ...rest, id: newId(), in: first.in, out: Math.min(first.out, first.in + GLIMPSE_SECONDS * speed), transitionIn: { kind: "dissolve", duration: Math.min(0.3, GLIMPSE_SECONDS * 0.75) } });
   }
   const music = shortMusicOf(s, project.media);
-  const used = new Set<string>([...clips.map((c) => c.media), ...music.map((m) => m.media), ...(project.watermark.media ? [project.watermark.media] : [])]);
+  const labels = labelsBetween(labelsOf(project.labels, s.id), s.from, s.to);
+  const used = new Set<string>([...clips.map((c) => c.media), ...music.map((m) => m.media), ...labels.flatMap((l) => (l.media ? [l.media] : [])), ...(project.watermark.media ? [project.watermark.media] : [])]);
   const media = Object.fromEntries(Object.entries(project.media).filter(([id]) => used.has(id)));
   const preset = SHORT_PRESETS.includes(s.preset ?? "") ? s.preset! : DEFAULT_SHORT_PRESET;
   return {
@@ -117,6 +123,7 @@ export function shortProject(project: Project, short: Short): Project {
     media,
     regions: regionsBetween(project.regions, s.from, s.to),
     zooms: zoomsBetween(project.zooms, s.from, s.to),
+    ...(project.labels ? { labels } : {}),
     export: { ...applyPreset(project.export, preset), frame: "9:16", range: null, smartCopy: false, review: "off", check: "quick", tags: { ...project.export.tags, title: s.name } },
     safeArea: safeAreaFor(s.targets as PlatformId[]),
     stops: null,
@@ -225,7 +232,12 @@ export function shortTemplateProject(project: Project, short: Short): Project {
     void tag;
     return rest;
   });
-  return { ...derived, titles };
+  const labels = (derived.labels ?? []).map((l) => {
+    const { short: tag, ...rest } = l;
+    void tag;
+    return rest;
+  });
+  return { ...derived, titles, ...(derived.labels ? { labels } : {}) };
 }
 
 /**
@@ -247,8 +259,10 @@ export function shortTemplate(project: Project, short: Short): Record<string, un
     ...rest,
     options,
     instructions: [
-      `This file describes one short cut from the timeline: "${s.name}"${index ? ` (part ${index} of ${shorts.length})` : ""}, ${seconds} s long. Every start is in seconds from the short's own start, 0 to ${seconds}; the import puts the titles into this short alone. Placeholders stay as written and are filled per short: {part}, {of}, {name}, {date}, {short}. A short has no intro section.`,
-      ...titlesPart.instructions.slice(1),
+      `This file describes one short cut from the timeline: "${s.name}"${index ? ` (part ${index} of ${shorts.length})` : ""}, ${seconds} s long. Every start is in seconds from the short's own start, 0 to ${seconds}; the import puts the titles and the labels into this short alone. Placeholders stay as written and are filled per short: {part}, {of}, {name}, {date}, {short}. A short has no intro section.`,
+      ...titlesPart.instructions.slice(1, -1),
+      LABELS_INSTRUCTION,
+      ...titlesPart.instructions.slice(-1),
     ],
     short: {
       name: s.name,
@@ -272,5 +286,16 @@ export function titlesIntoShort(titles: Title[], short: Short): Title[] {
     if (start >= short.to) start = Math.max(short.from, short.to - Math.min(t.duration, len));
     const duration = Math.max(0.1, Math.min(t.duration, short.to - start));
     return { ...t, start: Math.round(start * 1e3) / 1e3, duration: Math.round(duration * 1e3) / 1e3, short: short.id };
+  });
+}
+
+/** Labels read from a short's template put onto the timeline: moved to the short's start, kept inside it, tagged as its. */
+export function labelsIntoShort(labels: Label[], short: Short): Label[] {
+  const len = short.to - short.from;
+  return labels.map((l) => {
+    let start = short.from + Math.max(0, l.start);
+    if (start >= short.to) start = Math.max(short.from, short.to - Math.min(l.duration, len));
+    const duration = Math.max(MIN_LABEL_SECONDS, Math.min(l.duration, short.to - start));
+    return { ...l, start: Math.round(start * 1e3) / 1e3, duration: Math.round(duration * 1e3) / 1e3, fade: Math.min(l.fade, duration / 2), short: short.id };
   });
 }

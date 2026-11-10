@@ -2,7 +2,7 @@
 
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import Link from "next/link";
-import { AlertTriangle, Camera, ChevronDown, ChevronRight, ChevronUp, Sparkles, Clapperboard, Crop, Download, FolderOpen, Gauge, Heart, Loader, Maximize2, Minimize2, Music, Pause, Play, Plus, Repeat, Save, Scissors, SkipBack, SkipForward, SlidersHorizontal, Smartphone, Square, StepBack, StepForward, Trash2, Type, Upload, Volume2, VolumeX, Keyboard, Search, Shuffle, X, ZoomIn } from "lucide-react";
+import { AlertTriangle, Camera, ImageIcon, ChevronDown, ChevronRight, ChevronUp, Sparkles, Clapperboard, Crop, Download, FolderOpen, Gauge, Heart, Loader, Maximize2, Minimize2, Music, Pause, Play, Plus, Repeat, Save, Scissors, SkipBack, SkipForward, SlidersHorizontal, Smartphone, Square, StepBack, StepForward, Trash2, Type, Upload, Volume2, VolumeX, Keyboard, Search, Shuffle, X, ZoomIn } from "lucide-react";
 import { makeRoomForAll, makeRoomForTransition, newShort, timelineDuration as shortTimelineDuration, type EditorMode, type Short } from "@/lib/tools/video/project";
 import { DEFAULT_SHORT_SECONDS, MIN_SHORT_SECONDS, SHORTS_FOLDER, clampShort, seamCandidates, seamScore, shortBytes, shortChecks, shortFileName, shortPostText, shortProject, shortStem, shortTemplate, shortTemplateProject, shortsFromMoments, suggestWindows, titlesIntoShort, viewFor } from "@/lib/tools/video/short-mode";
 import { scoreMoments as scoreShortMoments } from "@/lib/tools/video/intro";
@@ -31,7 +31,10 @@ import { INTRO_STYLES, addSceneAt, buildIntro, describeIntro, drawIntroFx, hasIn
 import { ProjectStore, hasFileSystemAccess, AUTOSAVE_FILE, FRAMES_DIR, PROJECT_FILE, PROXY_DIR } from "@/lib/tools/video/store";
 import { cn } from "@/lib/utils";
 import { DEFAULT_STOPS, cutOutStops, stillRuns, stillThreshold, stopKey, stopsOnTimeline, stopsTotal, type Still, type StopScan } from "@/lib/tools/video/stops";
-import { parseTemplateImport, videoTemplate } from "@/lib/tools/video/template";
+import { parseArtSource, parseTemplateImport, videoTemplate, type LabelsImport } from "@/lib/tools/video/template";
+import { artTypeOf, fileArt, loadArt, logoBitmap, type LabelArtMap, type LoadedArt } from "@/lib/tools/video/label-art";
+import { LABEL_ENTERS, LABEL_LOOPS, MAX_ART_BYTES, MIN_LABEL_SECONDS, artBytes, artKey, labelBox, labelName, labelSource, newLabel, normalizeLabel, uniqueArtName, withLabels, type Label, type LabelArt, type LabelEnter, type LabelLoop } from "@/lib/tools/video/project";
+import { labelsIntoShort } from "@/lib/tools/video/short-mode";
 import { useUnsavedWork } from "@/lib/unsaved-work";
 import { useKeepAwake } from "@/lib/keep-awake";
 import { audioBytesFor, isSpaceError, joinMode, joinNeed, partNeed, roomAdvice, SpaceStop } from "@/lib/tools/video/space";
@@ -295,17 +298,20 @@ const FRAME_KINDS: Record<FrameKind, { label: string; note: string; height?: num
   png: { label: "Full size · PNG, lossless", note: "source resolution, large file (Alt+S)", type: "image/png", ext: "png" },
 };
 
-function Slider({ label, value, min, max, step, onChange, format }: { label: string; value: number; min: number; max: number; step: number; onChange: (v: number) => void; format?: (v: number) => string }) {
+function Slider({ label, value, min, max, step, onChange, format, reset }: { label: string; value: number; min: number; max: number; step: number; onChange: (v: number) => void; format?: (v: number) => string; reset?: number }) {
   return (
     <label className="block text-[12.5px] text-muted">
       <span className="flex items-center justify-between">
         {label}
         <span className="font-mono tabular text-ink">{format ? format(value) : value}</span>
       </span>
-      <input type="range" min={min} max={max} step={step} value={value} onChange={(e) => onChange(Number(e.target.value))} onDoubleClick={() => onChange((min + max) / 2 === 0.5 ? 1 : 0)} title="Double-click to reset" className={cn(RANGE, "mt-1")} />
+      <input type="range" min={min} max={max} step={step} value={value} onChange={(e) => onChange(Number(e.target.value))} onDoubleClick={() => onChange(reset ?? ((min + max) / 2 === 0.5 ? 1 : 0))} title="Double-click to reset" className={cn(RANGE, "mt-1")} />
     </label>
   );
 }
+
+/** The weight of a small picture: bytes, then kB and MB to one decimal. */
+const artSize = (n: number) => (n < 1024 ? `${n} bytes` : n < 1024 * 1024 ? `${(n / 1024).toFixed(1)} kB` : `${(n / 1024 / 1024).toFixed(1)} MB`);
 
 /** A drag on a lane of spans (sound regions, zooms): the span moved or trimmed, or a new one being drawn. */
 type SpanDrag = { id: string | null; kind: "move" | "from" | "to" | "draw"; startT: number; from: number; to: number; moved: boolean };
@@ -375,6 +381,17 @@ export function VideoEditorWidget() {
   useKeepAwake(!!job, "bench-video-job");
   const [support, setSupport] = useState<{ hevc: boolean; avc: boolean } | null>(null);
   const [logo, setLogo] = useState<ImageBitmap | null>(null);
+  // Labels: their pictures once decoded (by source), the one being edited, a drag under way and the paste box.
+  const [labelArt, setLabelArt] = useState<LabelArtMap>(() => new Map());
+  const [artProblems, setArtProblems] = useState<Record<string, string>>({});
+  const [selectedLabel, setSelectedLabel] = useState<string | null>(null);
+  const [labelDrag, setLabelDrag] = useState<{ id: string; patch: Partial<Label> } | null>(null);
+  const [labelPaste, setLabelPaste] = useState<string | null>(null);
+  const labelInput = useRef<HTMLInputElement>(null);
+  const labelArtRef = useRef<LabelArtMap>(new Map());
+  const artLoading = useRef(new Set<string>());
+  const labelBarRef = useRef<{ id: string; mode: "move" | "start" | "end"; x: number; start: number; duration: number; patch: Partial<Label> | null } | null>(null);
+  const labelBoxRef = useRef<{ id: string; x: number; y: number; offsetX: number; offsetY: number; w: number; h: number; patch: Partial<Label> | null } | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -693,6 +710,9 @@ export function VideoEditorWidget() {
     setSelectedTitle(null);
     setSelectedTransition(null);
     setLogo(null);
+    setSelectedLabel(null);
+    setLabelDrag(null);
+    setLabelPaste(null);
     setPlayhead(0);
     setError(null);
     setClearOpen(false);
@@ -721,7 +741,7 @@ export function VideoEditorWidget() {
   const placed = useMemo(() => placeClips(project.clips), [project.clips]);
   const windows = useMemo(() => transitionWindows(placed, project.media), [placed, project.media]);
   const selectedWindow = useMemo(() => windows.find((w) => w.incoming.id === selectedTransition) ?? null, [windows, selectedTransition]);
-  const titleLaneOf = useMemo(() => titleLanes(project.titles), [project.titles]);
+  const titleLaneOf = useMemo(() => titleLanes([...project.titles, ...(project.labels ?? [])]), [project.titles, project.labels]);
   /* ------------------------------------------------------------ Short mode: the shorts on this timeline */
   const shorts = useMemo(() => project.shorts ?? [], [project.shorts]);
   const shortMode = project.mode === "short";
@@ -738,6 +758,8 @@ export function VideoEditorWidget() {
   const view = useMemo(() => viewFor(project, shortMode ? activeShort : null), [project, shortMode, activeShort]);
   /** What the landscape export renders: never a short's titles. */
   const landscape = useMemo(() => viewFor(project, null), [project]);
+  // What the preview draws: the view, with a label that is being dragged where the drag has it.
+  const drawnView = useMemo(() => (labelDrag && view.labels ? { ...view, labels: view.labels.map((l) => (l.id === labelDrag.id ? { ...l, ...labelDrag.patch } : l)) } : view), [view, labelDrag]);
   /** The frame the preview composes: the phone's in Short mode, else the export's. */
   const previewFrame = shortMode ? "9:16" : project.export.frame;
   const framedPreview = framed(previewFrame);
@@ -1473,7 +1495,7 @@ export function VideoEditorWidget() {
       const spec = FRAME_KINDS[kind];
       setJob({ kind: "frame", label: "Saving frame", message: `${fmtMs(t)} · ${spec.label} — decoding the source frame, grading it and encoding…`, fraction: 0.5, abort: new AbortController() });
       try {
-        const frame = await renderFrame({ project: view, getFile: (id) => store.getFile(id), logo, t, height: spec.height, type: spec.type, quality: spec.quality });
+        const frame = await renderFrame({ project: view, getFile: (id) => store.getFile(id), logo, labelArt, t, height: spec.height, type: spec.type, quality: spec.quality });
         const name = `${project.name.replace(/[^\w-]+/g, "-")}-${fmtMs(t).replace(/[:.]/g, "-")}${kind === "thumb" ? `-${frame.width}x${frame.height}` : ""}.${spec.ext}`;
         const facts = `${frame.width}×${frame.height} ${spec.type === "image/png" ? "PNG" : "JPEG"}, ${fmtBytes(frame.blob.size)}, from ${frame.clipName} at ${fmtMs(frame.sourceTime)}`;
         if (store.hasFolder) {
@@ -1496,7 +1518,7 @@ export function VideoEditorWidget() {
         setJob(null);
       }
     },
-    [project, view, job, store, logo],
+    [project, view, job, store, logo, labelArt],
   );
 
   useEffect(() => {
@@ -1569,6 +1591,14 @@ export function VideoEditorWidget() {
       setSelectedRegion(null);
       return true;
     },
+    /** The selected label off the picture (Delete when nothing else is selected). */
+    deleteSelectedLabel: () => {
+      if (!selectedLabel) return false;
+      const id = selectedLabel;
+      setProject((p) => withLabels(p, (p.labels ?? []).filter((l) => l.id !== id)));
+      setSelectedLabel(null);
+      return true;
+    },
     /** The selected zoom off the Zoom lane (Delete when nothing else is selected). */
     deleteSelectedZoom: () => {
       if (!selectedZoom) return false;
@@ -1626,7 +1656,7 @@ export function VideoEditorWidget() {
         setSelectedTransition(null);
       } else if ((e.key === "Delete" || e.key === "Backspace") && !inField(e) && !e.metaKey && !e.ctrlKey) {
         e.preventDefault();
-        if (!e.repeat && !trimActionsRef.current.deleteSelected() && !trimActionsRef.current.deleteSelectedMusic() && !trimActionsRef.current.deleteSelectedRegion()) trimActionsRef.current.deleteSelectedZoom();
+        if (!e.repeat && !trimActionsRef.current.deleteSelected() && !trimActionsRef.current.deleteSelectedMusic() && !trimActionsRef.current.deleteSelectedRegion() && !trimActionsRef.current.deleteSelectedZoom()) trimActionsRef.current.deleteSelectedLabel();
       } else if (e.key === "Control" && !inField(e)) {
         if (!e.repeat) beginSkim();
       } else if (e.key === " " && !inField(e)) {
@@ -1653,6 +1683,7 @@ export function VideoEditorWidget() {
           setSelectedTransition(null);
           setSelectedRegion(null);
           setSelectedZoom(null);
+          setSelectedLabel(null);
         }
         else if (e.key === "m" || e.key === "M") setPreviewMuted((m) => !m);
         else if (e.key === "s" || e.key === "S") void saveFrame(e.altKey ? "png" : e.shiftKey ? "jpeg" : "thumb");
@@ -2023,17 +2054,60 @@ export function VideoEditorWidget() {
     let active = true;
     void store
       .getFile(id)
-      .then((f) => f && createImageBitmap(f).then((bmp) => active && setLogo(bmp)))
+      .then((f) => f && logoBitmap(f).then((bmp) => active && setLogo(bmp)))
       .catch(() => undefined);
     return () => {
       active = false;
     };
   }, [project.watermark.media, logo, store, filesVersion]);
+  // The labels' pictures: each source decoded once, kept while a label uses it, made anew when its file comes back.
+  const labelSources = useMemo(() => [...new Set((project.labels ?? []).map(labelSource))].filter(Boolean).sort().join("|"), [project.labels]);
+  useEffect(() => {
+    labelArtRef.current = labelArt;
+  }, [labelArt]);
+  useEffect(() => {
+    const wanted = labelSources ? labelSources.split("|") : [];
+    let active = true;
+    void Promise.resolve().then(() => {
+      if (!active) return;
+      setLabelArt((prev) => {
+        const gone = [...prev.keys()].filter((k) => !wanted.includes(k));
+        if (!gone.length) return prev;
+        const next = new Map(prev);
+        for (const k of gone) next.delete(k);
+        // Nothing draws them any more once this render has gone by.
+        setTimeout(() => gone.forEach((k) => prev.get(k)?.dispose()), 1000);
+        return next;
+      });
+    });
+    for (const src of wanted) {
+      if (labelArtRef.current.has(src) || artLoading.current.has(src)) continue;
+      artLoading.current.add(src);
+      const key = src.slice(src.indexOf(":") + 1);
+      void (async () => {
+        try {
+          const source = src.startsWith("art:") ? projectRef.current?.art?.[key] : await store.getFile(key);
+          // A file that is not at hand is in the missing-files notice; it is tried again when files come back.
+          if (!source) return;
+          const loaded = await loadArt(source);
+          setLabelArt((prev) => (prev.has(src) ? prev : new Map(prev).set(src, loaded)));
+          setArtProblems((x) => (src in x ? Object.fromEntries(Object.entries(x).filter(([k]) => k !== src)) : x));
+        } catch (e) {
+          setArtProblems((x) => ({ ...x, [src]: e instanceof Error ? e.message : String(e) }));
+        } finally {
+          artLoading.current.delete(src);
+        }
+      })();
+    }
+    return () => {
+      active = false;
+    };
+  }, [labelSources, filesVersion, store]);
   const addLogo = async (h: File | FileSystemFileHandle) => {
     const id = newId();
     const f = h instanceof File ? h : await h.getFile();
     store.registerFile(id, h);
-    const bmp = await createImageBitmap(f);
+    const bmp = await logoBitmap(f);
     setLogo(bmp);
     const where = (await store.whereIs(h)) ?? undefined;
     setProject((p) => ({ ...p, media: { ...p.media, [id]: { id, name: f.name, size: f.size, duration: 0, ...(where ? { where } : {}) } }, watermark: { ...p.watermark, media: id } }));
@@ -2258,7 +2332,7 @@ export function VideoEditorWidget() {
             if (!fxScratchRef.current || fxScratchRef.current.w !== w || fxScratchRef.current.h !== h) fxScratchRef.current = { a: new OffscreenCanvas(w, h), b: new OffscreenCanvas(w, h), w, h };
             drawIntroFx(ctx, w, h, intro, project, fxScratchRef.current, introBlendAt(project, placed, tr, playhead));
           }
-          if (!pictureView) drawOverlays(ctx as unknown as OffscreenCanvasRenderingContext2D, w, h, playhead, view, logo);
+          if (!pictureView) drawOverlays(ctx as unknown as OffscreenCanvasRenderingContext2D, w, h, playhead, drawnView, logo, labelArt);
           // Steady lights, as the export will do it: only while playing, when frames arrive in order.
           const steadyFrames = STEADY_FRAMES[project.export.steadyLights ?? "off"];
           if (steadyFrames && playing) {
@@ -2284,7 +2358,7 @@ export function VideoEditorWidget() {
     };
     raf = requestAnimationFrame(draw);
     return () => cancelAnimationFrame(raf);
-  }, [under, playhead, project, view, shortMode, pictureView, pickingZoom, previewFrame, placed, logo, duration, windows, playing, rate, previewUrlFor, customLut, fileLuts, timelineMusic, musicEnd]);
+  }, [under, playhead, project, drawnView, labelArt, shortMode, pictureView, pickingZoom, previewFrame, placed, logo, duration, windows, playing, rate, previewUrlFor, customLut, fileLuts, timelineMusic, musicEnd]);
 
   // Grade, crop and audio changes reach every clip of a joined run, so a hidden cut stays invisible.
   const update = (id: string, patch: Partial<Clip>) => setProject((p) => ({ ...p, clips: updateClip(p.clips, id, patch) }));
@@ -2649,16 +2723,29 @@ export function VideoEditorWidget() {
         const x = activeShort;
         const parsed = parseTemplateImport(text, shortTemplateProject(project, x));
         const mapped = titlesIntoShort(parsed.titles, x);
-        if (mapped.length) setProject((p) => ({ ...p, titles: [...(importReplace ? p.titles.filter((t) => t.short !== x.id) : p.titles), ...mapped] }));
+        // The short's labels: placed inside it and tagged as its own, with whatever art they brought.
+        const pictures = await checkImportedLabels(parsed.labels, parsed.warnings);
+        const mappedLabels = pictures ? labelsIntoShort(pictures.labels, x) : [];
+        if (mapped.length || pictures)
+          setProject((p) => {
+            const next = mapped.length ? { ...p, titles: [...(importReplace ? p.titles.filter((t) => t.short !== x.id) : p.titles), ...mapped] } : p;
+            return pictures ? withLabels(next, [...(importReplace ? (next.labels ?? []).filter((l) => l.short !== x.id) : (next.labels ?? [])), ...mappedLabels], { ...(next.art ?? {}), ...pictures.art }) : next;
+          });
         if (mapped[0]) setSelectedTitle(mapped[0].id);
-        setStatus(`Imported ${mapped.length} title${mapped.length === 1 ? "" : "s"} into ${x.name} from ${fileName}${parsed.intro ? " — the intro section was left alone, a short has none" : ""}${parsed.warnings.length ? ` with ${parsed.warnings.length} note${parsed.warnings.length === 1 ? "" : "s"}` : ""}`);
+        setStatus(`Imported ${mapped.length} title${mapped.length === 1 ? "" : "s"}${pictures ? ` and ${mappedLabels.length} label${mappedLabels.length === 1 ? "" : "s"}` : ""} into ${x.name} from ${fileName}${parsed.intro ? " — the intro section was left alone, a short has none" : ""}${parsed.warnings.length ? ` with ${parsed.warnings.length} note${parsed.warnings.length === 1 ? "" : "s"}` : ""}`);
         if (parsed.warnings.length) setError(`Import notes: ${parsed.warnings.join(" · ")}`);
         return;
       }
-      const { titles, intro, warnings } = parseTemplateImport(text, project);
+      const { titles, intro, labels: labelsPart, warnings } = parseTemplateImport(text, project);
       let next: Project = titles.length ? { ...project, titles: importReplace ? titles : [...project.titles, ...titles] } : project;
       const notes: string[] = [];
       if (titles.length) notes.push(`${titles.length} title${titles.length === 1 ? "" : "s"}`);
+      // Labels: the landscape edit's are replaced or joined; the shorts' own stay.
+      const pictures = await checkImportedLabels(labelsPart, warnings);
+      if (pictures && (pictures.labels.length || importReplace)) {
+        next = withLabels(next, [...(importReplace ? (next.labels ?? []).filter((l) => l.short) : (next.labels ?? [])), ...pictures.labels], { ...(next.art ?? {}), ...pictures.art });
+        if (pictures.labels.length) notes.push(`${pictures.labels.length} label${pictures.labels.length === 1 ? "" : "s"}`);
+      }
       let makeScenes = 0;
       if (intro) {
         if (!intro.enabled) {
@@ -2695,6 +2782,184 @@ export function VideoEditorWidget() {
     setSelectedTitle((s) => (s === id ? null : s));
   };
   const patchTitle = (id: string, patch: Partial<Title>) => setProject((p) => ({ ...p, titles: p.titles.map((x) => (x.id === id ? { ...x, ...patch } : x)) }));
+
+  /* ---- labels: pictures on the video */
+  const r3 = (v: number) => Math.round(v * 1e3) / 1e3;
+  // Opening a label parks the playhead where it is fully in, so the preview shows it and it can be dragged into place.
+  const focusLabel = (l: Label | null) => {
+    setSelectedLabel(l?.id ?? null);
+    if (l) {
+      // The one thing selected, so Delete takes the label and nothing else.
+      setSelected(null);
+      setSelectedMusic(null);
+      setSelectedRegion(null);
+      setSelectedZoom(null);
+      setPlayhead(Math.min(duration, l.start + Math.min(l.fade, l.duration / 2)));
+      setSeekToken((x) => x + 1);
+    }
+  };
+  /** A new label at the playhead, five seconds long or to the end of the video (or of the short it belongs to). */
+  const labelHere = (source: { art: string } | { media: string }): Label => {
+    const start = titleAt();
+    const end = shortMode && activeShort ? activeShort.to : duration;
+    const length = Math.max(MIN_LABEL_SECONDS, Math.min(5, end - start > MIN_LABEL_SECONDS ? end - start : 5));
+    return { ...newLabel(source, r3(start)), duration: r3(length), fade: Math.min(0.4, length / 2), ...(shortMode && activeShort ? { short: activeShort.id } : {}) };
+  };
+  const artMeta = (a: LoadedArt) => ({ width: a.width, height: a.height, ...(a.seconds ? { seconds: r3(a.seconds) } : {}) });
+  /** Art kept in the project (SVG markup or base64): decoded first, so only a picture that draws becomes a label. */
+  const addLabelArt = async (art: Pick<LabelArt, "type" | "data">, name: string): Promise<string> => {
+    const key = artKey(art.type, art.data), src = `art:${key}`;
+    const loaded = labelArtRef.current.get(src) ?? (await loadArt(art));
+    setLabelArt((prev) => (prev.has(src) ? prev : new Map(prev).set(src, loaded)));
+    const l = labelHere({ art: key });
+    setProject((p) => withLabels(p, [...(p.labels ?? []), l], { ...(p.art ?? {}), [key]: p.art?.[key] ?? { name: uniqueArtName(Object.values(p.art ?? {}).map((a) => a.name), name), ...art, ...artMeta(loaded) } }));
+    setTab("titles");
+    focusLabel(l);
+    setStatus(loaded.note ?? `Label added at ${fmtTime(l.start)}: drag it on the preview to place it`);
+    return l.id;
+  };
+  /** A picture from disk: remembered by its handle like the logo and the music; without a handle, a small one is kept in the project. */
+  const addLabelFile = async (h: File | FileSystemFileHandle): Promise<string | null> => {
+    try {
+      const f = h instanceof File ? h : await h.getFile();
+      if (!artTypeOf(f)) throw new Error(`${f.name} is not an SVG, PNG, JPEG, WebP or GIF.`);
+      if (h instanceof File && f.size <= MAX_ART_BYTES) return await addLabelArt(await fileArt(f), f.name.replace(/\.[a-z0-9]+$/i, ""));
+      const loaded = await loadArt(f);
+      const id = newId();
+      store.registerFile(id, h);
+      setLabelArt((prev) => new Map(prev).set(`media:${id}`, loaded));
+      const where = (await store.whereIs(h)) ?? undefined;
+      const l = labelHere({ media: id });
+      setProject((p) => withLabels({ ...p, media: { ...p.media, [id]: { id, name: f.name, size: f.size, duration: 0, width: loaded.width, height: loaded.height, ...(where ? { where } : {}) } } }, [...(p.labels ?? []), l]));
+      void store.persistHandles(project.id);
+      setTab("titles");
+      focusLabel(l);
+      setStatus(loaded.note ?? `Label added at ${fmtTime(l.start)}: drag it on the preview to place it`);
+      return l.id;
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      return null;
+    }
+  };
+  const pickLabel = async () => {
+    const picker = (window as unknown as { showOpenFilePicker?: (o: unknown) => Promise<FileSystemFileHandle[]> }).showOpenFilePicker;
+    if (!picker) return void labelInput.current?.click();
+    try {
+      const [h] = await picker({ multiple: false, types: [{ description: "Image, SVG or GIF", accept: { "image/*": [".svg", ".png", ".jpg", ".jpeg", ".webp", ".gif"] } }] });
+      if (h) await addLabelFile(h);
+    } catch (e) {
+      if ((e as DOMException).name !== "AbortError") setError(e instanceof Error ? e.message : String(e));
+    }
+  };
+  /** SVG markup, a data URI or bare base64, typed or pasted. */
+  const addLabelText = async (text: string, name = "Pasted art"): Promise<string | null> => {
+    const parsed = parseArtSource(text);
+    if (typeof parsed === "string") return (setError(`That cannot be used as a label: ${parsed}.`), null);
+    try {
+      const id = await addLabelArt(parsed, name);
+      setLabelPaste(null);
+      return id;
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      return null;
+    }
+  };
+  /** The pictures an export of `p` needs, every one loaded: a label that cannot be drawn stops the export with its name rather than being left out of the file. */
+  const artFor = async (p: Project): Promise<LabelArtMap> => {
+    const map = new Map(labelArtRef.current);
+    for (const l of p.labels ?? []) {
+      const src = labelSource(l);
+      if (map.has(src)) continue;
+      const source = l.art ? p.art?.[l.art] : await store.getFile(l.media ?? "");
+      if (!source) throw new Error(`The picture of the label “${labelName(p, l)}” is not at hand: locate its file (see the missing-files notice) or remove the label.`);
+      try {
+        map.set(src, await loadArt(source));
+      } catch (e) {
+        throw new Error(`The picture of the label “${labelName(p, l)}” cannot be drawn: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
+    return map;
+  };
+  const patchLabel = (id: string, patch: Partial<Label>) => setProject((p) => withLabels(p, (p.labels ?? []).map((x) => (x.id === id ? (normalizeLabel({ ...x, ...patch }) ?? x) : x))));
+  const removeLabel = (id: string) => {
+    setProject((p) => withLabels(p, (p.labels ?? []).filter((x) => x.id !== id)));
+    setSelectedLabel((x) => (x === id ? null : x));
+  };
+  /** The art a filled template brought: each new picture is decoded, and a label whose picture will not draw is left out with a note. */
+  const checkImportedLabels = async (imp: LabelsImport | null, warnings: string[]): Promise<LabelsImport | null> => {
+    if (!imp) return null;
+    const art: Record<string, LabelArt> = {};
+    const bad = new Set<string>();
+    for (const [key, a] of Object.entries(imp.art)) {
+      try {
+        const src = `art:${key}`;
+        const loaded = labelArtRef.current.get(src) ?? (await loadArt(a));
+        setLabelArt((prev) => (prev.has(src) ? prev : new Map(prev).set(src, loaded)));
+        art[key] = { ...a, ...artMeta(loaded) };
+        if (loaded.note) warnings.push(`label art "${a.name}": ${loaded.note}`);
+      } catch (e) {
+        bad.add(key);
+        warnings.push(`label art "${a.name}": ${e instanceof Error ? e.message : String(e)} Its label${imp.labels.filter((l) => l.art === key).length === 1 ? " was" : "s were"} skipped`);
+      }
+    }
+    return { labels: imp.labels.filter((l) => !l.art || !bad.has(l.art)), art };
+  };
+  // Dragging a label's bar on the timeline: the middle moves it, an edge trims it, a click opens it.
+  const onLabelBarDown = (e: React.PointerEvent<HTMLElement>, l: Label) => {
+    e.stopPropagation();
+    if (e.button !== 0) return;
+    const r = e.currentTarget.getBoundingClientRect();
+    const edge = Math.min(8, r.width / 3);
+    labelBarRef.current = { id: l.id, mode: e.clientX - r.left < edge ? "start" : r.right - e.clientX < edge ? "end" : "move", x: e.clientX, start: l.start, duration: l.duration, patch: null };
+    e.currentTarget.setPointerCapture(e.pointerId);
+  };
+  const onLabelBarMove = (e: React.PointerEvent<HTMLElement>) => {
+    const d = labelBarRef.current;
+    if (!d || (!d.patch && Math.abs(e.clientX - d.x) < 3)) return;
+    const dt = (e.clientX - d.x) / pxPerSec, end = durationRef.current || d.start + d.duration;
+    let start = d.start, length = d.duration;
+    if (d.mode === "move") start = Math.max(0, Math.min(d.start + dt, Math.max(0, end - d.duration)));
+    else if (d.mode === "start") {
+      start = Math.max(0, Math.min(d.start + dt, d.start + d.duration - MIN_LABEL_SECONDS));
+      length = d.start + d.duration - start;
+    } else length = Math.max(MIN_LABEL_SECONDS, Math.min(d.duration + dt, Math.max(MIN_LABEL_SECONDS, end - d.start)));
+    d.patch = { start: r3(start), duration: r3(length) };
+    setLabelDrag({ id: d.id, patch: d.patch });
+  };
+  const onLabelBarUp = () => {
+    const d = labelBarRef.current;
+    labelBarRef.current = null;
+    if (!d) return;
+    setLabelDrag(null);
+    if (d.patch) return patchLabel(d.id, d.patch);
+    const l = (projectRef.current?.labels ?? []).find((x) => x.id === d.id);
+    if (l) {
+      setTab("titles");
+      focusLabel(l);
+    }
+  };
+  // Dragging the selected label on the preview moves it: its offsets from its grid position follow the pointer.
+  const onLabelBoxDown = (e: React.PointerEvent<HTMLElement>, l: Label) => {
+    e.stopPropagation();
+    const frame = e.currentTarget.parentElement?.getBoundingClientRect();
+    if (e.button !== 0 || !frame?.width) return;
+    labelBoxRef.current = { id: l.id, x: e.clientX, y: e.clientY, offsetX: l.offsetX, offsetY: l.offsetY, w: frame.width, h: frame.height, patch: null };
+    e.currentTarget.setPointerCapture(e.pointerId);
+  };
+  const onLabelBoxMove = (e: React.PointerEvent<HTMLElement>) => {
+    const d = labelBoxRef.current;
+    if (!d) return;
+    const clamp = (v: number) => Math.round(Math.max(-1, Math.min(1, v)) * 1e4) / 1e4;
+    d.patch = { offsetX: clamp(d.offsetX + (e.clientX - d.x) / d.w), offsetY: clamp(d.offsetY + (e.clientY - d.y) / d.h) };
+    setLabelDrag({ id: d.id, patch: d.patch });
+  };
+  const onLabelBoxUp = () => {
+    const d = labelBoxRef.current;
+    labelBoxRef.current = null;
+    if (!d) return;
+    setLabelDrag(null);
+    if (d.patch) patchLabel(d.id, d.patch);
+  };
 
   /* ------------------------------------------------------------------ intro */
   const introReg = useMemo(() => introRegion(placed), [placed]);
@@ -2892,7 +3157,7 @@ export function VideoEditorWidget() {
       pendingHandles: () => store.pendingHandles(project.id),
       missing: () => store.missing(Object.keys(project.media)),
       getProject: () => project,
-      frameAt: (t: number, height?: number) => renderFrame({ project: view, getFile: (id) => store.getFile(id), logo, t, height, type: "image/png" }).then((f) => f.blob),
+      frameAt: (t: number, height?: number) => renderFrame({ project: view, getFile: (id) => store.getFile(id), logo, labelArt, t, height, type: "image/png" }).then((f) => f.blob),
       getShorts: () => project.shorts ?? [],
       getShortMusic: () => (activeShort ? shortMusicOf(activeShort, project.media) : []),
       getTimelineMusic: () => timelineMusic,
@@ -2968,6 +3233,17 @@ export function VideoEditorWidget() {
       slowShort,
       setSnapBeats: (v: boolean) => setSnapBeats(v),
       patchTitle,
+      getLabels: () => project.labels ?? [],
+      getArt: () => project.art ?? {},
+      getLabelArt: () => [...labelArt].map(([source, a]) => ({ source, type: a.type, width: a.width, height: a.height, frames: a.frames, seconds: a.seconds, note: a.note ?? null })),
+      getArtProblems: () => artProblems,
+      addLabelText,
+      addLabelFile,
+      patchLabel,
+      removeLabel,
+      selectLabel: (id: string | null) => focusLabel(id ? ((project.labels ?? []).find((l) => l.id === id) ?? null) : null),
+      getSelectedLabel: () => selectedLabel,
+      getLabelRect: () => labelRect,
       getPlayhead: () => playhead,
       stepTo,
       getDone: () => done,
@@ -3442,6 +3718,7 @@ export function VideoEditorWidget() {
       project: target,
       getFile: (id) => store.getFile(id),
       logo,
+      labelArt: await artFor(target),
       writable: writable as unknown as WritableStream<import("mediabunny").StreamTargetChunk>,
       signal,
       onProgress: (progress) => {
@@ -3501,7 +3778,7 @@ export function VideoEditorWidget() {
     try {
       const derived = shortProject(project, activeShort);
       const t = Math.max(0, Math.min(activeShort.to - activeShort.from, playhead - activeShort.from));
-      const frame = await renderFrame({ project: derived, getFile: (id) => store.getFile(id), logo, t, height: 1920, type: "image/jpeg", quality: 0.92 });
+      const frame = await renderFrame({ project: derived, getFile: (id) => store.getFile(id), logo, labelArt, t, height: 1920, type: "image/jpeg", quality: 0.92 });
       const src = derived.media[derived.clips[0]?.media ?? ""];
       const want = src?.width && src.height ? outputSize(src.width, src.height, { resolution: 1080, frame: "9:16" }) : { width: frame.width, height: frame.height };
       let blob = frame.blob;
@@ -3698,6 +3975,7 @@ export function VideoEditorWidget() {
         project: landscape,
         getFile: (id) => store.getFile(id),
         logo,
+        labelArt: await artFor(landscape),
         writable: testWritable(writable as unknown as WritableStream<import("mediabunny").StreamTargetChunk>, true),
         signal: abort.signal,
         priors: loadPriors(profile, `${outH}p ${project.export.codec.toUpperCase()}`),
@@ -3851,6 +4129,7 @@ export function VideoEditorWidget() {
         project: preview,
         getFile: opts.proxies ? fileForIntro : (id) => store.getFile(id),
         logo,
+        labelArt: await artFor(preview),
         writable: writable as unknown as WritableStream<import("mediabunny").StreamTargetChunk>,
         signal: abort.signal,
         whilePaused: () => (pauseRef.current.paused ? new Promise<void>((r) => pauseRef.current.waiters.push(r)) : undefined),
@@ -4295,6 +4574,15 @@ export function VideoEditorWidget() {
   // The preview takes the export frame's shape, so a vertical cut is seen as it will come out.
   const underMedia = under ? project.media[under.clip.media] : null;
   const previewAspect = pictureView && under && underMedia?.width && underMedia.height ? pictureAspect(under.clip.transform, underMedia.width, underMedia.height) : frameAspect(previewFrame, first?.width || 16, first?.height || 9);
+  // The selected label's box on the preview (fractions of the frame), while it is on: what the drag handle sits over.
+  const shownLabels = drawnView.labels ?? [];
+  const selLabel = selectedLabel ? shownLabels.find((l) => l.id === selectedLabel) : undefined;
+  const selArt = selLabel ? labelArt.get(labelSource(selLabel)) : undefined;
+  const labelRect = useMemo(() => {
+    if (!selLabel || !selArt || pictureView || playhead < selLabel.start || playhead > selLabel.start + selLabel.duration) return null;
+    const b = labelBox(selLabel, selArt.width / selArt.height, 1, 1 / previewAspect, drawnView.safeArea);
+    return { x: b.x, y: b.y * previewAspect, w: b.w, h: b.h * previewAspect };
+  }, [selLabel, selArt, pictureView, playhead, previewAspect, drawnView.safeArea]);
   /** The window on the clip under the playhead, as fractions of its picture: the overlay of the picture view (a drag shows where it is going). */
   const windowRect = useMemo(() => {
     if (!under || !underMedia?.width || !underMedia.height) return null;
@@ -4487,7 +4775,7 @@ export function VideoEditorWidget() {
             )}
             {/* title lanes: overlapping titles stack */}
             <div className="relative mt-1" style={laneTitles} data-title-lane>
-              {!project.titles.length && project.clips.length > 0 && <div className="pointer-events-none absolute inset-0 flex items-center rounded-[3px] border border-dashed border-edge px-2 text-[10.5px] text-faint">Titles and lower thirds from the Titles tab land here</div>}
+              {!project.titles.length && !project.labels?.length && project.clips.length > 0 && <div className="pointer-events-none absolute inset-0 flex items-center rounded-[3px] border border-dashed border-edge px-2 text-[10.5px] text-faint">Titles, lower thirds and labels from the Titles tab land here</div>}
               {project.titles.map((t) => (
                 <button
                   key={t.id}
@@ -4504,6 +4792,33 @@ export function VideoEditorWidget() {
                   {t.text}
                 </button>
               ))}
+              {(project.labels ?? []).map((raw) => {
+                const l = labelDrag?.id === raw.id ? { ...raw, ...labelDrag.patch } : raw;
+                return (
+                  <div
+                    key={l.id}
+                    role="button"
+                    tabIndex={0}
+                    onPointerDown={(e) => onLabelBarDown(e, raw)}
+                    onPointerMove={onLabelBarMove}
+                    onPointerUp={onLabelBarUp}
+                    onPointerCancel={onLabelBarUp}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        setTab("titles");
+                        focusLabel(raw);
+                      }
+                    }}
+                    className={cn("absolute flex cursor-grab touch-none items-center gap-1 truncate rounded-[3px] bg-[#0d9488]/80 px-1 text-left text-[10.5px] text-white select-none", selectedLabel === l.id && "ring-2 ring-white/90", (shortMode ? l.short !== activeShort?.id : !!l.short) && "opacity-35")}
+                    style={{ left: l.start * pxPerSec, width: Math.max(4, l.duration * pxPerSec), top: `${((titleLaneOf.lanes[l.id] ?? 0) / titleLaneOf.count) * 100}%`, height: `calc(${100 / titleLaneOf.count}% - 2px)` }}
+                    title={`${labelName(project, l)} — a label: drag to move it, drag an edge to trim it, click to open it`}
+                    data-label-bar={l.id}
+                  >
+                    <ImageIcon size={10} className="shrink-0" />
+                    <span className="truncate">{labelName(project, l)}</span>
+                  </div>
+                );
+              })}
             </div>
             {/* sound lane: each region a span to drag or trim; the empty lane draws a new one */}
             {showSoundLane && (
@@ -4806,6 +5121,19 @@ export function VideoEditorWidget() {
                   {pickingZoom ? "drag the box to the part to show · wheel to push further in or out · click to centre it there" : "drag to place the window · wheel to zoom · click to centre it there · K keys it here"}
                 </div>
               </div>
+            )}
+            {selLabel && labelRect && (
+              <div
+                className="absolute cursor-move touch-none rounded-[2px] border border-dashed border-white/90 shadow-[0_0_0_1px_rgba(0,0,0,0.5)] select-none"
+                style={{ left: `${labelRect.x * 100}%`, top: `${labelRect.y * 100}%`, width: `${labelRect.w * 100}%`, height: `${labelRect.h * 100}%`, transform: selLabel.rotate ? `rotate(${selLabel.rotate}deg)` : undefined }}
+                onPointerDown={(e) => onLabelBoxDown(e, selLabel)}
+                onPointerMove={onLabelBoxMove}
+                onPointerUp={onLabelBoxUp}
+                onPointerCancel={onLabelBoxUp}
+                onDoubleClick={(e) => e.stopPropagation()}
+                title="Drag to place this label"
+                data-label-box={selLabel.id}
+              />
             )}
             {shortMode && activeShort && (
               <>
@@ -6150,20 +6478,20 @@ export function VideoEditorWidget() {
                     {logo ? "Replace logo" : "+ Logo watermark"}
                   </button>
                   <span className="ml-auto flex flex-wrap items-center gap-1.5">
-                    <button type="button" onClick={downloadTemplate} className={GHOST} title="One JSON for the intro and the titles, with this timeline and every property, ready to hand to ChatGPT or another LLM to fill in" data-template-download>
+                    <button type="button" onClick={downloadTemplate} className={GHOST} title="One JSON for the intro, the titles and the labels, with this timeline and every property, ready to hand to ChatGPT or another LLM to fill in" data-template-download>
                       <Download size={12} /> Template JSON
                     </button>
-                    <button type="button" onClick={() => templateJsonInput.current?.click()} className={GHOST} title="Load a filled template back in: titles and intro" data-template-import>
+                    <button type="button" onClick={() => templateJsonInput.current?.click()} className={GHOST} title="Load a filled template back in: titles, labels and intro" data-template-import>
                       <Upload size={12} /> Import JSON
                     </button>
-                    {project.titles.length > 0 && (
-                      <label className="flex items-center gap-1 text-[12px] text-muted" title="Otherwise imported titles are added to the current ones">
+                    {(project.titles.length > 0 || !!project.labels?.length) && (
+                      <label className="flex items-center gap-1 text-[12px] text-muted" title="Otherwise imported titles and labels are added to the current ones">
                         <input type="checkbox" checked={importReplace} onChange={(e) => setImportReplace(e.target.checked)} className="accent-[var(--accent)]" /> replace current
                       </label>
                     )}
                   </span>
                 </div>
-                <p className="text-[12px] text-faint">{shortMode && activeShort ? `The template describes this short alone — ${activeShort.name}, its clips and its titles with times from its own start, no intro; a filled file imports into this short.` : "Download the template (one file for the intro and the titles)"}, give it to an LLM with your notes (places, people, dates), then import the JSON it returns: every title with its timing, position, colours, font and size arrives populated.</p>
+                <p className="text-[12px] text-faint">{shortMode && activeShort ? `The template describes this short alone — ${activeShort.name}, its clips, its titles and its labels with times from its own start, no intro; a filled file imports into this short.` : "Download the template (one file for the intro, the titles and the labels)"}, give it to an LLM with your notes (places, people, dates), then import the JSON it returns: every title with its timing, position, colours, font and size arrives populated, and so does every label — the LLM can draw one as SVG or hand over an image or a GIF in base64.</p>
                 {shortMode && activeShort && (
                   <div className="flex flex-wrap items-center gap-2 text-[12px]">
                     <p className="text-accent" data-titles-short>Short mode: these titles belong to {String(shortIndex).padStart(2, "0")} {activeShort.name}; a new one starts inside it.</p>
@@ -6406,6 +6734,143 @@ export function VideoEditorWidget() {
                   </div>
                     );
                   })}
+                <div className="space-y-1.5 border-t border-edge pt-2" data-labels>
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span className="text-[12.5px] font-medium text-ink">Labels</span>
+                    <span className="min-w-0 flex-1 text-[12px] text-faint" data-labels-summary>
+                      {shownLabels.length ? `${shownLabels.length} picture${shownLabels.length === 1 ? "" : "s"} on the video${shortMode && activeShort ? `, in ${activeShort.name}` : ""}` : "Pictures on the video — an SVG, an image or an animated GIF — each with a place, a time and an entrance and exit."}
+                    </span>
+                    <input ref={labelInput} type="file" accept="image/svg+xml,image/png,image/jpeg,image/webp,image/gif" hidden onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) void addLabelFile(f); }} data-label-input />
+                    <button type="button" onClick={() => void pickLabel()} className={GHOST} title="A picture from disk: SVG, PNG, JPEG, WebP or GIF (animated ones play). The file stays where it is" data-add-label-file>
+                      + Image or GIF
+                    </button>
+                    <button type="button" onClick={() => setLabelPaste((v) => (v === null ? "" : null))} aria-expanded={labelPaste !== null} className={GHOST} title="Paste SVG markup or a base64 data URI; it is kept in the project" data-add-label-paste>
+                      + SVG or base64
+                    </button>
+                  </div>
+                  {labelPaste !== null && (
+                    <div className="space-y-1.5 rounded-[var(--radius-sm)] border border-edge p-2" data-label-paste>
+                      <textarea value={labelPaste} onChange={(e) => setLabelPaste(e.target.value)} rows={4} spellCheck={false} placeholder={'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 80">…</svg>   or   data:image/png;base64,…'} className={cn(INPUT, "h-auto py-1.5 font-mono text-[11.5px]")} aria-label="SVG markup or a base64 data URI" data-label-paste-text />
+                      <div className="flex flex-wrap items-center gap-1.5 text-[12px] text-faint">
+                        <button type="button" onClick={() => void addLabelText(labelPaste)} disabled={!labelPaste.trim()} className={cn(GHOST, !labelPaste.trim() && "opacity-50")} data-label-paste-add>
+                          Add at the playhead
+                        </button>
+                        <button type="button" onClick={() => setLabelPaste(null)} className={GHOST}>
+                          Cancel
+                        </button>
+                        <span>SVG is drawn as a still, sharp at any size; PNG, JPEG, WebP or GIF up to {MAX_ART_BYTES / 1024 / 1024} MB. Nothing is fetched from the web.</span>
+                      </div>
+                    </div>
+                  )}
+                  {[...shownLabels]
+                    .sort((a, b) => a.start - b.start)
+                    .map((l) => {
+                      const open = selectedLabel === l.id;
+                      const src = labelSource(l);
+                      const pic = labelArt.get(src);
+                      const stored = l.art ? project.art?.[l.art] : undefined;
+                      const kind = (pic?.type ?? stored?.type ?? "").replace("image/", "").replace("+xml", "").toUpperCase() || "image";
+                      const about = pic ? `${kind} · ${pic.width}×${pic.height}${pic.frames > 1 ? ` · ${pic.frames} frames, ${pic.seconds.toFixed(2)} s a pass` : ""}${stored ? ` · ${artSize(artBytes(stored))} in the project` : " · a file on disk"}` : artProblems[src] ? artProblems[src] : l.media && missingMedia.includes(l.media) ? "its file is not at hand — see the missing-files notice" : "loading…";
+                      return (
+                        <div key={l.id} className={cn("rounded-[var(--radius-sm)] border", open ? "border-accent" : "border-edge")} data-label-row={l.id} data-label-selected={open || undefined}>
+                          <div className="flex items-center gap-1.5 pr-1.5">
+                            <button type="button" onClick={() => focusLabel(open ? null : l)} aria-expanded={open} className="flex h-8 min-w-0 flex-1 items-center gap-2 px-2 text-left text-[12.5px] hover:bg-raised" data-label-select>
+                              <ChevronRight size={13} className={cn("shrink-0 text-faint transition-transform", open && "rotate-90")} />
+                              <span className="shrink-0 text-[11px] uppercase tracking-wide text-faint">{kind}</span>
+                              <span className="min-w-0 flex-1 truncate text-ink">{labelName(project, l)}</span>
+                              <span className="shrink-0 font-mono text-[11px] text-faint tabular">
+                                {fmtTime(l.start)}–{fmtTime(l.start + l.duration)} · {POSITION_NAMES[l.position]}
+                              </span>
+                            </button>
+                            <button type="button" onClick={() => removeLabel(l.id)} className="text-faint hover:text-danger" aria-label="Delete label" data-label-remove>
+                              <Trash2 size={13} />
+                            </button>
+                          </div>
+                          {open && (
+                            <div className="space-y-1.5 border-t border-edge p-2">
+                              <input value={l.name ?? ""} onChange={(e) => patchLabel(l.id, { name: e.target.value })} placeholder={labelName(project, { ...l, name: undefined })} className={INPUT} aria-label="Label name" data-label-name />
+                              <p className={cn("text-[12px]", pic ? "text-faint" : "text-danger")} data-label-about>
+                                {about}
+                                {pic?.note ? ` — ${pic.note}` : ""}
+                              </p>
+                              {shorts.length > 0 && (
+                                <label className="flex items-center gap-1 text-[12px] text-muted">
+                                  Belongs to
+                                  <select value={l.short ?? ""} onChange={(e) => patchLabel(l.id, { short: e.target.value || undefined })} className={cn(INPUT, "h-7")} aria-label="Belongs to" data-label-short>
+                                    <option value="">The landscape edit</option>
+                                    {shorts.map((x, i) => (
+                                      <option key={x.id} value={x.id}>
+                                        {String(i + 1).padStart(2, "0")} {x.name}
+                                      </option>
+                                    ))}
+                                  </select>
+                                </label>
+                              )}
+                              <div className="flex flex-wrap items-center gap-2 text-[12px] text-muted">
+                                <label className="flex items-center gap-1">
+                                  In
+                                  <select value={l.enter ?? "fade"} onChange={(e) => patchLabel(l.id, { enter: e.target.value as LabelEnter })} className={cn(INPUT, "h-7")} aria-label="Entrance" data-label-enter>
+                                    {LABEL_ENTERS.map((k) => (
+                                      <option key={k} value={k}>
+                                        {TITLE_ENTER_NAMES[k]}
+                                      </option>
+                                    ))}
+                                  </select>
+                                </label>
+                                <label className="flex items-center gap-1">
+                                  Out
+                                  <select value={l.exit ?? "fade"} onChange={(e) => patchLabel(l.id, { exit: e.target.value as TitleExit })} className={cn(INPUT, "h-7")} aria-label="Exit" data-label-exit>
+                                    {TITLE_EXITS.map((k) => (
+                                      <option key={k} value={k}>
+                                        {TITLE_EXIT_NAMES[k]}
+                                      </option>
+                                    ))}
+                                  </select>
+                                </label>
+                                {(pic?.frames ?? 0) > 1 && (
+                                  <label className="flex items-center gap-1" title="An animated picture plays round and round, or once and then holds its last frame">
+                                    Plays
+                                    <select value={l.loop ?? "loop"} onChange={(e) => patchLabel(l.id, { loop: e.target.value as LabelLoop })} className={cn(INPUT, "h-7")} aria-label="Looping" data-label-loop>
+                                      {LABEL_LOOPS.map((k) => (
+                                        <option key={k} value={k}>
+                                          {k === "loop" ? "On a loop" : "Once, then holds"}
+                                        </option>
+                                      ))}
+                                    </select>
+                                  </label>
+                                )}
+                                <span className="grid grid-cols-3 gap-0.5" title="Position in the frame" role="group" aria-label="Position">
+                                  {TITLE_POSITIONS.map((pos) => (
+                                    <button key={pos} type="button" onClick={() => patchLabel(l.id, { position: pos, offsetX: 0, offsetY: 0 })} aria-label={POSITION_NAMES[pos]} title={`${POSITION_NAMES[pos]} (clears the offset)`} aria-pressed={l.position === pos} className={cn("h-4 w-4 rounded-[2px] border", l.position === pos ? "border-accent bg-accent" : "border-edge bg-base hover:border-accent")} data-label-position={pos} />
+                                  ))}
+                                </span>
+                              </div>
+                              <div className="grid grid-cols-3 gap-2 text-[12px] text-muted">
+                                <label>
+                                  Start (s)
+                                  <input type="number" step={0.1} value={l.start} onChange={(e) => patchLabel(l.id, { start: Math.max(0, Number(e.target.value)) })} className={cn(INPUT, "mt-0.5 font-mono")} data-label-start />
+                                </label>
+                                <label>
+                                  Length (s)
+                                  <input type="number" step={0.5} value={l.duration} onChange={(e) => patchLabel(l.id, { duration: Math.max(MIN_LABEL_SECONDS, Number(e.target.value)) })} className={cn(INPUT, "mt-0.5 font-mono")} data-label-length />
+                                </label>
+                                <label>
+                                  In / out (s)
+                                  <input type="number" step={0.1} min={0} value={l.fade} onChange={(e) => patchLabel(l.id, { fade: Math.max(0, Number(e.target.value)) })} className={cn(INPUT, "mt-0.5 font-mono")} data-label-fade />
+                                </label>
+                              </div>
+                              <Slider label="Width" value={l.width} min={0.02} max={1} step={0.005} onChange={(v) => patchLabel(l.id, { width: v })} reset={0.18} format={(v) => `${(v * 100).toFixed(1)}% of the frame`} />
+                              <Slider label="Opacity" value={l.opacity} min={0.05} max={1} step={0.05} onChange={(v) => patchLabel(l.id, { opacity: v })} reset={1} format={(v) => `${Math.round(v * 100)}%`} />
+                              <Slider label="Rotation" value={l.rotate} min={-180} max={180} step={1} onChange={(v) => patchLabel(l.id, { rotate: v })} format={(v) => `${v}°`} />
+                              <Slider label="Moved right" value={l.offsetX} min={-1} max={1} step={0.005} onChange={(v) => patchLabel(l.id, { offsetX: v })} format={(v) => `${(v * 100).toFixed(1)}% of the width`} />
+                              <Slider label="Moved down" value={l.offsetY} min={-1} max={1} step={0.005} onChange={(v) => patchLabel(l.id, { offsetY: v })} format={(v) => `${(v * 100).toFixed(1)}% of the height`} />
+                              <p className="text-[12px] text-faint">Drag the label on the preview to place it, or its bar on the timeline to move and trim it. Labels are drawn over the titles.</p>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                </div>
                 {project.watermark.media && (
                   <div className="space-y-2 border-t border-edge pt-2">
                     <div className="flex flex-wrap items-center gap-1.5 text-muted">

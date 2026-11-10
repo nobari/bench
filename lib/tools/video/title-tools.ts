@@ -3,7 +3,7 @@
  * fills per short ({part}, {of}, {name}, {date}, {short}), the style presets, and a short's titles copied to every
  * other short. Pure and deterministic.
  */
-import { newId, type Project, type Short, type Title } from "./project";
+import { MIN_LABEL_SECONDS, newId, type Label, type Project, type Short, type Title } from "./project";
 
 export interface Placeholders {
   part?: number;
@@ -113,5 +113,18 @@ export function copyTitlesToShorts(project: Project, fromShortId: string): Proje
       copies.push({ ...t, id: newId(), short: s.id, start: Math.max(s.from, start), duration: Math.min(t.duration, s.to - Math.max(s.from, start)) });
     }
   }
-  return { ...project, titles: [...kept, ...copies] };
+  // The short's labels go along the same way, each copy pointing at the same art.
+  const labels = project.labels ?? [];
+  const labelCopies: Label[] = [];
+  for (const s of shorts) {
+    if (s.id === fromShortId) continue;
+    for (const l of labels.filter((x) => x.short === fromShortId)) {
+      const start = s.from + (l.start - from.from);
+      if (start >= s.to) continue;
+      const at = Math.max(s.from, start), duration = Math.max(MIN_LABEL_SECONDS, Math.min(l.duration, s.to - at));
+      labelCopies.push({ ...l, id: newId(), short: s.id, start: at, duration, fade: Math.min(l.fade, duration / 2) });
+    }
+  }
+  const nextLabels = [...labels.filter((l) => !l.short || l.short === fromShortId), ...labelCopies];
+  return { ...project, titles: [...kept, ...copies], ...(project.labels ? { labels: nextLabels } : {}) };
 }

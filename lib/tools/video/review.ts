@@ -8,7 +8,7 @@
 
 import { introRegion } from "./intro";
 import { stopsOnTimeline } from "./stops";
-import { SOUND_LABELS, TRANSITIONS, clipSpeed, crossfades, effectiveMusicEnd, exportRange, fmtTime, hasCard, musicFreeSpans, placeClips, soundLevels, soundState, tidySpans, timelineDuration, visibleCuts, zoomLabel, type Project, type Title } from "./project";
+import { SOUND_LABELS, TRANSITIONS, clipSpeed, crossfades, effectiveMusicEnd, exportRange, fmtTime, hasCard, labelName, musicFreeSpans, placeClips, soundLevels, soundState, tidySpans, timelineDuration, visibleCuts, zoomLabel, type Project, type Title } from "./project";
 import { regionLabel } from "./music-fill";
 import { YOUTUBE_LUFS } from "./loudness";
 import { YOUTUBE_AUDIO_KBPS, fmtGb, uploadLimits } from "./youtube";
@@ -170,6 +170,19 @@ export function reviewProject(p: Project, env: ReviewEnv): Review {
     });
     story.push(item({ id: "titles", state: "look", title: `${plural(titles.length, "title")} to proofread`, summary: flags.length ? `${plural(flags.length, "thing")} to look at: ${[...new Set(flags)].join(", ")}. Read every line for spelling and timing.` : "Read every line for spelling, names and dates; check each shows long enough to read.", lines, action: { id: "tab:titles", label: "Titles" } }));
   } else story.push(item({ id: "titles", state: "info", title: "No titles", summary: "No title, lower third or caption on the timeline.", action: { id: "tab:titles", label: "Titles" } }));
+  const labels = [...(p.labels ?? [])].sort((a, b) => a.start - b.start);
+  if (labels.length) {
+    const PLACES: Record<string, string> = { tl: "top left", tc: "top centre", tr: "top right", ml: "middle left", mc: "centre", mr: "middle right", bl: "bottom left", bc: "bottom centre", br: "bottom right" };
+    const flags: string[] = [];
+    const lines = labels.map((l) => {
+      const issues: string[] = [];
+      if (l.start >= exportTo || l.start + l.duration <= exportFrom) issues.push("outside the export range");
+      if (l.start + l.duration > duration + 0.05) issues.push("runs past the end of the video");
+      flags.push(...issues);
+      return `${fmtTime(l.start)} → ${fmtTime(l.start + l.duration)} · “${labelName(p, l)}” · ${PLACES[l.position] ?? l.position}, ${Math.round(l.width * 100)}% of the width${l.opacity < 1 ? `, ${Math.round(l.opacity * 100)}% opaque` : ""}${issues.length ? ` ⚠ ${issues.join(", ")}` : ""}`;
+    });
+    story.push(item({ id: "labels", state: "look", title: `${plural(labels.length, "label")} on the picture`, summary: flags.length ? `${plural(flags.length, "thing")} to look at: ${[...new Set(flags)].join(", ")}.` : "Pictures laid over the video: check each sits where it should, clear of the titles, and comes and goes at the right moment.", lines, action: { id: "tab:titles", label: "Labels" } }));
+  }
   if (p.watermark.media) story.push(item({ id: "watermark", state: "info", title: "Logo watermark on", summary: `${CORNERS[p.watermark.corner] ?? p.watermark.corner}, ${Math.round(p.watermark.size * 100)}% of the width, ${Math.round(p.watermark.opacity * 100)}% opaque.`, action: { id: "tab:titles", label: "Watermark" } }));
 
   // --- sound

@@ -41,6 +41,7 @@ import {
   cameraGainAt,
   exportTags,
   fontFamilyCss,
+  overlayPhase,
   exportRange,
   isFileLutKind,
   FILE_LUT_KINDS,
@@ -70,6 +71,7 @@ import {
 } from "./project";
 import { cutAt, cutBySkips, mergeSkips } from "./skips";
 import { splitWords, wordTimes } from "./title-tools";
+import { applyEntrance, drawLabels, type LabelArtMap } from "./label-art";
 import { even, framed, framePanes, layoutBackdrop, outputSize, pictureAspect, transformAt } from "./reframe";
 import { drawTransition } from "./transitions";
 import {
@@ -846,58 +848,7 @@ function drawTitleBlock(
   const x = col === "l" ? inL : col === "r" ? w - inR - blockW : inL + (w - inL - inR - blockW) / 2;
   const y = row === "t" ? inT : row === "b" ? h - inB - blockH : inT + (h - inT - inB - blockH) / 2;
   // The entrance over the fade-in and the exit over the fade-out: the block moves, scales or blurs as a whole.
-  const cxB = x + blockW / 2,
-    cyB = y + blockH / 2;
-  const scaleAt = (k: number) => {
-    ctx.translate(cxB, cyB);
-    ctx.scale(k, k);
-    ctx.translate(-cxB, -cyB);
-  };
-  if (enter < 1) {
-    switch (title.enter) {
-      case "pop":
-        scaleAt(0.92 + 0.08 * enter);
-        break;
-      case "rise":
-        ctx.translate(0, (1 - enter) * h * 0.02);
-        break;
-      case "slideLeft":
-        ctx.translate(-(1 - enter) * w * 0.12, 0);
-        break;
-      case "slideRight":
-        ctx.translate((1 - enter) * w * 0.12, 0);
-        break;
-      case "slideUp":
-        ctx.translate(0, (1 - enter) * h * 0.08);
-        break;
-      case "slideDown":
-        ctx.translate(0, -(1 - enter) * h * 0.08);
-        break;
-      case "zoomOut":
-        scaleAt(1 + 0.35 * (1 - enter));
-        break;
-      case "blur":
-        if ("filter" in c) c.filter = `blur(${((1 - enter) * px * 0.35).toFixed(1)}px)`;
-        break;
-      default:
-        break;
-    }
-  }
-  if (exit < 1) {
-    switch (title.exit) {
-      case "popOut":
-        scaleAt(1 - 0.08 * (1 - exit));
-        break;
-      case "slideOut":
-        ctx.translate((1 - exit) * w * 0.12, 0);
-        break;
-      case "drop":
-        ctx.translate(0, (1 - exit) * h * 0.06);
-        break;
-      default:
-        break;
-    }
-  }
+  applyEntrance(ctx, title.enter, title.exit, enter, exit, x + blockW / 2, y + blockH / 2, w, h, px);
   const base = ctx.globalAlpha;
   if (title.background || bw > 0) {
     ctx.shadowColor = "transparent";
@@ -1000,7 +951,7 @@ function drawTitleBlock(
   ctx.shadowColor = "transparent";
 }
 
-/** Titles, intro card and watermark drawn with 2D canvas on top of the graded frame. */
+/** Titles, intro card, labels and watermark drawn with 2D canvas on top of the graded frame. */
 export function drawOverlays(
   ctx: OffscreenCanvasRenderingContext2D,
   w: number,
@@ -1008,13 +959,12 @@ export function drawOverlays(
   t: number,
   project: Project,
   logo: ImageBitmap | null,
+  labelArt?: LabelArtMap | null,
 ) {
   for (const title of project.titles) {
-    if (t < title.start || t > title.start + title.duration) continue;
-    const local = t - title.start;
-    const fadeIn = title.fade > 0 ? Math.min(1, local / title.fade) : 1;
-    // The exit over the last fade's worth; "none" is a hard cut at the end.
-    const fadeOut = title.exit === "none" ? 1 : title.fade > 0 ? Math.min(1, (title.start + title.duration - t) / title.fade) : 1;
+    const phase = overlayPhase(title, t);
+    if (!phase) continue;
+    const { local, enter: fadeIn, exit: fadeOut } = phase;
     const alpha = Math.min(fadeIn, fadeOut);
     ctx.save();
     if (title.kind === "intro") {
@@ -1025,6 +975,8 @@ export function drawOverlays(
     drawTitleBlock(ctx, w, h, title, project.safeArea, fadeIn, fadeOut, local);
     ctx.restore();
   }
+  // Labels sit over the titles (a picture on an intro card shows), the watermark over everything.
+  drawLabels(ctx, w, h, t, project, labelArt);
   if (logo && project.watermark.media) {
     const { corner, size, opacity, margin } = project.watermark;
     const lw = w * size,
@@ -1286,6 +1238,8 @@ export interface ExportOptions {
   project: Project;
   getFile: (mediaId: string) => Promise<File | null>;
   logo: ImageBitmap | null;
+  /** The labels' pictures, loaded (see label-art.ts); a label without one is left out. */
+  labelArt?: LabelArtMap | null;
   writable: WritableStream<StreamTargetChunk>;
   onProgress?: (p: ExportProgress) => void;
   /** Awaited between frames and audio blocks: return a promise while paused, nothing otherwise. */
@@ -1524,7 +1478,7 @@ async function exportWithPulse(
   opts: ExportOptions,
   pulse: { emit: (() => void) | null },
 ): Promise<ExportResult> {
-  const { project, getFile, logo, signal } = opts;
+  const { project, getFile, logo, labelArt, signal } = opts;
   const first = project.media[project.clips[0]?.media ?? ""];
   if (!first?.width || !first.height)
     throw new Error("Add at least one video clip.");
@@ -2074,7 +2028,7 @@ async function exportWithPulse(
           introBlendAt(project, placedAll, tr, timelineT),
         );
       }
-      drawOverlays(ctx2d, outW, outH, timelineT, project, logo);
+      drawOverlays(ctx2d, outW, outH, timelineT, project, logo, labelArt);
       if (steady) {
         steady.apply(canvas);
         ctx2d.drawImage(steady.canvas, 0, 0, outW, outH);
@@ -2437,6 +2391,8 @@ export interface FrameOptions {
   project: Project;
   getFile: (mediaId: string) => Promise<File | null>;
   logo: ImageBitmap | null;
+  /** The labels' pictures, loaded (see label-art.ts); a label without one is left out. */
+  labelArt?: LabelArtMap | null;
   /** Timeline instant, seconds. */
   t: number;
   /** Scale the frame to this height (never above the source); omitted, the source resolution. */
@@ -2460,7 +2416,7 @@ export interface RenderedFrame {
  * on the GPU, composited through any transition, with titles and overlays.
  */
 export async function renderFrame(opts: FrameOptions): Promise<RenderedFrame> {
-  const { project, getFile, logo, t } = opts;
+  const { project, getFile, logo, labelArt, t } = opts;
   const first = project.media[project.clips[0]?.media ?? ""];
   if (!first?.width || !first.height)
     throw new Error("Add at least one video clip.");
@@ -2555,7 +2511,7 @@ export async function renderFrame(opts: FrameOptions): Promise<RenderedFrame> {
       },
       introBlendAt(project, placedAll, tr, t),
     );
-  drawOverlays(ctx, outW, outH, t, project, logo);
+  drawOverlays(ctx, outW, outH, t, project, logo, labelArt);
   main.close();
   const blob = await canvas.convertToBlob({
     type: opts.type ?? "image/png",

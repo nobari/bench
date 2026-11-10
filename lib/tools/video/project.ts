@@ -865,6 +865,222 @@ export function parseTitlesImport(text: string, p: Project): { titles: Title[]; 
   return { titles, warnings };
 }
 
+/* ------------------------------------------------------------------ labels */
+
+/**
+ * A label is a picture on the video for a stretch of the timeline: an SVG, a still image or an animated GIF, placed
+ * like a title (a position on the 3×3 grid plus an offset), with a width, an opacity, a rotation and the titles'
+ * entrances and exits. Its art is either stored in the project (`Project.art`: SVG markup or base64, which is how an
+ * LLM hands one over in the template) or a file on disk remembered by its handle (`Project.media`), never copied.
+ */
+export type LabelArtType = "image/svg+xml" | "image/png" | "image/jpeg" | "image/webp" | "image/gif";
+export const LABEL_ART_TYPES: LabelArtType[] = ["image/svg+xml", "image/png", "image/jpeg", "image/webp", "image/gif"];
+/** The most one piece of art stored in the project may weigh, decoded. */
+export const MAX_ART_BYTES = 2 * 1024 * 1024;
+export interface LabelArt {
+  /** What the art is called in the list and in the template ("existing:<name>"). */
+  name: string;
+  type: LabelArtType;
+  /** SVG: the markup itself. Everything else: the file's bytes in base64. */
+  data: string;
+  /** Filled in once the art has been decoded: its size in pixels and, when animated, how long one pass runs. */
+  width?: number;
+  height?: number;
+  seconds?: number;
+}
+/** The titles' entrances that move a block as a whole (the word-by-word ones have nothing to act on in a picture). */
+export type LabelEnter = Exclude<TitleEnter, "typewriter" | "wordPop">;
+export const LABEL_ENTERS: LabelEnter[] = ["fade", "pop", "rise", "slideLeft", "slideRight", "slideUp", "slideDown", "blur", "zoomOut"];
+/** An animated picture plays round and round, or once and then holds its last frame. */
+export type LabelLoop = "loop" | "once";
+export const LABEL_LOOPS: LabelLoop[] = ["loop", "once"];
+export interface Label {
+  id: string;
+  name?: string;
+  /** The art: a key of `Project.art`, or the id of a file in `Project.media`. One of the two. */
+  art?: string;
+  media?: string;
+  /** Timeline start and duration, seconds. */
+  start: number;
+  duration: number;
+  /** Seconds the entrance and the exit each take. */
+  fade: number;
+  /** Where it sits: top/middle/bottom × left/centre/right, then moved by the offsets (fractions of the frame's width and height). */
+  position: TitlePosition;
+  offsetX: number;
+  offsetY: number;
+  /** Width as a fraction of the frame's width; the height follows the art's shape. */
+  width: number;
+  opacity: number;
+  /** Degrees, clockwise. */
+  rotate: number;
+  enter?: LabelEnter;
+  exit?: TitleExit;
+  /** Animated art only; missing: loop. */
+  loop?: LabelLoop;
+  /** false lets the label ignore the project's safe area (the frame's edges still keep their margin). */
+  safe?: boolean;
+  /** The short this label belongs to (Short mode); unset, it is the landscape edit's. */
+  short?: string;
+}
+export const LABEL_WIDTH_RANGE: [number, number] = [0.02, 1];
+export const LABEL_OFFSET_RANGE: [number, number] = [-1, 1];
+export const MIN_LABEL_SECONDS = 0.2;
+export const DEFAULT_LABEL = { duration: 5, fade: 0.4, position: "tr" as TitlePosition, offsetX: 0, offsetY: 0, width: 0.18, opacity: 1, rotate: 0, enter: "fade" as LabelEnter };
+
+export function newLabel(source: { art: string } | { media: string }, start: number, name?: string): Label {
+  return { id: newId(), ...(name ? { name } : {}), ...source, start, ...DEFAULT_LABEL };
+}
+
+/** A label read from a project file or a template: every field in range, nothing when it has no art or no time. */
+export function normalizeLabel(raw: unknown): Label | null {
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as Partial<Label>;
+  const n = (v: unknown, lo: number, hi: number, dflt: number) => (typeof v === "number" && Number.isFinite(v) ? Math.min(hi, Math.max(lo, v)) : dflt);
+  const art = typeof r.art === "string" && r.art ? r.art : undefined;
+  const media = !art && typeof r.media === "string" && r.media ? r.media : undefined;
+  if (!art && !media) return null;
+  const duration = n(r.duration, MIN_LABEL_SECONDS, Infinity, DEFAULT_LABEL.duration);
+  const d = (v: number) => Math.round(v * 1e4) / 1e4;
+  return {
+    id: typeof r.id === "string" && r.id ? r.id : newId(),
+    ...(typeof r.name === "string" && r.name.trim() ? { name: r.name.slice(0, 80) } : {}),
+    ...(art ? { art } : { media: media! }),
+    start: n(r.start, 0, Infinity, 0),
+    duration,
+    fade: n(r.fade, 0, duration / 2, Math.min(DEFAULT_LABEL.fade, duration / 2)),
+    position: TITLE_POSITIONS.includes(r.position as TitlePosition) ? (r.position as TitlePosition) : DEFAULT_LABEL.position,
+    offsetX: d(n(r.offsetX, LABEL_OFFSET_RANGE[0], LABEL_OFFSET_RANGE[1], 0)),
+    offsetY: d(n(r.offsetY, LABEL_OFFSET_RANGE[0], LABEL_OFFSET_RANGE[1], 0)),
+    width: d(n(r.width, LABEL_WIDTH_RANGE[0], LABEL_WIDTH_RANGE[1], DEFAULT_LABEL.width)),
+    opacity: n(r.opacity, 0, 1, 1),
+    rotate: n(r.rotate, -180, 180, 0),
+    enter: LABEL_ENTERS.includes(r.enter as LabelEnter) ? (r.enter as LabelEnter) : "fade",
+    ...(TITLE_EXITS.includes(r.exit as TitleExit) && r.exit !== "fade" ? { exit: r.exit as TitleExit } : {}),
+    ...(r.loop === "once" ? { loop: "once" as LabelLoop } : {}),
+    ...(r.safe === false ? { safe: false } : {}),
+    ...(typeof r.short === "string" && r.short ? { short: r.short } : {}),
+  };
+}
+
+export function normalizeArt(raw: unknown): LabelArt | null {
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as Partial<LabelArt>;
+  if (!LABEL_ART_TYPES.includes(r.type as LabelArtType) || typeof r.data !== "string" || !r.data) return null;
+  const size = (v: unknown) => (typeof v === "number" && Number.isFinite(v) && v > 0 ? v : undefined);
+  const width = size(r.width), height = size(r.height), seconds = size(r.seconds);
+  return { name: typeof r.name === "string" && r.name.trim() ? r.name.trim().slice(0, 80) : "art", type: r.type as LabelArtType, data: r.data, ...(width && height ? { width, height } : {}), ...(seconds ? { seconds } : {}) };
+}
+
+/** How many bytes a piece of stored art weighs, decoded. */
+export const artBytes = (a: Pick<LabelArt, "type" | "data">) => (a.type === "image/svg+xml" ? a.data.length : Math.floor((a.data.length * 3) / 4));
+
+const fnv = (text: string) => {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < text.length; i++) {
+    h ^= text.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h.toString(16).padStart(8, "0");
+};
+/** The key a piece of art is stored under: the same picture always gets the same key, so it is stored once. */
+export const artKey = (type: LabelArtType, data: string) => `a${fnv(type + data)}${data.length.toString(36)}`;
+
+/** Where a label's picture comes from, as one string: the key the loaded pictures are held under. */
+export const labelSource = (l: Pick<Label, "art" | "media">) => (l.art ? `art:${l.art}` : l.media ? `media:${l.media}` : "");
+
+/** What a label is called: its own name, else its art's, else its file's. */
+export function labelName(p: Pick<Project, "art" | "media">, l: Label): string {
+  return l.name || (l.art ? p.art?.[l.art]?.name : l.media ? p.media[l.media]?.name : "") || "Label";
+}
+
+/** The project with its labels set: art no label uses any more is dropped, and empty lists leave no key behind. */
+export function withLabels(p: Project, labels: Label[], art: Record<string, LabelArt> | undefined = p.art): Project {
+  const { labels: was, art: wasArt, ...rest } = p;
+  void was;
+  void wasArt;
+  const used = new Set(labels.map((l) => l.art).filter(Boolean));
+  const kept = Object.fromEntries(Object.entries(art ?? {}).filter(([k]) => used.has(k)));
+  // A file only a label used goes with its last label.
+  const stale = (p.labels ?? []).map((l) => l.media).filter((id): id is string => !!id && !labels.some((l) => l.media === id));
+  const media = stale.length ? Object.fromEntries(Object.entries(p.media).filter(([id]) => !stale.includes(id))) : p.media;
+  return { ...rest, media, ...(labels.length ? { labels } : {}), ...(Object.keys(kept).length ? { art: kept } : {}) } as Project;
+}
+
+/** A name no other piece of art in the project carries, so "existing:<name>" in a template points at one picture. */
+export function uniqueArtName(taken: Iterable<string>, wanted: string): string {
+  const names = new Set([...taken].map((n) => n.toLowerCase()));
+  const base = wanted.trim().slice(0, 72) || "art";
+  if (!names.has(base.toLowerCase())) return base;
+  for (let i = 2; ; i++) if (!names.has(`${base} ${i}`.toLowerCase())) return `${base} ${i}`;
+}
+
+export interface LabelBox {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+/**
+ * Where a label lands on a frame of w × h, given its art's shape (width over height): placed on the grid inside the
+ * frame's margin and the safe area like a title, then moved by its offsets.
+ */
+export function labelBox(l: Pick<Label, "position" | "offsetX" | "offsetY" | "width" | "safe">, aspect: number, w: number, h: number, safe?: SafeArea | null): LabelBox {
+  const bw = w * l.width,
+    bh = bw / (aspect > 0 ? aspect : 1);
+  const pad = w * 0.04;
+  const s = l.safe === false ? null : safe;
+  const inL = Math.max(pad, w * (s?.left ?? 0)),
+    inR = Math.max(pad, w * (s?.right ?? 0)),
+    inT = Math.max(pad, h * (s?.top ?? 0)),
+    inB = Math.max(pad, h * (s?.bottom ?? 0));
+  const row = l.position[0],
+    col = l.position[1];
+  const x = col === "l" ? inL : col === "r" ? w - inR - bw : inL + (w - inL - inR - bw) / 2;
+  const y = row === "t" ? inT : row === "b" ? h - inB - bh : inT + (h - inT - inB - bh) / 2;
+  return { x: x + l.offsetX * w, y: y + l.offsetY * h, w: bw, h: bh };
+}
+
+/** How far a title or a label is through its entrance and its exit at t (1 = fully in), or null when it is not on. */
+export function overlayPhase(o: { start: number; duration: number; fade: number; exit?: TitleExit }, t: number): { local: number; enter: number; exit: number } | null {
+  if (t < o.start || t > o.start + o.duration) return null;
+  const local = t - o.start;
+  const enter = o.fade > 0 ? Math.min(1, local / o.fade) : 1;
+  // The exit over the last fade's worth; "none" is a hard cut at the end.
+  const exit = o.exit === "none" ? 1 : o.fade > 0 ? Math.min(1, (o.start + o.duration - t) / o.fade) : 1;
+  return { local, enter, exit };
+}
+
+/**
+ * Which frame of an animated picture shows `local` seconds after its label starts. `ends` is when each frame ends,
+ * in seconds from the first frame; looping wraps round, once holds the last frame.
+ */
+export function animationFrameAt(ends: number[], local: number, loop: LabelLoop = "loop"): number {
+  const n = ends.length,
+    total = ends[n - 1] ?? 0;
+  if (n < 2 || !(total > 0)) return 0;
+  if (loop === "once" && local >= total) return n - 1;
+  const at = ((local % total) + total) % total;
+  let lo = 0,
+    hi = n - 1;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (at < ends[mid] - 1e-9) hi = mid;
+    else lo = mid + 1;
+  }
+  return lo;
+}
+
+/** The labels that play between two instants, moved to start from zero and cut to the span. */
+export function labelsBetween(labels: Label[] | undefined, from: number, to: number): Label[] {
+  return (labels ?? [])
+    .filter((l) => l.start < to && l.start + l.duration > from)
+    .map((l) => {
+      const start = Math.max(0, l.start - from);
+      return { ...l, start, duration: Math.max(MIN_LABEL_SECONDS, Math.min(to - from, l.start + l.duration - from) - start) };
+    });
+}
+
 export interface Watermark {
   media: string | null;
   corner: "tl" | "tr" | "bl" | "br";
@@ -1263,7 +1479,7 @@ export function transitionAt(windows: TransitionWindow[], t: number): { window: 
 }
 
 /** Stack titles that overlap in time onto separate timeline lanes (first fit, in start order). */
-export function titleLanes(titles: Title[]): { lanes: Record<string, number>; count: number } {
+export function titleLanes(titles: Pick<Title, "id" | "start" | "duration">[]): { lanes: Record<string, number>; count: number } {
   const ends: number[] = [];
   const lanes: Record<string, number> = {};
   for (const t of [...titles].sort((a, b) => a.start - b.start || a.id.localeCompare(b.id))) {
@@ -1327,6 +1543,10 @@ export interface Project {
   regions?: SoundRegion[];
   /** Parts of the video pushed into a point of the picture (see Zoom). */
   zooms?: Zoom[];
+  /** Pictures on the video: SVGs, images and animated GIFs with a place, a time and transitions (see Label). */
+  labels?: Label[];
+  /** The art stored in the project for its labels, by key (see LabelArt). */
+  art?: Record<string, LabelArt>;
 }
 
 /** A readable location for a media file. */
@@ -1746,7 +1966,7 @@ export function mergeAdjacentSpans(spans: ExportSpan[]): ExportSpan[] {
 /**
  * Which parts of the timeline are copied from the recording as they are and which are re-encoded. Copying needs:
  * smart copy on, no grade, no transform, no watermark, the recording's own size, frame rate and codec in the export,
- * and the recording's keyframes read. Within such a clip, a title, a transition or a zoom re-encodes only the frames
+ * and the recording's keyframes read. Within such a clip, a title, a label, a transition or a zoom re-encodes only the frames
  * it covers, and every copied stretch is then cut to whole keyframe groups (see `splitAtKeyframes`): the few frames
  * between a cut and the keyframe beside it are re-encoded as a bridge. Neighbouring re-encoded spans merge.
  */
@@ -1778,12 +1998,13 @@ export function planExport(p: Project): ExportSpan[] {
       spans.push({ kind: "encode", clipId: c.id, sourceIn: c.in, sourceOut: c.out, start: c.start, end: c.end, reasons, speed });
       continue;
     }
-    // Titles, transitions and zooms only force re-encoding of the frames they cover.
+    // Titles, labels, transitions and zooms only force re-encoding of the frames they cover.
     let cursor = c.start;
     const cuts: [number, number, string][] = [
       ...overlays.map((t) => [Math.max(c.start, t.start), Math.min(c.end, t.start + t.duration), "title"] as [number, number, string]),
       ...windows.filter((w) => w.start < c.end && w.end > c.start).map((w) => [Math.max(c.start, w.start), Math.min(c.end, w.end), "transition"] as [number, number, string]),
       ...(p.zooms ?? []).filter((z) => z.from < c.end && z.to > c.start && z.zoom > 1).map((z) => [Math.max(c.start, z.from), Math.min(c.end, z.to), "zoom"] as [number, number, string]),
+      ...(p.labels ?? []).filter((l) => l.start < c.end && l.start + l.duration > c.start).map((l) => [Math.max(c.start, l.start), Math.min(c.end, l.start + l.duration), "label"] as [number, number, string]),
     ].sort((a, b) => a[0] - b[0]);
     for (const [ts, te, why] of cuts) {
       if (te <= cursor) continue;
@@ -1855,11 +2076,12 @@ function canonical(value: unknown): string {
  * and absent values dropped (a project loaded from its file orders keys differently from one edited in place, and a
  * newer build fills in fields older ones never wrote), and whatever does not reach the file is left out — the doctor
  * and review settings, proxies, the preview, the stop scan, remembered folders, the shorts and the editor's mode,
- * titles that belong to a short, and a recording's keyframe list, rotation and whereabouts.
+ * titles and labels that belong to a short, the labels' stored art (its key is a hash of it, and the labels carry
+ * the key), and a recording's keyframe list, rotation and whereabouts.
  */
 export function exportFingerprint(p: Project): string {
   // Likes and the fill settings only steer the next shuffle; they change no frame or sample of the file.
-  const { updatedAt, createdAt, proxies, preview, stops, shorts, mode, folders, songs, fill, export: ex, media, titles, ...rest } = p as Project & { updatedAt?: number; folders?: unknown };
+  const { updatedAt, createdAt, proxies, preview, stops, shorts, mode, folders, songs, fill, export: ex, media, titles, labels, art, ...rest } = p as Project & { updatedAt?: number; folders?: unknown };
   void updatedAt;
   void createdAt;
   void proxies;
@@ -1887,7 +2109,10 @@ export function exportFingerprint(p: Project): string {
       }),
     ),
     titles: titles.filter((t) => !t.short),
+    // The landscape edit's labels, and their art by its key (a hash of the picture) rather than the picture itself.
+    ...(labels?.some((l) => !l.short) ? { labels: labels.filter((l) => !l.short) } : {}),
   });
+  void art;
   let h = 0x811c9dc5;
   for (let i = 0; i < text.length; i++) {
     h ^= text.charCodeAt(i);
@@ -1962,7 +2187,10 @@ export function deserialize(json: string): Project | null {
     else delete loaded.regions;
     if (zooms) loaded.zooms = zooms;
     else delete loaded.zooms;
-    return loaded;
+    // Labels keep only art that is there, and art only what a label uses.
+    const art = p.art && typeof p.art === "object" ? Object.fromEntries(Object.entries(p.art).map(([k, a]) => [k, normalizeArt(a)] as const).filter((e): e is [string, LabelArt] => !!e[1])) : {};
+    const labels = Array.isArray(p.labels) ? p.labels.map((l) => normalizeLabel(l)).filter((l): l is Label => !!l && (l.art ? !!art[l.art] : !!loaded.media[l.media!])) : [];
+    return withLabels(loaded, labels, art);
   } catch {
     return null;
   }
