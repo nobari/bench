@@ -3,6 +3,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import { RecipeInfographic } from "./recipe-infographic";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
   ArrowLeft,
@@ -535,6 +536,7 @@ export function BistroApp() {
             this recipe. {(r.verificationNotes || []).join(" ")}
           </Notice>
         )}
+        <RecipeInfographic recipe={r} />
         {r.referenceOnly ? (
           <section className="b-source-library">
             <h2>Follow the original recipe</h2>
