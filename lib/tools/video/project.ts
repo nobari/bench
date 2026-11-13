@@ -1,3 +1,4 @@
+import { normalizeObscure, type ObscureArea } from "./obscure";
 /**
  * The video editor's project model and the pure arithmetic on it: timeline
  * layout from clips, music placement with overlaps and crossfades, gain
@@ -147,6 +148,8 @@ export interface Clip {
   in: number;
   out: number;
   transform: Transform;
+  /** Fixed rectangles in the output frame, applied for this clip. */
+  obscure?: ObscureArea[];
   /** Where the export frame's window sits in this clip when the frame is not the recording's shape (or to punch in); missing: centred, as much as fits. */
   reframe?: Reframe;
   grade: Grade;
@@ -1379,8 +1382,8 @@ export function canMergeWithNext(clips: Clip[], id: string): "merge" | "join" | 
 }
 
 /** The keys a joined run shares, so nothing changes at the hidden cut. */
-const SHARED_KEYS = ["grade", "transform", "reframe", "gainDb", "muted", "speed"] as const;
-const shared = (from: Clip): Pick<Clip, (typeof SHARED_KEYS)[number]> => ({ grade: { ...from.grade }, transform: { ...from.transform, crop: { ...from.transform.crop } }, reframe: from.reframe ? { keys: from.reframe.keys.map((k) => ({ ...k })) } : undefined, gainDb: from.gainDb, muted: from.muted, speed: clipSpeed(from) });
+const SHARED_KEYS = ["grade", "transform", "reframe", "obscure", "gainDb", "muted", "speed"] as const;
+const shared = (from: Clip): Pick<Clip, (typeof SHARED_KEYS)[number]> => ({ obscure: from.obscure?.map((a) => ({ ...a })), grade: { ...from.grade }, transform: { ...from.transform, crop: { ...from.transform.crop } }, reframe: from.reframe ? { keys: from.reframe.keys.map((k) => ({ ...k })) } : undefined, gainDb: from.gainDb, muted: from.muted, speed: clipSpeed(from) });
 
 /**
  * Merge a clip with the one after it. Two halves of the same recording become
@@ -1973,6 +1976,7 @@ export function planExport(p: Project): ExportSpan[] {
     const m = p.media[c.media];
     if (!p.export.smartCopy) reasons.push("smart copy off");
     if (!isNeutralGrade(c.grade)) reasons.push("colour grade");
+    if (c.obscure?.length) reasons.push("obscured areas");
     if (!isNeutralTransform(c.transform)) reasons.push("rotate / crop");
     if (!sameCodec(m)) reasons.push(`source is ${m?.codec ?? "unknown"}, export is ${p.export.codec}`);
     if (p.export.resolution !== "source") reasons.push("scaled output");
@@ -2146,9 +2150,9 @@ export function deserialize(json: string): Project | null {
     const perCutEra = !!p.export && "range" in p.export;
     const migrated = known && !perCutEra && !p.clips.some((c) => c.transitionIn) ? applyTransitionToAll(p.clips, transition) : p.clips;
     const clips = migrated.map((c) => {
-      const { introRole, introSeconds, reframe, ...rest } = c;
+      const { introRole, introSeconds, reframe, obscure, ...rest } = c;
       const base = LUT_KINDS.includes(rest.grade?.lut) ? rest : { ...rest, grade: { ...rest.grade, lut: "none" as LutKind } };
-      return { ...base, ...(rest.speed !== undefined ? { speed: clipSpeed(rest) } : {}), ...(introRole && INTRO_ROLES.includes(introRole) ? { introRole } : {}), ...(typeof introSeconds === "number" && introSeconds > 0 ? { introSeconds } : {}), ...normalizeReframe(reframe) };
+      return { ...base, ...(obscure ? { obscure: normalizeObscure(obscure) } : {}), ...(rest.speed !== undefined ? { speed: clipSpeed(rest) } : {}), ...(introRole && INTRO_ROLES.includes(introRole) ? { introRole } : {}), ...(typeof introSeconds === "number" && introSeconds > 0 ? { introSeconds } : {}), ...normalizeReframe(reframe) };
     });
     const frame: Frame = FRAMES.includes(p.export?.frame as Frame) ? (p.export.frame as Frame) : "source";
     const rawLayout = p.layout as Partial<Layout> | null | undefined;

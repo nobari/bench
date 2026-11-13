@@ -2,6 +2,7 @@
 
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import Link from "next/link";
+import { normalizeObscure } from "@/lib/tools/video/obscure";
 import { AlertTriangle, Camera, ImageIcon, ChevronDown, ChevronRight, ChevronUp, Sparkles, Clapperboard, Crop, Download, FolderOpen, Gauge, Heart, Loader, Maximize2, Minimize2, Music, Pause, Play, Plus, Repeat, Save, Scissors, SkipBack, SkipForward, SlidersHorizontal, Smartphone, Square, StepBack, StepForward, Trash2, Type, Upload, Volume2, VolumeX, Keyboard, Search, Shuffle, X, ZoomIn } from "lucide-react";
 import { makeRoomForAll, makeRoomForTransition, newShort, timelineDuration as shortTimelineDuration, type EditorMode, type Short } from "@/lib/tools/video/project";
 import { DEFAULT_SHORT_SECONDS, MIN_SHORT_SECONDS, SHORTS_FOLDER, clampShort, seamCandidates, seamScore, shortBytes, shortChecks, shortFileName, shortPostText, shortProject, shortStem, shortTemplate, shortTemplateProject, shortsFromMoments, suggestWindows, titlesIntoShort, viewFor } from "@/lib/tools/video/short-mode";
@@ -5861,6 +5862,33 @@ export function VideoEditorWidget() {
             )}
             {tab === "transform" && (current ? (
               <>
+                <div className="space-y-2 rounded-[var(--radius-sm)] border border-edge p-2" data-obscure>
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-ink">Obscure part of this clip</span>
+                    <button type="button" className={GHOST} onClick={() => update(current.id, { obscure: [...(current.obscure ?? []), { id: newId(), kind: "blur", x: 0.35, y: 0.35, w: 0.3, h: 0.3, strength: 0.03 }] })}>
+                      <Plus size={13} /> Add area
+                    </button>
+                  </div>
+                  <p className="text-[12px] text-faint">Areas stay fixed in the output frame for the whole clip. Split the clip to obscure only part of a scene. Use a black cover to hide details completely.</p>
+                  {(current.obscure ?? []).map((area, index) => {
+                    const change = (patch: Partial<typeof area>) => update(current.id, { obscure: normalizeObscure(current.obscure!.map((a) => a.id === area.id ? { ...a, ...patch } : a)) });
+                    return <div key={area.id} className="space-y-2 border-t border-edge pt-2" data-obscure-area>
+                      <div className="flex items-center gap-2">
+                        <span className="text-muted">Area {index + 1}</span>
+                        <select className={SEL} aria-label={`Area ${index + 1} effect`} value={area.kind} onChange={(e) => change({ kind: e.target.value as typeof area.kind })}>
+                          <option value="blur">Blur</option>
+                          <option value="pixelate">Pixelate</option>
+                          <option value="black">Black cover</option>
+                        </select>
+                        <button type="button" className={cn(GHOST, "ml-auto")} aria-label={`Remove area ${index + 1}`} onClick={() => update(current.id, { obscure: current.obscure!.filter((a) => a.id !== area.id) })}><Trash2 size={13} /></button>
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        {(["x", "y", "w", "h"] as const).map((key) => <Slider key={key} label={`Area ${index + 1} ${{ x: "left", y: "top", w: "width", h: "height" }[key]}`} value={area[key]} min={key === "w" || key === "h" ? 0.01 : 0} max={key === "x" ? 1 - area.w : key === "y" ? 1 - area.h : key === "w" ? 1 - area.x : 1 - area.y} step={0.005} onChange={(value) => change({ [key]: value })} format={(v) => `${Math.round(v * 100)}%`} />)}
+                      </div>
+                      {area.kind !== "black" && <Slider label={`Area ${index + 1} strength`} value={area.strength} min={0.005} max={0.1} step={0.005} onChange={(strength) => change({ strength })} format={(v) => `${Math.round(v * 1000)}`} />}
+                    </div>;
+                  })}
+                </div>
                 <div className="flex flex-wrap items-center gap-1.5">
                   <span className="text-muted">Rotate</span>
                   {([0, 1, 2, 3] as const).map((q) => (

@@ -1,3 +1,4 @@
+import { Obscurer } from "./obscure";
 /**
  * The browser side of the editor: probing media, building 1080p proxies,
  * grading frames on the GPU, mixing audio, and exporting — stream-copying
@@ -515,6 +516,7 @@ void main() { vUv = aUv; vec3 p = uTransform * vec3(aPos, 1.0); gl_Position = ve
  * recording's own frame and nothing reframed it is the grader alone, canvas and all, exactly as before frames existed.
  */
 export class FrameComposer {
+  private obscurer: Obscurer;
   readonly canvas: OffscreenCanvas;
   private readonly ctx: OffscreenCanvasRenderingContext2D;
   private readonly graders = new Map<string, Grader>();
@@ -528,6 +530,7 @@ export class FrameComposer {
     private readonly layout: Layout | null | undefined,
   ) {
     this.canvas = new OffscreenCanvas(width, height);
+    this.obscurer = new Obscurer(width, height);
     this.ctx = this.canvas.getContext("2d")!;
     this.graderFor(width, height);
   }
@@ -559,13 +562,13 @@ export class FrameComposer {
    * Draws the clip's frame at a source instant and returns the canvas holding it (the grader's own on the plain
    * path), sized to the export frame.
    */
-  compose(src: Parameters<Grader["draw"]>[0], grade: Grade, clip: Pick<Clip, "transform" | "reframe">, sourceT: number, srcW: number, srcH: number, punch: Punch | null = null): OffscreenCanvas {
+  compose(src: Parameters<Grader["draw"]>[0], grade: Grade, clip: Pick<Clip, "transform" | "reframe" | "obscure">, sourceT: number, srcW: number, srcH: number, punch: Punch | null = null): OffscreenCanvas {
     const { width: w, height: h } = this;
     const panes = framed(this.frame) ? framePanes(this.layout, w, h, pictureAspect(clip.transform, srcW, srcH)) : null;
     const main = this.graderFor(w, h);
     if (!panes || (panes.length === 1 && panes[0].source === "window" && !panes[0].blur)) {
       main.draw(src, grade, transformAt(clip, sourceT, this.frame, w / h, srcW, srcH, punch), srcW, srcH);
-      return main.canvas;
+      return this.obscurer.draw(main.canvas, clip.obscure);
     }
     const ctx = this.ctx;
     ctx.save();
@@ -601,7 +604,7 @@ export class FrameComposer {
       }
     }
     ctx.restore();
-    return this.canvas;
+    return this.obscurer.draw(this.canvas, clip.obscure);
   }
 }
 
