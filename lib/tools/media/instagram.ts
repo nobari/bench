@@ -192,6 +192,11 @@ export function findMediaInHtml(html: string, code?: string): Result<SlimMedia> 
     fallback ??= hit;
   }
   if (fallback) return { ok: true, value: slimMedia(fallback) };
+  if (/^Content-Type:\s*multipart\/related/im.test(html.slice(0, 2000)))
+    return {
+      ok: false,
+      error: "This is a single-file save (.mhtml), and no video data could be read from it. Save the page as “Webpage, HTML Only” instead, or copy its source.",
+    };
   if (/"pageID":"httpErrorPage"/.test(html) || /LoginAndSignupPage|"loginPage"/.test(html))
     return {
       ok: false,
@@ -404,8 +409,23 @@ export function encodeHandoff(slim: SlimMedia): string {
   return toBase64Url(JSON.stringify(slim));
 }
 
-/** Reads `#ig=…` (with or without the #). Null when the hash holds no hand-off. */
+/**
+ * Why a reader on the page found nothing, by the code it reports. The bookmark and the button say
+ * this on Instagram's page themselves; the iPhone Shortcut cannot, so it opens the tool with
+ * `#igerr=<code>` and the tool says it. Only these fixed texts are ever shown for that hash.
+ */
+export const HANDOFF_ERRORS: Record<string, string> = {
+  site: "That was run on a page that is not instagram.com. Open the reel in the browser first.",
+  post: "That page is not a reel or a post. Open the reel itself (its address has /reel/ or /p/ in it), then try again.",
+  nodata: "Instagram's page had no video data for this post. Check that you are signed in to Instagram in this browser, reload the reel and try again.",
+  fetch: "The reel's page could not be read. Reload it and try again.",
+  photo: "This post has no video — only photos.",
+};
+
+/** Reads `#ig=…` or `#igerr=…` (with or without the #). Null when the hash holds no hand-off. */
 export function decodeHandoff(hash: string): Result<IgMedia> | null {
+  const failed = new RegExp(`(?:^|[#&])${HANDOFF_KEY}err=([a-z]{1,12})(?:&|$)`).exec(hash);
+  if (failed) return { ok: false, error: Object.hasOwn(HANDOFF_ERRORS, failed[1]) ? HANDOFF_ERRORS[failed[1]] : HANDOFF_ERRORS.fetch };
   const m = new RegExp(`(?:^|[#&])${HANDOFF_KEY}=([A-Za-z0-9_-]+)`).exec(hash);
   if (!m) return null;
   if (m[1].length > MAX_HANDOFF) return { ok: false, error: "The data from the page is too large to read." };
@@ -418,43 +438,97 @@ export function decodeHandoff(hash: string): Result<IgMedia> | null {
   return readMedia(parsed);
 }
 
+/* ───────────────────────── the readers that run on Instagram's page ───────────────────────── */
+
+const POST_PATH = "^\\/(?:[A-Za-z0-9._]+\\/)?(?:p|reels?|tv)\\/([A-Za-z0-9_-]{5,40})";
+
 /**
- * The bookmarklet: a `javascript:` address that, run on an Instagram post in the visitor's own
- * browser, finds the post's media object in the page's data and opens the tool with a compact copy
- * of it in the hash. Nothing but the visitor's browser talks to Instagram, and the hash never
- * reaches a server. When the page was reached by scrolling (its data is for an earlier reel) the
- * page's address is loaded once more, the way a reload would, and read from that. That request
- * must say it accepts HTML: measured on a reel, the default any-type request gets a 630 kB page
- * without the media data, the HTML one the 748 kB page a navigation gets, with it.
+ * The shared half of every reader: plain ES5 that, on an Instagram post in the visitor's own
+ * browser, finds the post's media object in the page's data and builds the tool's address with a
+ * compact copy of it in the hash. It defines `run(ok, fail)`: `ok(url, hasVideo)` gets that
+ * address, `fail(code)` one of the HANDOFF_ERRORS codes; plus `show` and `bad`, the usual pair
+ * (open the tool, or say why not in a small notice on the page).
  *
- * It mirrors `findMedia` + `slimMedia` above in plain ES5, because it must stand alone; the tests
- * run both on the same page and compare.
+ * Nothing but the visitor's browser talks to Instagram, and the hash never reaches a server. When
+ * the page was reached by scrolling (its data is for an earlier reel) the page's address is loaded
+ * once more, the way a reload would, and read from that. That request must say it accepts HTML:
+ * measured on a reel, the default any-type request gets a 630 kB page without the media data, the
+ * HTML one the 748 kB page a navigation gets, with it.
+ *
+ * It mirrors `findMedia` + `slimMedia` above, because it must stand alone; the tests run both on
+ * the same page and compare. Every line ends a statement: the bookmark joins them into one line.
  */
-export function bookmarkletSource(toolUrl: string): string {
-  const js = `(function(){
-var T=${JSON.stringify(toolUrl)},M=location.pathname.match(/^\\/(?:[A-Za-z0-9._]+\\/)?(?:p|reels?|tv)\\/([A-Za-z0-9_-]{5,40})/);
+function readerCore(toolUrl: string): string {
+  return `var T=${JSON.stringify(toolUrl)},P=/${POST_PATH}/;
 function say(t,href){var d=document.getElementById('bench-ig');if(!d){d=document.createElement('div');d.id='bench-ig';d.style.cssText='position:fixed;z-index:2147483647;left:50%;top:16px;transform:translateX(-50%);max-width:90vw;padding:10px 14px;border-radius:8px;background:#111;color:#fff;font:14px/1.4 system-ui,sans-serif;box-shadow:0 4px 24px rgba(0,0,0,.4)';document.body.appendChild(d)}d.textContent=t+' ';if(href){var a=document.createElement('a');a.href=href;a.target='_blank';a.rel='noopener';a.textContent='Open Bench';a.style.cssText='color:#8cf;text-decoration:underline';d.appendChild(a)}clearTimeout(d._t);d._t=setTimeout(function(){d.remove()},href?20000:6000)}
-if(!/(^|\\.)instagram\\.com$/.test(location.hostname)){say('Bench: use this bookmark on an Instagram reel or post.');return}
-if(!M){say('Bench: open a reel or a post first, then use this bookmark.');return}
-var C=M[1];
 function S(v){return typeof v=='string'&&v?v:void 0}
 function O(v){return!!v&&typeof v=='object'&&!Array.isArray(v)}
 function code(o){return S(o.code)||S(o.shortcode)}
 function kids(o){var r=[],i,a=o.carousel_media,e=O(o.edge_sidecar_to_children)?o.edge_sidecar_to_children.edges:null;if(Array.isArray(a))for(i=0;i<a.length;i++)if(O(a[i]))r.push(a[i]);if(Array.isArray(e))for(i=0;i<e.length;i++)if(O(e[i])&&O(e[i].node))r.push(e[i].node);return r}
 function vid(o){if(Array.isArray(o.video_versions)&&o.video_versions.length)return true;if(S(o.video_url))return true;var k=kids(o),i;for(i=0;i<k.length;i++)if(vid(k[i]))return true;return false}
-var fb=null;
-function find(o,d){if(!o||typeof o!='object'||d>60)return null;if(O(o)&&code(o)===C&&('video_versions'in o||'video_url'in o||'image_versions2'in o||'display_url'in o)){if(vid(o))return o;if(!fb)fb=o}for(var k in o){var r=find(o[k],d+1);if(r)return r}return null}
-function slim(o){var s={},c=code(o),u=O(o.user)?S(o.user.username):O(o.owner)?S(o.owner.username):void 0,t=O(o.caption)?S(o.caption.text):void 0,e=O(o.edge_media_to_caption)?o.edge_media_to_caption.edges:null,D=O(o.dimensions)?o.dimensions:null,w=o.original_width||(D?D.width:void 0),h=o.original_height||(D?D.height:void 0),I=O(o.image_versions2)&&Array.isArray(o.image_versions2.candidates)?o.image_versions2.candidates:[],p=(O(I[0])?S(I[0].url):void 0)||S(o.display_url),v=[],i,f,k=kids(o);
-if(c)s.c=c;if(u)s.u=u;if(!t&&Array.isArray(e)&&O(e[0])&&O(e[0].node))t=S(e[0].node.text);if(t)s.t=t.slice(0,300);if(typeof o.video_duration=='number'&&o.video_duration)s.d=o.video_duration;if(typeof w=='number'&&w)s.w=w;if(typeof h=='number'&&h)s.h=h;if(p)s.i=p;
-if(Array.isArray(o.video_versions))for(i=0;i<o.video_versions.length;i++){f=o.video_versions[i];if(O(f)&&S(f.url))v.push([f.url,f.width,f.height])}
-if(S(o.video_url))v.push([o.video_url,s.w,s.h]);if(v.length)s.v=v;if(S(o.video_dash_manifest))s.m=o.video_dash_manifest;if(k.length)s.k=k.map(slim);return s}
-function scan(doc){var a=doc.querySelectorAll('script[type="application/json"]'),i,t,r;for(i=0;i<a.length;i++){t=a[i].textContent||'';if(t.indexOf(C)<0)continue;try{r=find(JSON.parse(t),0)}catch(x){r=null}if(r)return r}return null}
+function slim(o){var s={},c=code(o),u=O(o.user)?S(o.user.username):O(o.owner)?S(o.owner.username):void 0,t=O(o.caption)?S(o.caption.text):void 0,e=O(o.edge_media_to_caption)?o.edge_media_to_caption.edges:null,D=O(o.dimensions)?o.dimensions:null,w=o.original_width||(D?D.width:void 0),h=o.original_height||(D?D.height:void 0),I=O(o.image_versions2)&&Array.isArray(o.image_versions2.candidates)?o.image_versions2.candidates:[],p=(O(I[0])?S(I[0].url):void 0)||S(o.display_url),v=[],i,f,k=kids(o);if(c)s.c=c;if(u)s.u=u;if(!t&&Array.isArray(e)&&O(e[0])&&O(e[0].node))t=S(e[0].node.text);if(t)s.t=t.slice(0,300);if(typeof o.video_duration=='number'&&o.video_duration)s.d=o.video_duration;if(typeof w=='number'&&w)s.w=w;if(typeof h=='number'&&h)s.h=h;if(p)s.i=p;if(Array.isArray(o.video_versions))for(i=0;i<o.video_versions.length;i++){f=o.video_versions[i];if(O(f)&&S(f.url))v.push([f.url,f.width,f.height])}if(S(o.video_url))v.push([o.video_url,s.w,s.h]);if(v.length)s.v=v;if(S(o.video_dash_manifest))s.m=o.video_dash_manifest;if(k.length)s.k=k.map(slim);return s}
 function b64(s){var b=new TextEncoder().encode(s),o='',i;for(i=0;i<b.length;i+=32768)o+=String.fromCharCode.apply(null,b.subarray(i,i+32768));return btoa(o).replace(/\\+/g,'-').replace(/\\//g,'_').replace(/=+$/,'')}
-function send(o){var s=slim(o),p=b64(JSON.stringify(s));if(p.length>300000){delete s.m;if(s.k)s.k.forEach(function(x){delete x.m});p=b64(JSON.stringify(s))}var url=T+'#${HANDOFF_KEY}='+p,w=window.open(url,'_blank');if(w)say(vid(o)?'Bench: video found — opened in a new tab.':'Bench: this post has no video.');else say('Bench: the new tab was blocked.',url)}
-var hit=scan(document);
-if(hit){send(hit);return}
-say('Bench: reading this reel…');
-fetch(location.href,{credentials:'include',headers:{Accept:'text/html,application/xhtml+xml'}}).then(function(r){return r.text()}).then(function(t){hit=scan(new DOMParser().parseFromString(t,'text/html'))||fb;if(hit)send(hit);else say('Bench: no video data on this page. Reload the page and use the bookmark again.')}).catch(function(){say('Bench: could not read this page. Reload it and use the bookmark again.')})
-})()`;
+function link(o){var s=slim(o),p=b64(JSON.stringify(s));if(p.length>300000){delete s.m;if(s.k)s.k.forEach(function(x){delete x.m});p=b64(JSON.stringify(s))}return T+'#${HANDOFF_KEY}='+p}
+function run(ok,fail){if(!/(^|\\.)instagram\\.com$/.test(location.hostname)){fail('site');return}var M=location.pathname.match(P);if(!M){fail('post');return}var C=M[1],fb=null,hit;function find(o,d){if(!o||typeof o!='object'||d>60)return null;if(O(o)&&code(o)===C&&('video_versions'in o||'video_url'in o||'image_versions2'in o||'display_url'in o)){if(vid(o))return o;if(!fb)fb=o}for(var k in o){var r=find(o[k],d+1);if(r)return r}return null}function scan(doc){var a=doc.querySelectorAll('script[type="application/json"]'),i,t,r;for(i=0;i<a.length;i++){t=a[i].textContent||'';if(t.indexOf(C)<0)continue;try{r=find(JSON.parse(t),0)}catch(x){r=null}if(r)return r}return null}hit=scan(document);if(hit){ok(link(hit),true);return}say('Bench: reading this reel…');fetch(location.href,{credentials:'include',headers:{Accept:'text/html,application/xhtml+xml'}}).then(function(r){return r.text()}).then(function(t){hit=scan(new DOMParser().parseFromString(t,'text/html'))||fb;if(hit)ok(link(hit),vid(hit));else fail('nodata')},function(){fail('fetch')})}
+var E={site:'Bench: use this on an Instagram reel or post.',post:'Bench: open a reel or a post first, then try again.',nodata:'Bench: no video data on this page. Reload the page and try again.',fetch:'Bench: could not read this page. Reload it and try again.',photo:'Bench: this post has no video.'};
+function bad(c){say(E[c]||E.fetch)}
+function show(url,v){if(!v){bad('photo');return}if(/Android|iPhone|iPad|iPod|Mobi/.test(navigator.userAgent)){say('Bench: video found, opening it…');location.href=url;return}var w=window.open(url,'_blank');if(w)say('Bench: video found — opened in a new tab.');else say('Bench: the new tab was blocked.',url)}`;
+}
+
+/**
+ * The bookmarklet: a `javascript:` address that runs the reader on the page it is clicked on. On a
+ * computer the tool opens in a new tab (a link is offered when the browser blocks that); on a phone
+ * it opens in the same tab, where nothing can block it and Back returns to the reel.
+ */
+export function bookmarkletSource(toolUrl: string): string {
+  const js = `(function(){${readerCore(toolUrl)}run(show,bad)})()`;
   return `javascript:${encodeURIComponent(js.replace(/\n/g, ""))}`;
 }
+
+export const USERSCRIPT_VERSION = "1.0.0";
+/** The file name a userscript manager recognises as something to install. */
+export const USERSCRIPT_FILE = "bench-instagram-video.user.js";
+
+/**
+ * The same reader as a userscript (Tampermonkey, Violentmonkey, the Userscripts app for Safari):
+ * installed once, it keeps a "Get video" button on every reel and post, so nothing has to be
+ * clicked in the bookmarks. Instagram changes pages without loading them, so the button follows
+ * the address by looking at it now and then.
+ */
+export function userscriptSource(toolUrl: string, scriptUrl: string): string {
+  return `// ==UserScript==
+// @name         Bench: Get Instagram video
+// @namespace    ${new URL(toolUrl).origin}
+// @version      ${USERSCRIPT_VERSION}
+// @description  Adds a "Get video" button to Instagram reels and posts. It reads the video's file addresses from the page you are looking at and opens them in Bench. Nothing is sent to a server.
+// @match        https://www.instagram.com/*
+// @grant        none
+// @run-at       document-idle
+// @noframes
+// @homepageURL  ${toolUrl}
+// @downloadURL  ${scriptUrl}
+// @updateURL    ${scriptUrl}
+// ==/UserScript==
+(function(){
+if(window.top!==window.self)return;
+${readerCore(toolUrl)}
+function btn(){var on=P.test(location.pathname),b=document.getElementById('bench-ig-btn');if(on&&!b&&document.body){b=document.createElement('button');b.id='bench-ig-btn';b.type='button';b.textContent='Get video';b.title='Open this video in Bench';b.style.cssText='position:fixed;z-index:2147483646;right:16px;top:72px;padding:9px 14px;border:1px solid rgba(255,255,255,.35);border-radius:999px;background:#111;color:#fff;font:600 13px/1 system-ui,sans-serif;box-shadow:0 2px 12px rgba(0,0,0,.35);cursor:pointer';b.onclick=function(){run(show,bad)};document.body.appendChild(b)}else if(!on&&b)b.remove()}
+btn();
+setInterval(btn,800);
+})();
+`;
+}
+
+/**
+ * The reader for an iPhone Shortcut's "Run JavaScript on Web Page" action, which runs a script on
+ * the page shared from Safari and waits for it to call `completion(result)`. The result is the
+ * tool's address, with the video in the hash or the reason there is none, for the Shortcut's next
+ * action (Open URLs) to open.
+ */
+export function shortcutSource(toolUrl: string): string {
+  return `(function(){
+${readerCore(toolUrl)}
+run(function(u,v){completion(v?u:T+'#${HANDOFF_KEY}err=photo')},function(c){completion(T+'#${HANDOFF_KEY}err='+c)});
+})();`;
+}
+

@@ -2,10 +2,27 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useQueryState, parseAsString } from "nuqs";
-import { AlertTriangle, Bookmark, ClipboardPaste, Download, ExternalLink, Loader2, Music, Video, VideoOff, X } from "lucide-react";
+import {
+  AlertTriangle,
+  Bookmark,
+  ClipboardPaste,
+  Download,
+  ExternalLink,
+  FileUp,
+  Loader2,
+  MousePointerClick,
+  Music,
+  Smartphone,
+  Video,
+  VideoOff,
+  X,
+} from "lucide-react";
 import {
   HANDOFF_KEY,
+  USERSCRIPT_FILE,
+  USERSCRIPT_VERSION,
   bookmarkletSource,
+  shortcutSource,
   codecName,
   decodeHandoff,
   fileNameFor,
@@ -25,7 +42,34 @@ const TOOL_PATH = "/media/instagram-video";
 const BTN =
   "inline-flex h-8 items-center gap-1.5 rounded-[var(--radius-sm)] border border-edge px-2.5 font-mono text-xs text-muted transition-colors hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-40";
 
+const SEG =
+  "inline-flex h-8 items-center gap-1.5 rounded-[var(--radius-sm)] border border-edge px-2.5 font-mono text-xs text-muted transition-colors hover:text-ink";
+const STEPS = "max-w-prose list-decimal space-y-1.5 pl-4 text-xs leading-relaxed text-muted";
+
 type Found = Result<IgMedia> | null;
+
+/** The ways the reel's page can be read; all end in the same list of files. */
+type Way = "bookmark" | "button" | "shortcut" | "source";
+const WAYS: { id: Way; label: string; icon: typeof Bookmark }[] = [
+  { id: "bookmark", label: "Bookmark", icon: Bookmark },
+  { id: "button", label: "Button on Instagram", icon: MousePointerClick },
+  { id: "shortcut", label: "iPhone Shortcut", icon: Smartphone },
+  { id: "source", label: "Page source", icon: ClipboardPaste },
+];
+
+type Device = "computer" | "android" | "iphone";
+const DEVICES: { id: Device; label: string }[] = [
+  { id: "computer", label: "Computer" },
+  { id: "android", label: "Android" },
+  { id: "iphone", label: "iPhone" },
+];
+
+function deviceOf(): Device {
+  if (typeof navigator === "undefined") return "computer";
+  if (/Android/.test(navigator.userAgent)) return "android";
+  if (/iPhone|iPad|iPod/.test(navigator.userAgent)) return "iphone";
+  return "computer";
+}
 
 function readHash(): Found {
   if (typeof window === "undefined") return null;
@@ -147,6 +191,9 @@ export function InstagramVideoWidget() {
   const [pasteBusy, setPasteBusy] = useState(false);
   const [toolUrl] = useState(() => (typeof window === "undefined" ? TOOL_PATH : `${window.location.origin}${TOOL_PATH}`));
   const bookmarklet = bookmarkletSource(toolUrl);
+  const shortcut = shortcutSource(toolUrl);
+  const [way, setWay] = useState<Way>("bookmark");
+  const [device, setDevice] = useState<Device>(deviceOf);
 
   const link = parseInstagramLink(input);
   const showLinkError = input.trim() !== "" && !link.ok;
@@ -190,7 +237,7 @@ export function InstagramVideoWidget() {
 
   const clear = () => {
     setFound(null);
-    if (window.location.hash.includes(`${HANDOFF_KEY}=`))
+    if (new RegExp(`[#&]${HANDOFF_KEY}(err)?=`).test(window.location.hash))
       window.history.replaceState(null, "", window.location.pathname + window.location.search);
   };
 
@@ -253,43 +300,164 @@ export function InstagramVideoWidget() {
         <div className="border-b border-edge px-3 py-2">
           <span className="readout">2 · Read the video from the page</span>
         </div>
-        <div className="grid gap-px bg-edge sm:grid-cols-2">
-          <div className="space-y-2.5 bg-surface p-3">
-            <p className="text-sm text-ink">With a bookmark</p>
-            <p className="text-xs leading-relaxed text-muted">
-              Drag this button to your bookmarks bar once. Then, on any reel or post on instagram.com, click the bookmark: the video
-              opens here.
-            </p>
+        <div className="flex flex-wrap gap-1.5 border-b border-edge px-3 py-2" role="tablist" aria-label="Ways to read the page">
+          {WAYS.map((w) => (
+            <button
+              key={w.id}
+              type="button"
+              role="tab"
+              aria-selected={way === w.id}
+              data-ig-way={w.id}
+              onClick={() => setWay(w.id)}
+              className={cn(SEG, way === w.id && "border-accent text-accent")}
+            >
+              <w.icon size={13} /> {w.label}
+            </button>
+          ))}
+        </div>
+
+        {way === "bookmark" && (
+          <div className="space-y-2.5 p-3" data-ig-panel="bookmark">
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="readout mr-1">On</span>
+              {DEVICES.map((d) => (
+                <button
+                  key={d.id}
+                  type="button"
+                  aria-pressed={device === d.id}
+                  data-ig-device={d.id}
+                  onClick={() => setDevice(d.id)}
+                  className={cn(SEG, "h-7", device === d.id && "border-accent text-accent")}
+                >
+                  {d.label}
+                </button>
+              ))}
+            </div>
+            {device === "computer" && (
+              <p className="max-w-prose text-xs leading-relaxed text-muted">
+                Drag this button to your bookmarks bar once. Then, on any reel or post on instagram.com, click the bookmark: the video
+                opens here.
+              </p>
+            )}
+            {device === "android" && (
+              <ol className={STEPS}>
+                <li>Press Copy as address below.</li>
+                <li>
+                  In Chrome, bookmark any page (⋮ → ☆). Then open ⋮ → Bookmarks, press ⋮ beside that bookmark → Edit: name it{" "}
+                  <span className="font-mono text-ink">getvideo</span> and paste the copied text as its URL.
+                </li>
+                <li>
+                  Open the reel in Chrome, signed in to Instagram there (not in the Instagram app). Tap the address bar, type{" "}
+                  <span className="font-mono text-ink">getvideo</span> and tap the bookmark in the list. The video opens here.
+                </li>
+              </ol>
+            )}
+            {device === "iphone" && (
+              <ol className={STEPS}>
+                <li>Press Copy as address below.</li>
+                <li>
+                  In Safari, on any page, press Share → Add Bookmark and save it. Then open Bookmarks → Edit, tap that bookmark and
+                  replace its address with the copied text.
+                </li>
+                <li>
+                  Open the reel in Safari, signed in to Instagram there (not in the Instagram app). Open Bookmarks and tap the
+                  bookmark. The video opens here.
+                </li>
+              </ol>
+            )}
             <div className="flex flex-wrap items-center gap-2">
-              <a
-                ref={(el) => {
-                  // React refuses javascript: addresses in href, so it is set on the element.
-                  el?.setAttribute("href", bookmarklet);
-                }}
-                onClick={(e) => {
-                  e.preventDefault();
-                  setBookmarkHint(true);
-                }}
-                draggable
-                data-ig-bookmarklet
-                title="Drag me to the bookmarks bar"
-                className="inline-flex h-8 cursor-grab items-center gap-1.5 rounded-[var(--radius-sm)] border border-accent px-3 font-mono text-xs font-semibold text-accent"
-              >
-                <Bookmark size={13} /> Get Instagram video
-              </a>
+              {device === "computer" && (
+                <a
+                  ref={(el) => {
+                    // React refuses javascript: addresses in href, so it is set on the element.
+                    el?.setAttribute("href", bookmarklet);
+                  }}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    setBookmarkHint(true);
+                  }}
+                  draggable
+                  data-ig-bookmarklet
+                  title="Drag me to the bookmarks bar"
+                  className="inline-flex h-8 cursor-grab items-center gap-1.5 rounded-[var(--radius-sm)] border border-accent px-3 font-mono text-xs font-semibold text-accent"
+                >
+                  <Bookmark size={13} /> Get Instagram video
+                </a>
+              )}
               <CopyButton value={bookmarklet} label="Copy as address" />
             </div>
-            {bookmarkHint && (
+            {device === "computer" && bookmarkHint && (
               <p className="font-mono text-xs text-warn">
                 Drag it to the bookmarks bar (⌘⇧B / Ctrl+Shift+B shows the bar) — clicking it here does nothing. Or add a bookmark by
                 hand and paste the copied address as its URL.
               </p>
             )}
+            {device !== "computer" && (
+              <p className="max-w-prose text-xs leading-relaxed text-faint">
+                A link to a reel usually opens the Instagram app. Copy the link and paste it into the browser&apos;s address bar instead,
+                and sign in to Instagram there once.
+              </p>
+            )}
           </div>
-          <div className="space-y-2.5 bg-surface p-3">
-            <p className="text-sm text-ink">Or with the page source</p>
-            <p className="text-xs leading-relaxed text-muted">
-              On the reel&apos;s page press ⌘⌥U / Ctrl+U, select all, copy, and paste it here. It is read in this tab and not kept.
+        )}
+
+        {way === "button" && (
+          <div className="space-y-2.5 p-3" data-ig-panel="button">
+            <p className="max-w-prose text-xs leading-relaxed text-muted">
+              Install this small script once and every reel and post on instagram.com gets a Get video button in its corner; pressing
+              it opens the video here. It needs a userscript manager in the browser: Tampermonkey or Violentmonkey (Chrome, Edge,
+              Firefox, and Firefox on Android), or Userscripts (Safari on a Mac or an iPhone).
+            </p>
+            <div className="flex flex-wrap items-center gap-2">
+              <a
+                href={`/userscripts/${USERSCRIPT_FILE}`}
+                target="_blank"
+                rel="noopener"
+                data-ig-userscript
+                className="inline-flex h-8 items-center gap-1.5 rounded-[var(--radius-sm)] bg-accent px-3 font-mono text-xs font-semibold text-on-accent"
+              >
+                <MousePointerClick size={13} /> Install the button
+              </a>
+              <span className="readout tabular">v{USERSCRIPT_VERSION}</span>
+            </div>
+            <p className="max-w-prose text-xs leading-relaxed text-faint">
+              With a manager installed, the link opens its install page. Without one it shows the script itself, which is all there is
+              to read: it runs only on instagram.com and sends nothing anywhere but this page. In Chrome, Tampermonkey also needs
+              “Allow user scripts” switched on in its extension details.
+            </p>
+          </div>
+        )}
+
+        {way === "shortcut" && (
+          <div className="space-y-2.5 p-3" data-ig-panel="shortcut">
+            <p className="max-w-prose text-xs leading-relaxed text-muted">
+              On an iPhone or iPad, a Shortcut can run from Safari&apos;s Share menu on the reel you are looking at.
+            </p>
+            <ol className={STEPS}>
+              <li>Press Copy script below.</li>
+              <li>
+                In the Shortcuts app make a new shortcut. Add the action <span className="text-ink">Run JavaScript on Web Page</span>{" "}
+                and replace its text with the copied script. After it add the action <span className="text-ink">Open URLs</span>; it
+                takes the script&apos;s result.
+              </li>
+              <li>
+                In the shortcut&apos;s details (ⓘ) switch on Show in Share Sheet. In Settings → Apps → Shortcuts → Advanced switch on
+                Allow Running Scripts.
+              </li>
+              <li>
+                Open the reel in Safari, signed in to Instagram there. Press Share, choose the shortcut, and allow it on instagram.com
+                the first time. The video opens here.
+              </li>
+            </ol>
+            <CopyButton value={shortcut} label="Copy script" />
+          </div>
+        )}
+
+        {way === "source" && (
+          <div className="space-y-2.5 p-3" data-ig-panel="source">
+            <p className="max-w-prose text-xs leading-relaxed text-muted">
+              On the reel&apos;s page press ⌘⌥U / Ctrl+U, select all, copy, and paste it here. Or save the page (⌘S / Ctrl+S, as
+              “Webpage, HTML Only”) and drop or choose the file. It is read in this tab and not kept.
             </p>
             <div className="flex flex-wrap items-center gap-2">
               <textarea
@@ -314,9 +482,23 @@ export function InstagramVideoWidget() {
               <button type="button" onClick={pasteFromClipboard} disabled={pasteBusy} className={BTN}>
                 {pasteBusy ? <Loader2 size={13} className="animate-spin" /> : <ClipboardPaste size={13} />} Paste
               </button>
+              <label className={cn(BTN, "cursor-pointer")}>
+                <FileUp size={13} /> Saved page
+                <input
+                  type="file"
+                  accept=".html,.htm,text/html"
+                  className="sr-only"
+                  data-ig-file-input
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    e.target.value = "";
+                    if (file) void file.text().then(readSource);
+                  }}
+                />
+              </label>
             </div>
           </div>
-        </div>
+        )}
       </div>
 
       {/* error */}
