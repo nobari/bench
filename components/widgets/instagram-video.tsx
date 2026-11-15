@@ -22,7 +22,9 @@ import {
   USERSCRIPT_FILE,
   USERSCRIPT_VERSION,
   bookmarkletSource,
+  browserAddress,
   shortcutSource,
+  viewSourceAddress,
   codecName,
   decodeHandoff,
   fileNameFor,
@@ -69,6 +71,26 @@ function deviceOf(): Device {
   if (/Android/.test(navigator.userAgent)) return "android";
   if (/iPhone|iPad|iPod/.test(navigator.userAgent)) return "iphone";
   return "computer";
+}
+
+function DeviceSwitch({ device, onDevice, at }: { device: Device; onDevice: (d: Device) => void; at: string }) {
+  return (
+    <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label="Device" data-ig-devices={at}>
+      <span className="readout mr-1">On</span>
+      {DEVICES.map((d) => (
+        <button
+          key={d.id}
+          type="button"
+          aria-pressed={device === d.id}
+          data-ig-device={d.id}
+          onClick={() => onDevice(d.id)}
+          className={cn(SEG, "h-7", device === d.id && "border-accent text-accent")}
+        >
+          {d.label}
+        </button>
+      ))}
+    </div>
+  );
 }
 
 function readHash(): Found {
@@ -268,18 +290,42 @@ export function InstagramVideoWidget() {
             placeholder="https://www.instagram.com/reel/…"
             className="input min-w-0 flex-1 font-mono text-sm"
           />
+          {/* On a phone a plain link is taken by the Instagram app, so the button is addressed to Chrome there. */}
           <a
-            href={link.ok ? link.value.url : undefined}
-            target="_blank"
-            rel="noopener noreferrer"
+            href={link.ok ? browserAddress(link.value, device) : undefined}
+            {...(device === "computer" ? { target: "_blank", rel: "noopener noreferrer" } : {})}
             aria-disabled={!link.ok}
+            data-ig-open={device}
             className={cn(
               "inline-flex h-9 items-center gap-1.5 rounded-[var(--radius-sm)] bg-accent px-3 font-mono text-xs font-semibold text-on-accent",
               !link.ok && "pointer-events-none opacity-40",
             )}
           >
-            <ExternalLink size={13} /> Open on Instagram
+            <ExternalLink size={13} /> {device === "computer" ? "Open on Instagram" : "Open in Chrome"}
           </a>
+        </div>
+        <div className="flex flex-col gap-2 border-t border-edge px-3 py-2.5" data-ig-open-row>
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+            <DeviceSwitch device={device} onDevice={setDevice} at="link" />
+            {link.ok && (
+              <div className="flex flex-wrap items-center gap-2">
+                {device !== "computer" && <CopyButton value={link.value.url} label="Copy link" />}
+                {device !== "iphone" && <CopyButton value={viewSourceAddress(link.value)} label="Copy page-source address" />}
+              </div>
+            )}
+          </div>
+          {device === "android" && (
+            <p className="max-w-prose text-xs leading-relaxed text-faint" data-ig-open-note>
+              The button opens the reel in Chrome instead of the Instagram app; sign in to Instagram there once. For another browser,
+              press Copy link and paste it into that browser&apos;s address bar.
+            </p>
+          )}
+          {device === "iphone" && (
+            <p className="max-w-prose text-xs leading-relaxed text-faint" data-ig-open-note>
+              The button opens the reel in the Chrome app instead of the Instagram app; without Chrome installed it does nothing. For
+              Safari, press Copy link and paste it into Safari&apos;s address bar. Sign in to Instagram in that browser once.
+            </p>
+          )}
         </div>
         {(showLinkError || link.ok) && (
           <div className="border-t border-edge px-3 py-2 font-mono text-xs">
@@ -318,21 +364,7 @@ export function InstagramVideoWidget() {
 
         {way === "bookmark" && (
           <div className="space-y-2.5 p-3" data-ig-panel="bookmark">
-            <div className="flex flex-wrap items-center gap-1.5">
-              <span className="readout mr-1">On</span>
-              {DEVICES.map((d) => (
-                <button
-                  key={d.id}
-                  type="button"
-                  aria-pressed={device === d.id}
-                  data-ig-device={d.id}
-                  onClick={() => setDevice(d.id)}
-                  className={cn(SEG, "h-7", device === d.id && "border-accent text-accent")}
-                >
-                  {d.label}
-                </button>
-              ))}
-            </div>
+            <DeviceSwitch device={device} onDevice={setDevice} at="bookmark" />
             {device === "computer" && (
               <p className="max-w-prose text-xs leading-relaxed text-muted">
                 Drag this button to your bookmarks bar once. Then, on any reel or post on instagram.com, click the bookmark: the video
@@ -353,17 +385,37 @@ export function InstagramVideoWidget() {
               </ol>
             )}
             {device === "iphone" && (
-              <ol className={STEPS}>
-                <li>Press Copy as address below.</li>
-                <li>
-                  In Safari, on any page, press Share → Add Bookmark and save it. Then open Bookmarks → Edit, tap that bookmark and
-                  replace its address with the copied text.
-                </li>
-                <li>
-                  Open the reel in Safari, signed in to Instagram there (not in the Instagram app). Open Bookmarks and tap the
-                  bookmark. The video opens here.
-                </li>
-              </ol>
+              <>
+                <p className="readout">In Safari</p>
+                <ol className={STEPS}>
+                  <li>Press Copy as address below.</li>
+                  <li>
+                    In Safari, on any page, press Share → Add Bookmark and save it. Then open Bookmarks → Edit, tap that bookmark and
+                    replace its address with the copied text.
+                  </li>
+                  <li>
+                    Open the reel in Safari, signed in to Instagram there (not in the Instagram app). Open Bookmarks and tap the
+                    bookmark. The video opens here.
+                  </li>
+                </ol>
+                <p className="readout" data-ig-iphone-chrome>
+                  In Chrome
+                </p>
+                <ol className={STEPS}>
+                  <li>Press Copy as address below.</li>
+                  <li>
+                    In Chrome, on any page, press ⋯ → Add to Bookmarks. Then open ⋯ → Bookmarks → Edit, tap that bookmark: name it{" "}
+                    <span className="font-mono text-ink">getvideo</span> and paste the copied text as its address.
+                  </li>
+                  <li>
+                    Open the reel with Open in Chrome above, signed in to Instagram there. Tap the address bar, type{" "}
+                    <span className="font-mono text-ink">getvideo</span> and tap the bookmark in the list. The video opens here.
+                  </li>
+                </ol>
+                <p className="max-w-prose text-xs leading-relaxed text-faint">
+                  The Chrome steps have not been tried on an iPhone yet. If tapping the bookmark does nothing there, use Safari.
+                </p>
+              </>
             )}
             <div className="flex flex-wrap items-center gap-2">
               {device === "computer" && (
@@ -394,8 +446,8 @@ export function InstagramVideoWidget() {
             )}
             {device !== "computer" && (
               <p className="max-w-prose text-xs leading-relaxed text-faint">
-                A link to a reel usually opens the Instagram app. Copy the link and paste it into the browser&apos;s address bar instead,
-                and sign in to Instagram there once.
+                A link to a reel usually opens the Instagram app. Put the link in the box at the top and press Open in Chrome, or
+                paste it into the browser&apos;s address bar, and sign in to Instagram there once.
               </p>
             )}
           </div>
@@ -455,10 +507,28 @@ export function InstagramVideoWidget() {
 
         {way === "source" && (
           <div className="space-y-2.5 p-3" data-ig-panel="source">
-            <p className="max-w-prose text-xs leading-relaxed text-muted">
-              On the reel&apos;s page press ⌘⌥U / Ctrl+U, select all, copy, and paste it here. Or save the page (⌘S / Ctrl+S, as
-              “Webpage, HTML Only”) and drop or choose the file. It is read in this tab and not kept.
-            </p>
+            <DeviceSwitch device={device} onDevice={setDevice} at="source" />
+            {device === "computer" && (
+              <p className="max-w-prose text-xs leading-relaxed text-muted">
+                On the reel&apos;s page press ⌘⌥U / Ctrl+U, select all, copy, and paste it here. Or save the page (⌘S / Ctrl+S, as
+                “Webpage, HTML Only”) and drop or choose the file. With a link in the box at the top, Copy page-source address there
+                gives the address that shows the source when pasted into a new tab. It is read in this tab and not kept.
+              </p>
+            )}
+            {device === "android" && (
+              <ol className={STEPS} data-ig-source-steps="android">
+                <li>Put the reel&apos;s link in the box at the top and press Copy page-source address there.</li>
+                <li>In Chrome, signed in to Instagram, open a new tab, paste the copied address into the address bar and go.</li>
+                <li>Press and hold any word of the text that appears, choose Select all, then Copy.</li>
+                <li>Come back to this tab and press Paste. It is read in this tab and not kept.</li>
+              </ol>
+            )}
+            {device === "iphone" && (
+              <p className="max-w-prose text-xs leading-relaxed text-muted" data-ig-source-steps="iphone">
+                Safari and Chrome on an iPhone cannot show a page&apos;s source. Use the Bookmark or the iPhone Shortcut instead; a
+                page saved as HTML on a computer can still be chosen here.
+              </p>
+            )}
             <div className="flex flex-wrap items-center gap-2">
               <textarea
                 value=""

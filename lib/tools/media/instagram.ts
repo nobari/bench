@@ -62,6 +62,27 @@ export function parseInstagramLink(raw: string): Result<IgLink> {
   return { ok: true, value: { ...found, url: `https://www.instagram.com/${found.kind}/${found.code}/` } };
 }
 
+/* ───────────────────────── opening the post in a browser ───────────────────────── */
+
+export type IgDevice = "computer" | "android" | "iphone";
+
+/**
+ * An address that opens the post in a browser. On a phone a plain https link to instagram.com is taken by the
+ * Instagram app, where nothing can read the page, so Android gets an intent addressed to Chrome and an iPhone gets
+ * Chrome's own scheme (Safari has none a page may use). The address is built from the canonical link only.
+ */
+export function browserAddress(link: IgLink, device: IgDevice): string {
+  const rest = link.url.replace(/^https:\/\//, "");
+  if (device === "android") return `intent://${rest}#Intent;scheme=https;package=com.android.chrome;end`;
+  if (device === "iphone") return `googlechromes://${rest}`;
+  return link.url;
+}
+
+/** What to paste into the address bar of Chrome (Android or a computer) to see the page's source; a page cannot link to it. */
+export function viewSourceAddress(link: IgLink): string {
+  return `view-source:${link.url}`;
+}
+
 /* ───────────────────────── the compact copy ───────────────────────── */
 
 /** What the bookmarklet sends: the fields of Instagram's media object this tool reads, under short names. */
