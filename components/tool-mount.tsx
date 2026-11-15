@@ -45,6 +45,10 @@ const WIDGETS: Record<WidgetKey, React.ComponentType<Record<string, unknown>>> =
     () => import("@/components/widgets/gif-maker").then((m) => m.GifMakerWidget),
     { ssr: false, loading: Skeleton },
   ),
+  "instagram-video": dynamic(
+    () => import("@/components/widgets/instagram-video").then((m) => m.InstagramVideoWidget),
+    { ssr: false, loading: Skeleton },
+  ),
   "hash-generator": dynamic(
     () => import("@/components/widgets/hash-generator").then((m) => m.HashGeneratorWidget),
     { ssr: false, loading: Skeleton },

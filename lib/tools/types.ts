@@ -60,6 +60,7 @@ export type WidgetKey =
   | "json-schema"
   | "gif-maker"
   | "hash-generator"
+  | "instagram-video"
   | "id-generator"
   | "timestamp-converter"
   | "cron"
