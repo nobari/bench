@@ -9,13 +9,24 @@ import type { StopScan } from "./stops";
 import type { BeatGrid } from "./beats";
 
 /** Built-in conversions, plus the project's own .cube (DJI's official file, say). */
-export type LutKind = "none" | "dji-official" | "dlogm" | "dji-official-vivid" | "dji-official-vivid-sky" | "dji-official-dusk" | "dji-official-dusk-blue" | "dji-official-dusk-vivid" | "dji-official-night" | "dji-official-night-balanced" | "dji-official-night-steady" | "dji-official-study" | "dlogm-study" | "dlogm-natural" | "dlogm-vivid" | "dlogm-vivid-sky" | "dlogm-dusk" | "dlogm-dusk-blue" | "dlogm-dusk-vivid" | "dlogm-night" | "dlogm-night-balanced" | "dlogm-night-steady" | "dlog" | "custom";
-export const LUT_KINDS: LutKind[] = ["none", "dji-official", "dlogm", "dji-official-vivid", "dji-official-vivid-sky", "dji-official-dusk", "dji-official-dusk-blue", "dji-official-dusk-vivid", "dji-official-night", "dji-official-night-balanced", "dji-official-night-steady", "dji-official-study", "dlogm-study", "dlogm-natural", "dlogm-vivid", "dlogm-vivid-sky", "dlogm-dusk", "dlogm-dusk-blue", "dlogm-dusk-vivid", "dlogm-night", "dlogm-night-balanced", "dlogm-night-steady", "dlog", "custom"];
+export type LutKind = "none" | "dji-official" | "dji-official-natural" | "dlogm" | "dji-official-vivid" | "dji-official-vivid-sky" | "dji-official-dusk" | "dji-official-dusk-blue" | "dji-official-dusk-vivid" | "dji-official-night" | "dji-official-night-balanced" | "dji-official-night-steady" | "dji-official-study" | "dlogm-study" | "dlogm-natural" | "dlogm-vivid" | "dlogm-vivid-sky" | "dlogm-dusk" | "dlogm-dusk-blue" | "dlogm-dusk-vivid" | "dlogm-night" | "dlogm-night-balanced" | "dlogm-night-steady" | "dlog" | "custom";
+export const LUT_KINDS: LutKind[] = ["none", "dji-official", "dji-official-natural", "dlogm", "dji-official-vivid", "dji-official-vivid-sky", "dji-official-dusk", "dji-official-dusk-blue", "dji-official-dusk-vivid", "dji-official-night", "dji-official-night-balanced", "dji-official-night-steady", "dji-official-study", "dlogm-study", "dlogm-natural", "dlogm-vivid", "dlogm-vivid-sky", "dlogm-dusk", "dlogm-dusk-blue", "dlogm-dusk-vivid", "dlogm-night", "dlogm-night-balanced", "dlogm-night-steady", "dlog", "custom"];
 /** Conversions computed from DJI's own LUT file (fetched at runtime) rather than the modelled curves. */
-export type FileLutKind = "dji-official" | "dji-official-vivid" | "dji-official-vivid-sky" | "dji-official-dusk" | "dji-official-dusk-blue" | "dji-official-dusk-vivid" | "dji-official-night" | "dji-official-night-balanced" | "dji-official-night-steady" | "dji-official-study";
-export const FILE_LUT_KINDS: FileLutKind[] = ["dji-official", "dji-official-vivid", "dji-official-vivid-sky", "dji-official-dusk", "dji-official-dusk-blue", "dji-official-dusk-vivid", "dji-official-night", "dji-official-night-balanced", "dji-official-night-steady", "dji-official-study"];
+export type FileLutKind = "dji-official" | "dji-official-natural" | "dji-official-vivid" | "dji-official-vivid-sky" | "dji-official-dusk" | "dji-official-dusk-blue" | "dji-official-dusk-vivid" | "dji-official-night" | "dji-official-night-balanced" | "dji-official-night-steady" | "dji-official-study";
+export const FILE_LUT_KINDS: FileLutKind[] = ["dji-official", "dji-official-natural", "dji-official-vivid", "dji-official-vivid-sky", "dji-official-dusk", "dji-official-dusk-blue", "dji-official-dusk-vivid", "dji-official-night", "dji-official-night-balanced", "dji-official-night-steady", "dji-official-study"];
 export type MathLutKind = Exclude<LutKind, "none" | "custom" | FileLutKind>;
 export const isFileLutKind = (k: LutKind): k is FileLutKind => (FILE_LUT_KINDS as LutKind[]).includes(k);
+/**
+ * Every D-Log M look is built on DJI's own LUT file. The modelled conversions ("dlogm…", a formula fitted to that
+ * file) were offered beside them until 1.102.0; a clip saved with one gets the same look on the file — within about
+ * two 8-bit levels, the sky a little richer. "dlog" (D-Log, another profile) has no file and stays computed.
+ */
+export function currentLutKind(kind: LutKind): LutKind {
+  if (kind === "dlogm") return "dji-official";
+  if (!kind.startsWith("dlogm-")) return kind;
+  const file = `dji-official-${kind.slice(6)}` as LutKind;
+  return (FILE_LUT_KINDS as LutKind[]).includes(file) ? file : kind;
+}
 
 export interface Grade {
   /** Which conversion to apply first; "none" skips the LUT. */
@@ -2151,7 +2162,8 @@ export function deserialize(json: string): Project | null {
     const migrated = known && !perCutEra && !p.clips.some((c) => c.transitionIn) ? applyTransitionToAll(p.clips, transition) : p.clips;
     const clips = migrated.map((c) => {
       const { introRole, introSeconds, reframe, obscure, ...rest } = c;
-      const base = LUT_KINDS.includes(rest.grade?.lut) ? rest : { ...rest, grade: { ...rest.grade, lut: "none" as LutKind } };
+      const kept = LUT_KINDS.includes(rest.grade?.lut) ? currentLutKind(rest.grade.lut) : ("none" as LutKind);
+      const base = kept === rest.grade?.lut ? rest : { ...rest, grade: { ...rest.grade, lut: kept } };
       return { ...base, ...(obscure ? { obscure: normalizeObscure(obscure) } : {}), ...(rest.speed !== undefined ? { speed: clipSpeed(rest) } : {}), ...(introRole && INTRO_ROLES.includes(introRole) ? { introRole } : {}), ...(typeof introSeconds === "number" && introSeconds > 0 ? { introSeconds } : {}), ...normalizeReframe(reframe) };
     });
     const frame: Frame = FRAMES.includes(p.export?.frame as Frame) ? (p.export.frame as Frame) : "source";

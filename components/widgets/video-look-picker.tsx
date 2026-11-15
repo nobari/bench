@@ -1,14 +1,14 @@
 "use client";
 
 /**
- * The Colour tab's conversion picker: a look chosen from groups (Standard, Day, Dusk, Night, Other), the base it is
- * built on (DJI's own LUT file or the modelled conversion) as a separate two-way switch, the frame at the playhead
- * through every look of the chosen group to pick from by eye, and one line on what the look is for with its
- * measurements folded away. The saved value stays the clip's LutKind.
+ * The Colour tab's conversion picker: a look chosen from groups (Standard, Day, Dusk, Night, Other), the frame at the
+ * playhead through every look of the chosen group to pick from by eye, and one line on what the look is for with its
+ * measurements folded away. Every D-Log M look is built on DJI's own LUT file, served by this site. The saved value
+ * stays the clip's LutKind.
  */
 
 import { useEffect, useRef, useState } from "react";
-import { LUT_GROUPS, LUT_LOOKS, LUT_OPTIONS, buildDlogLut, gradePixel, kindForLook, lookOfKind, type Lut3D, type LutBase } from "@/lib/tools/video/lut";
+import { LUT_GROUPS, LUT_LOOKS, LUT_OPTIONS, buildDlogLut, gradePixel, lookOfKind, type Lut3D } from "@/lib/tools/video/lut";
 import { isFileLutKind, type FileLutKind, type Grade, type LutKind, type MathLutKind } from "@/lib/tools/video/project";
 import { cn } from "@/lib/utils";
 import { SEL } from "./video-styles";
@@ -43,14 +43,7 @@ export function LookPicker({
   playhead: number;
   playing: boolean;
 }) {
-  const at = lookOfKind(grade.lut);
-  // The base last chosen, kept across looks that exist on one base only (Natural, D-Log).
-  const [wanted, setWanted] = useState<LutBase>(at?.base ?? "file");
-  const base = at?.base ?? wanted;
-  const look = at?.look ?? null;
-  const both = !!look && !!look.kinds.file && !!look.kinds.model;
-  // The base a newly picked look goes on: the shown one when the look offers the choice, otherwise the one last chosen.
-  const pref = both ? base : wanted;
+  const look = lookOfKind(grade.lut);
   const option = LUT_OPTIONS.find((o) => o.kind === grade.lut) ?? null;
   const group = look && look.group !== "Other" ? LUT_LOOKS.filter((l) => l.group === look.group) : [];
   const canvases = useRef(new Map<string, HTMLCanvasElement>());
@@ -84,9 +77,9 @@ export function LookPicker({
       for (const l of LUT_LOOKS) {
         const c = canvases.current.get(l.id);
         if (!c) continue;
-        const kind = l.kinds[base] ?? l.kinds.file ?? l.kinds.model;
-        const lut = !kind ? null : isFileLutKind(kind) ? (fileLuts?.[kind] ?? null) : modelLut(kind);
-        if (!kind || !lut) {
+        const kind = l.kind;
+        const lut = isFileLutKind(kind) ? (fileLuts?.[kind] ?? null) : modelLut(kind);
+        if (!lut) {
           c.dataset.ready = "";
           continue;
         }
@@ -119,11 +112,11 @@ export function LookPicker({
       if (tick) clearInterval(tick);
       v?.removeEventListener("seeked", render);
     };
-  }, [groupKey, base, still, playing, grade, fileLuts, video]);
+  }, [groupKey, still, playing, grade, fileLuts, video]);
 
   const value = grade.lut === "none" || grade.lut === "custom" ? grade.lut : (look?.id ?? "none");
   return (
-    <div className="flex flex-col gap-2" data-look-picker data-look={look?.id ?? grade.lut} data-base={look ? base : ""}>
+    <div className="flex flex-col gap-2" data-look-picker data-look={look?.id ?? grade.lut}>
       <div className="flex flex-wrap items-center justify-between gap-2">
         <label className="flex min-w-0 flex-1 items-center justify-between gap-2 text-muted">
           Look
@@ -133,9 +126,8 @@ export function LookPicker({
               const id = e.target.value;
               if (id === "none") return onKind("none");
               if (id === "custom") return customName ? onKind("custom") : onLoadCube();
-              const kind = kindForLook(id, pref);
-              setWanted(pref);
-              if (kind) onKind(kind);
+              const picked = LUT_LOOKS.find((l) => l.id === id);
+              if (picked) onKind(picked.kind);
             }}
             className={cn(SEL, "min-w-0")}
             aria-label="Look"
@@ -153,32 +145,10 @@ export function LookPicker({
             ))}
           </select>
         </label>
-        {look && (
-          <div className="flex items-center rounded-[var(--radius-sm)] border border-edge p-0.5 text-[12px]" role="group" aria-label="Based on" title={both ? "DJI's file is DJI's own LUT, applied exactly; Modelled is a compact model of it that needs no download and is within about two levels of it." : "This look exists on one base only."}>
-            {(["file", "model"] as const).map((b) => (
-              <button
-                key={b}
-                type="button"
-                disabled={!look.kinds[b]}
-                aria-pressed={base === b}
-                data-base-choice={b}
-                onClick={() => {
-                  setWanted(b);
-                  const kind = look.kinds[b];
-                  if (kind) onKind(kind);
-                }}
-                className={cn("h-7 rounded-[var(--radius-sm)] px-2 disabled:opacity-35", base === b ? "bg-accent text-on-accent" : "text-muted hover:text-ink")}
-              >
-                {b === "file" ? "DJI's file" : "Modelled"}
-              </button>
-            ))}
-          </div>
-        )}
       </div>
       {group.length > 0 && (
         <div className="grid grid-cols-3 gap-1.5" role="group" aria-label={`${look?.group} looks on the frame at the playhead`} data-look-strip={look?.group}>
           {group.map((l) => {
-            const kind = l.kinds[base] ?? l.kinds.file ?? l.kinds.model;
             const on = l.id === look?.id;
             return (
               <button
@@ -187,7 +157,7 @@ export function LookPicker({
                 aria-pressed={on}
                 data-look-thumb={l.id}
                 title={l.use}
-                onClick={() => kind && onKind(kind)}
+                onClick={() => onKind(l.kind)}
                 className={cn("flex min-w-0 flex-col gap-1 rounded-[var(--radius-sm)] border p-1 text-left text-[11.5px] transition-colors", on ? "border-accent text-ink" : "border-edge text-muted hover:border-accent hover:text-ink")}
               >
                 <canvas
