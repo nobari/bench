@@ -25,12 +25,13 @@ import { decodeMono } from "@/lib/tools/video/engine";
 import { DEFAULT_EXPORT, NEUTRAL_GRADE, NEUTRAL_TRANSFORM, TITLE_ALIGNS, TITLE_FAMILIES, TITLE_FONTS, TITLE_POSITIONS, TITLE_SHADOWS, TITLE_WEIGHTS, TRANSITIONS, addTransitionAt, appendMusic, applyAudioTo, applyGradeTo, applyTransitionToAll, clipAt, crossfades, dbToGain, effectiveMusicEnd, estimateExport, exportRange, fmtTime, musicGainAt, musicLength, newId, newProject, newTitle, orderRecordings, placeClips, planExport, removeRange, reorderMusic, setTransition, splitClip, timelineDuration, titleLanes, transitionAt, transitionWindows, CLIP_SPEEDS, canMergeWithNext, clipLength, clipSpeed, groupOf, sourceTimeAt, mergeWithNext, moveClip, unjoin, updateClip, visibleCuts, type Clip, type MediaRef, type MusicTrack, type Project, type ProxyHeight, type Title, type TitleFont, isFileLutKind, FILE_LUT_KINDS, type FileLutKind, type LutKind, type MathLutKind, type TitleAlign, type TitlePosition, type TitleShadow, type Transition, type TransitionKind, type ExportTags, type IntroSettings, type IntroCard, DEFAULT_CARD, cardSettings, hasCard, reorderClip, parseTime, type SteadyLights, STEADY_FRAMES, clampMusicStart, musicUnused, musicBetween, type FillOrder, type FillSettings, type SongPrefs, describeWhere, nameSome, whereSummary, type MediaWhere, exportFingerprint, SOUND_MODES, SOUND_LABELS, soundLevels, applySoundLevels, soundState, type SoundMode, type SoundLevels, FRAMES, FRAME_LABELS, MAX_REFRAME_ZOOM, MIN_CLIP_SPEED, MAX_CLIP_SPEED, type Frame, type Layout, type ReframeKey, type SoundRegion, type RegionPreset, REGION_PRESETS, MIN_REGION_SECONDS, MAX_REGION_RAMP, regionPreset, newRegion, clampSpan, fitSpan, moveSpan, tidySpans, cameraGainAt, regionMusicGain, type Span, type Zoom, DEFAULT_ZOOM, MAX_ZOOM_EASE, newZoom, zoomAt, zoomLabel, describeZooms } from "@/lib/tools/video/project";
 import { gainToReach, YOUTUBE_LUFS, type Loudness } from "@/lib/tools/video/loudness";
 import { drawTransition } from "@/lib/tools/video/transitions";
-import { LUT_OPTIONS, buildDlogLut, deriveLut, fetchOfficialLut, lutToCube, parseCube, type Lut3D } from "@/lib/tools/video/lut";
+import { buildDlogLut, deriveLut, fetchOfficialLut, lutToCube, parseCube, type Lut3D } from "@/lib/tools/video/lut";
 import { fmtBytes, fmtDuration, fmtMs, type ExportProgress, type SpeedPriors, type StepProgress } from "@/lib/tools/video/progress";
 import { buildProxy, drawOverlays, encoderSupport, exportProject, fixLevel, FrameComposer, MAX_AUDIBLE_SPEED, measureFile, measureLoudness, MIN_AUDIBLE_SPEED, probe, probeKeyframes, renderFrame, renderSceneThumbs, scanMoments, scanMotion, Steadier, type ExportFault, type ExportManifest, type PartStore, type JoinInfo } from "@/lib/tools/video/engine";
 import { INTRO_STYLES, addSceneAt, buildIntro, describeIntro, drawIntroFx, hasIntro, introCandidates, introFrameAt, introLength, introRegion, introStyle, mainClips, moveScene, pickMoments, removeIntro, removeScene, restyleIntro, sceneSecondsFor, scoreMoments, setSceneSeconds, shiftAfterIntro, styledGrade, sceneFootage, minSceneSeconds, introBlendAt } from "@/lib/tools/video/intro";
 import { ProjectStore, hasFileSystemAccess, AUTOSAVE_FILE, FRAMES_DIR, PROJECT_FILE, PROXY_DIR } from "@/lib/tools/video/store";
 import { cn } from "@/lib/utils";
+import { LookPicker } from "./video-look-picker";
 import { DEFAULT_STOPS, cutOutStops, stillRuns, stillThreshold, stopKey, stopsOnTimeline, stopsTotal, type Still, type StopScan } from "@/lib/tools/video/stops";
 import { parseArtSource, parseTemplateImport, videoTemplate, type LabelsImport } from "@/lib/tools/video/template";
 import { artTypeOf, fileArt, loadArt, logoBitmap, type LabelArtMap, type LoadedArt } from "@/lib/tools/video/label-art";
@@ -525,7 +526,9 @@ export function VideoEditorWidget() {
   const cubeInput = useRef<HTMLInputElement>(null);
   // DJI's own LUT file, fetched the first time a clip asks for it; both file-based conversions derive from it.
   const [fileLuts, setFileLuts] = useState<Partial<Record<FileLutKind, Lut3D>> | null>(null);
-  const needsFileLut = project.clips.some((c) => isFileLutKind(c.grade.lut));
+  // …or as soon as the Colour tab is open, whose look strip shows the frame through the file-based looks.
+  const needsFileLut = tab === "colour" || project.clips.some((c) => isFileLutKind(c.grade.lut));
+  const frameVideo = useCallback(() => videoRef.current, []);
   useEffect(() => {
     if (!needsFileLut || fileLuts) return;
     let active = true;
@@ -6116,34 +6119,19 @@ export function VideoEditorWidget() {
             )}
             {tab === "colour" && (current ? (
               <>
-                <label className="flex items-center justify-between gap-2 text-muted">
-                  Conversion
-                  <select
-                    value={current.grade.lut}
-                    onChange={(e) => {
-                      const kind = e.target.value as LutKind;
-                      if (kind === "custom" && !project.customLut) return cubeInput.current?.click();
-                      update(current.id, { grade: { ...current.grade, lut: kind } });
-                    }}
-                    className={SEL}
-                    aria-label="Conversion"
-                  >
-                    <option value="none">None (Rec.709 footage)</option>
-                    {LUT_OPTIONS.map((o) => (
-                      <option key={o.kind} value={o.kind}>
-                        {o.name}
-                      </option>
-                    ))}
-                    <option value="custom">{project.customLut ? `Your .cube — ${project.customLut.name}` : "Your own .cube file…"}</option>
-                  </select>
-                </label>
+                <LookPicker
+                  grade={current.grade}
+                  onKind={(kind) => update(current.id, { grade: { ...current.grade, lut: kind } })}
+                  customName={project.customLut?.name ?? null}
+                  onLoadCube={() => cubeInput.current?.click()}
+                  fileLuts={fileLuts}
+                  video={frameVideo}
+                  playhead={playhead}
+                  playing={playing}
+                />
                 <input ref={cubeInput} type="file" accept=".cube" hidden onChange={(e) => e.target.files?.[0] && void loadCube(e.target.files[0], current.id)} />
                 <p className="text-[12px] text-faint">
-                  {current.grade.lut === "custom"
-                    ? `${project.customLut?.name ?? "No file yet"} is applied as-is: it should expect the camera's log in and give Rec.709 out. `
-                    : (LUT_OPTIONS.find((o) => o.kind === current.grade.lut)?.hint ?? "Pick the conversion for the camera's log profile; the sliders below fine-tune on top of it. ")}
                   {isFileLutKind(current.grade.lut) && !fileLuts && " Loading DJI's LUT file… "}
-                  {!isFileLutKind(current.grade.lut) && current.grade.lut !== "custom" && current.grade.lut !== "none" ? " " : ""}
                   <button type="button" onClick={() => cubeInput.current?.click()} className="underline decoration-dotted underline-offset-2 hover:text-accent">
                     {project.customLut ? "Replace the .cube" : "Load a .cube"}
                   </button>

@@ -5,7 +5,7 @@
  * GLSL fragment shader (used for every frame on export and proxy playback).
  */
 
-import type { FileLutKind, Grade, MathLutKind } from "./project";
+import { isFileLutKind, type FileLutKind, type Grade, type LutKind, type MathLutKind } from "./project";
 
 export interface Lut3D {
   size: number;
@@ -124,24 +124,72 @@ const DJI_LOG_MATRIX = [1.25866, -0.16277, -0.09589, -0.10848, 1.16525, -0.05678
 const GREY_DISPLAY = pchip(DJI_TONE, 0.4);
 
 /** Options offered for log footage, in menu order. */
-export const LUT_OPTIONS: { kind: MathLutKind | FileLutKind; name: string; hint: string }[] = [
-  { kind: "dji-official", name: "D-Log M → Rec.709 (DJI's own file)", hint: "DJI's official Osmo Action 6 D-Log M to Rec.709 LUT (v1.0, November 2025), applied exactly as DJI ships it. Punchy, saturated and faithful; the reference everything else is measured against." },
-  { kind: "dlogm", name: "D-Log M → Rec.709 (DJI, modelled)", hint: "A compact model of DJI's file: tone, hue and saturation measured from it. Within about two 8-bit levels of the file on real footage." },
-  { kind: "dji-official-vivid", name: "D-Log M → Vivid (on DJI's file)", hint: "The attractive look for travel, drives and scenery: DJI's own colour science with the Vivid treatment on top — richer colour where it is muted (vibrance, skin tones held back), a gentle S-curve about mid grey with a soft shoulder so bright sky and clouds stay clean and nothing clips, mids a touch brighter and a hint of warmth." },
-  { kind: "dji-official-vivid-sky", name: "D-Log M → Vivid, deep sky (on DJI's file)", hint: "Vivid with the sky given the depth of colour the D-Log → Rec.709 path has, at DJI's own blue (never cyan) and without clipping, and the shadows opened: when the camera exposes for a bright sky, trees, hedges and the roadside are lifted by up to 1.6 stops with their colour, so they read as vivid rather than dark, while the sky and everything bright stay where they were. Clouds, greys, skin and the road are untouched by the sky boost. Measured on a backlit mountain road: hedge and ground at 61 of 255 against DJI's 30, the part of the frame under 10 % brightness 0.7 % against 20 %, sky saturation 0.50 against DJI's 0.25, nothing clipped." },
-  { kind: "dji-official-night", name: "D-Log M → Night, dark road (on DJI's file)", hint: "For night drives and illuminations: DJI's own colour science with the Night treatment on top — the sky and the night between the leaves taken to a true black, greys cleared of their tint and darkened along a smooth curve so the asphalt reads black under light lane lines, lamp-lit colour lifted a quarter of a stop and given Vivid's richness so trees glow from the lamp at their foot. The darkest road of the three Night looks; the curve has no step, so the headlit road no longer flickers. Measured on the November night drive: asphalt 23 of 255 against DJI's 101, lane lines 154 against 198, sky 1, the road's frame-to-frame change 1.2 times DJI's. Not for daylight: it darkens every grey." },
-  { kind: "dji-official-night-balanced", name: "D-Log M → Night, balanced (on DJI's file)", hint: "Night with a dark-grey road: the same treatment as dark road with a gentler curve — brighter lane lines and more detail left in the road. Measured on the November night drive: asphalt 41 of 255 against DJI's 101, lane lines 173 against 198, sky 1, the road's frame-to-frame change 1.25 times DJI's. Not for daylight: it darkens every grey." },
-  { kind: "dji-official-night-steady", name: "D-Log M → Night, steady (on DJI's file)", hint: "Night at its calmest: the gentlest curve of the three — the road a mid-dark grey, the brightest lane lines, the least change from frame to frame. Measured on the November night drive: asphalt 57 of 255 against DJI's 101, lane lines 181 against 198, sky 1, the road's frame-to-frame change 1.2 times DJI's. Not for daylight: it darkens every grey." },
-  { kind: "dji-official-study", name: "D-Log M → Study (on DJI's file)", hint: "The recommended look for long-play study, focus and work videos: DJI's own colour science with the Study treatment on top — crisp mids, a soft shoulder, sky held off cyan and neutral near white, shadows opened a touch, a hint of warmth, saturation 0.9." },
-  { kind: "dlogm-study", name: "D-Log M → Study", hint: "Tuned on Osmo Action 6 footage for long-play study, focus and work videos: DJI's tone with mids kept crisp, a soft shoulder that keeps sky gradients smooth, bright sky held off cyan, shadows opened a touch, a hint of warmth and calmer saturation." },
-  { kind: "dlogm-natural", name: "D-Log M → Natural", hint: "DJI's rendering with 12 % less saturation and slightly less contrast — flattering for overcast days and muted scenes." },
-  { kind: "dlogm-vivid", name: "D-Log M → Vivid", hint: "The Vivid treatment on the modelled conversion: richer colour where it is muted with skin tones held back, a gentle S-curve with a soft shoulder, mids a touch brighter and a hint of warmth." },
-  { kind: "dlogm-vivid-sky", name: "D-Log M → Vivid, deep sky", hint: "The deep-sky Vivid on the modelled conversion: the sky alone deepened to the D-Log path's saturation at DJI's blue, the shadows opened by up to 1.6 stops so trees and the roadside stay vivid under a bright sky, Vivid's colour everywhere else." },
-  { kind: "dlogm-night", name: "D-Log M → Night, dark road", hint: "Night, dark road on the modelled conversion: greys cleared of their tint and darkened along a smooth curve to a black road, lamp-lit colour lifted and given Vivid's richness, a toe that reaches a true black. Not for daylight: it darkens every grey." },
-  { kind: "dlogm-night-balanced", name: "D-Log M → Night, balanced", hint: "Night, balanced on the modelled conversion: a dark-grey road, brighter lane lines. Not for daylight: it darkens every grey." },
-  { kind: "dlogm-night-steady", name: "D-Log M → Night, steady", hint: "Night, steady on the modelled conversion: a mid-dark grey road, the brightest lane lines and the least change from frame to frame. Not for daylight: it darkens every grey." },
-  { kind: "dlog", name: "D-Log → Rec.709 (DJI)", hint: "DJI's published D-Log curve and D-Gamut matrix (Mavic 3 Pro Hasselblad camera, Inspire 3, Zenmuse), rendered with the same tone as the D-Log M look." },
+/** The picker's groups, in order. */
+export const LUT_GROUPS = ["Standard", "Day", "Dusk", "Night", "Other"] as const;
+export type LutGroup = (typeof LUT_GROUPS)[number];
+export interface LutOption {
+  kind: MathLutKind | FileLutKind;
+  /** The look this conversion is, shared by its two bases (DJI's file and the model). */
+  look: string;
+  group: LutGroup;
+  /** The look's name inside its group. */
+  short: string;
+  /** One line: what the look is for. */
+  use: string;
+  /** The full name, also the title of the downloaded .cube. */
+  name: string;
+  /** What it does, with its measurements. */
+  hint: string;
+}
+export const LUT_OPTIONS: LutOption[] = [
+  { kind: "dji-official", look: "rec709", group: "Standard", short: "DJI Rec.709", use: "DJI's own colours: faithful and punchy, the reference for everything else.", name: "D-Log M → Rec.709 (DJI's own file)", hint: "DJI's official Osmo Action 6 D-Log M to Rec.709 LUT (v1.0, November 2025), applied exactly as DJI ships it. Punchy, saturated and faithful; the reference everything else is measured against." },
+  { kind: "dlogm", look: "rec709", group: "Standard", short: "DJI Rec.709", use: "DJI's own colours: faithful and punchy, the reference for everything else.", name: "D-Log M → Rec.709 (DJI, modelled)", hint: "A compact model of DJI's file: tone, hue and saturation measured from it. Within about two 8-bit levels of the file on real footage." },
+  { kind: "dji-official-vivid", look: "vivid", group: "Day", short: "Vivid", use: "Travel, drives and scenery in daylight: richer colour, clean highlights.", name: "D-Log M → Vivid (on DJI's file)", hint: "The attractive look for travel, drives and scenery: DJI's own colour science with the Vivid treatment on top — richer colour where it is muted (vibrance, skin tones held back), a gentle S-curve about mid grey with a soft shoulder so bright sky and clouds stay clean and nothing clips, mids a touch brighter and a hint of warmth." },
+  { kind: "dji-official-vivid-sky", look: "vivid-sky", group: "Day", short: "Vivid, deep sky", use: "Daylight with a deep blue sky and bright trees, also when the camera exposed for the sky.", name: "D-Log M → Vivid, deep sky (on DJI's file)", hint: "Vivid with the sky given the depth of colour the D-Log → Rec.709 path has, at DJI's own blue (never cyan) and without clipping, and the shadows opened: when the camera exposes for a bright sky, trees, hedges and the roadside are lifted by up to 1.6 stops with their colour, so they read as vivid rather than dark, while the sky and everything bright stay where they were. Clouds, greys, skin and the road are untouched by the sky boost. Measured on a backlit mountain road: hedge and ground at 61 of 255 against DJI's 30, the part of the frame under 10 % brightness 0.7 % against 20 %, sky saturation 0.50 against DJI's 0.25, nothing clipped." },
+  { kind: "dji-official-dusk", look: "dusk", group: "Dusk", short: "Bright", use: "Dusk made bright: green trees, a blue sky and an orange afterglow.", name: "D-Log M → Dusk, bright (on DJI's file)", hint: "For footage shot as the light goes: the ground, trees and road lifted by up to 2.1 stops with their colour, grass and leaves turned from the olive they record as at dusk to green, the sky deepened at DJI's blue, and the pale band over the horizon given the orange of the afterglow. Measured on a September dusk drive (of 255): the frame 123 against DJI's 92, foliage 66 against 28, the road 81 against 40, sky saturation 0.55 against 0.25, 0.3 % of the frame left under 10 % brightness against 23 %. Lifting this far shows the camera's grain in the darkest parts." },
+  { kind: "dji-official-dusk-blue", look: "dusk-blue", group: "Dusk", short: "Blue hour", use: "Dusk kept as evening: the deepest blue sky, a milder glow, darker ground.", name: "D-Log M → Dusk, blue hour (on DJI's file)", hint: "The dusk treatment at its most restrained: shadows lifted by up to 1.8 stops, the deepest blue sky of the three, a milder afterglow and no added warmth, so the picture still reads as evening. Measured on a September dusk drive (of 255): the frame 113 against DJI's 92, foliage 55 against 28, the road 69 against 40, sky saturation 0.62 against 0.25, nothing clipped." },
+  { kind: "dji-official-dusk-vivid", look: "dusk-vivid", group: "Dusk", short: "Vivid", use: "The brightest and most colourful dusk; reads closer to late afternoon.", name: "D-Log M → Dusk, vivid (on DJI's file)", hint: "The dusk treatment at its strongest: shadows lifted by up to 2.5 stops, more saturation everywhere, a brighter and deeper sky and a stronger afterglow. It reads closer to late afternoon than dusk. Measured on a September dusk drive (of 255): the frame 138 against DJI's 92, foliage 81 against 28, the road 97 against 40, sky saturation 0.60 against 0.25; 0.2 % of pixels reach white in the brightest sky, and the lift shows the most grain of the three." },
+  { kind: "dji-official-night", look: "night", group: "Night", short: "Dark road", use: "Night drives: a black road and sky, lamp-lit trees glowing.", name: "D-Log M → Night, dark road (on DJI's file)", hint: "For night drives and illuminations: DJI's own colour science with the Night treatment on top — the sky and the night between the leaves taken to a true black, greys cleared of their tint and darkened along a smooth curve so the asphalt reads black under light lane lines, lamp-lit colour lifted a quarter of a stop and given Vivid's richness so trees glow from the lamp at their foot. The darkest road of the three Night looks; the curve has no step, so the headlit road no longer flickers. Measured on the November night drive: asphalt 23 of 255 against DJI's 101, lane lines 154 against 198, sky 1, the road's frame-to-frame change 1.2 times DJI's. Not for daylight: it darkens every grey." },
+  { kind: "dji-official-night-balanced", look: "night-balanced", group: "Night", short: "Balanced", use: "Night with a dark-grey road and brighter lane lines.", name: "D-Log M → Night, balanced (on DJI's file)", hint: "Night with a dark-grey road: the same treatment as dark road with a gentler curve — brighter lane lines and more detail left in the road. Measured on the November night drive: asphalt 41 of 255 against DJI's 101, lane lines 173 against 198, sky 1, the road's frame-to-frame change 1.25 times DJI's. Not for daylight: it darkens every grey." },
+  { kind: "dji-official-night-steady", look: "night-steady", group: "Night", short: "Steady", use: "Night at its calmest: a mid-dark road, the least change from frame to frame.", name: "D-Log M → Night, steady (on DJI's file)", hint: "Night at its calmest: the gentlest curve of the three — the road a mid-dark grey, the brightest lane lines, the least change from frame to frame. Measured on the November night drive: asphalt 57 of 255 against DJI's 101, lane lines 181 against 198, sky 1, the road's frame-to-frame change 1.2 times DJI's. Not for daylight: it darkens every grey." },
+  { kind: "dji-official-study", look: "study", group: "Day", short: "Study", use: "Long-play study and focus videos: calm colour, soft highlights.", name: "D-Log M → Study (on DJI's file)", hint: "The recommended look for long-play study, focus and work videos: DJI's own colour science with the Study treatment on top — crisp mids, a soft shoulder, sky held off cyan and neutral near white, shadows opened a touch, a hint of warmth, saturation 0.9." },
+  { kind: "dlogm-study", look: "study", group: "Day", short: "Study", use: "Long-play study and focus videos: calm colour, soft highlights.", name: "D-Log M → Study", hint: "Tuned on Osmo Action 6 footage for long-play study, focus and work videos: DJI's tone with mids kept crisp, a soft shoulder that keeps sky gradients smooth, bright sky held off cyan, shadows opened a touch, a hint of warmth and calmer saturation." },
+  { kind: "dlogm-natural", look: "natural", group: "Standard", short: "Natural", use: "Softer: a little less saturation and contrast, for overcast days.", name: "D-Log M → Natural", hint: "DJI's rendering with 12 % less saturation and slightly less contrast — flattering for overcast days and muted scenes." },
+  { kind: "dlogm-vivid", look: "vivid", group: "Day", short: "Vivid", use: "Travel, drives and scenery in daylight: richer colour, clean highlights.", name: "D-Log M → Vivid", hint: "The Vivid treatment on the modelled conversion: richer colour where it is muted with skin tones held back, a gentle S-curve with a soft shoulder, mids a touch brighter and a hint of warmth." },
+  { kind: "dlogm-vivid-sky", look: "vivid-sky", group: "Day", short: "Vivid, deep sky", use: "Daylight with a deep blue sky and bright trees, also when the camera exposed for the sky.", name: "D-Log M → Vivid, deep sky", hint: "The deep-sky Vivid on the modelled conversion: the sky alone deepened to the D-Log path's saturation at DJI's blue, the shadows opened by up to 1.6 stops so trees and the roadside stay vivid under a bright sky, Vivid's colour everywhere else." },
+  { kind: "dlogm-dusk", look: "dusk", group: "Dusk", short: "Bright", use: "Dusk made bright: green trees, a blue sky and an orange afterglow.", name: "D-Log M → Dusk, bright", hint: "Dusk, bright on the modelled conversion. Dusk made bright: green trees, a blue sky and an orange afterglow." },
+  { kind: "dlogm-dusk-blue", look: "dusk-blue", group: "Dusk", short: "Blue hour", use: "Dusk kept as evening: the deepest blue sky, a milder glow, darker ground.", name: "D-Log M → Dusk, blue hour", hint: "Dusk, blue hour on the modelled conversion. Dusk kept as evening: the deepest blue sky, a milder glow, darker ground." },
+  { kind: "dlogm-dusk-vivid", look: "dusk-vivid", group: "Dusk", short: "Vivid", use: "The brightest and most colourful dusk; reads closer to late afternoon.", name: "D-Log M → Dusk, vivid", hint: "Dusk, vivid on the modelled conversion. The brightest and most colourful dusk; reads closer to late afternoon." },
+  { kind: "dlogm-night", look: "night", group: "Night", short: "Dark road", use: "Night drives: a black road and sky, lamp-lit trees glowing.", name: "D-Log M → Night, dark road", hint: "Night, dark road on the modelled conversion: greys cleared of their tint and darkened along a smooth curve to a black road, lamp-lit colour lifted and given Vivid's richness, a toe that reaches a true black. Not for daylight: it darkens every grey." },
+  { kind: "dlogm-night-balanced", look: "night-balanced", group: "Night", short: "Balanced", use: "Night with a dark-grey road and brighter lane lines.", name: "D-Log M → Night, balanced", hint: "Night, balanced on the modelled conversion: a dark-grey road, brighter lane lines. Not for daylight: it darkens every grey." },
+  { kind: "dlogm-night-steady", look: "night-steady", group: "Night", short: "Steady", use: "Night at its calmest: a mid-dark road, the least change from frame to frame.", name: "D-Log M → Night, steady", hint: "Night, steady on the modelled conversion: a mid-dark grey road, the brightest lane lines and the least change from frame to frame. Not for daylight: it darkens every grey." },
+  { kind: "dlog", look: "dlog", group: "Other", short: "D-Log (not D-Log M)", use: "For D-Log footage (Mavic 3 Pro Hasselblad, Inspire 3, Zenmuse), not D-Log M.", name: "D-Log → Rec.709 (DJI)", hint: "DJI's published D-Log curve and D-Gamut matrix (Mavic 3 Pro Hasselblad camera, Inspire 3, Zenmuse), rendered with the same tone as the D-Log M look." },
 ];
+export type LutBase = "file" | "model";
+/** One look of the picker with the conversion it is on each base; a look can exist on one base only. */
+export interface LutLook { id: string; group: LutGroup; short: string; use: string; kinds: Partial<Record<LutBase, MathLutKind | FileLutKind>> }
+/** The looks in picker order, grouped by LUT_GROUPS. */
+export const LUT_LOOKS: LutLook[] = (() => {
+  const out: LutLook[] = [];
+  for (const group of LUT_GROUPS)
+    for (const o of LUT_OPTIONS) {
+      if (o.group !== group) continue;
+      let look = out.find((l) => l.id === o.look);
+      if (!look) out.push((look = { id: o.look, group, short: o.short, use: o.use, kinds: {} }));
+      look.kinds[isFileLutKind(o.kind) ? "file" : "model"] = o.kind;
+    }
+  return out;
+})();
+/** The look and base of a saved conversion; null for none and a custom .cube. */
+export function lookOfKind(kind: LutKind): { look: LutLook; base: LutBase } | null {
+  const look = LUT_LOOKS.find((l) => l.kinds.file === kind || l.kinds.model === kind);
+  return look ? { look, base: look.kinds.file === kind ? "file" : "model" } : null;
+}
+/** The conversion for a look on the wanted base, or on the base it has. */
+export function kindForLook(id: string, base: LutBase): MathLutKind | FileLutKind | null {
+  const look = LUT_LOOKS.find((l) => l.id === id);
+  return look ? (look.kinds[base] ?? look.kinds.file ?? look.kinds.model ?? null) : null;
+}
 /**
  * A look is a few display-space moves after DJI's rendering: exposure (stops),
  * warmth (as the Temperature slider, 1 = +100), a nudge of blue-dominant
@@ -196,8 +244,16 @@ export interface Look {
   fillSat: number;
   /** The sky boost only reaches pixels brighter than this luma, fully from 0.2 above it (keeps it off shaded and wet asphalt); 0 = no floor. */
   skyFloor: number;
+  /** Foliage: how much chroma yellow-green to green hues gain (see duskGreens); 0 = off. */
+  green: number;
+  /** How far those hues are turned towards a leaf green (108°), 0–1. */
+  greenTurn: number;
+  /** The afterglow: how much chroma bright, pale, warm-leaning pixels gain (see duskGlow); 0 = off. */
+  glow: number;
+  /** How much those pixels are pushed towards orange. */
+  glowWarm: number;
 }
-const PLAIN: Look = { exposure: 0, warm: 0, blueHue: 0, sat: 1, hiDesat: 0, vibrance: 0, skin: 0, con: 1, shoulder: 1, toe: 0, lift: 0, sky: 0, greyDesat: 0, greyPull: 0, greyPivot: 1, warmLift: 0, nightToe: 0, fill: 0, fillSlope: 0, fillPivot: 1, fillSat: 0, skyFloor: 0 };
+const PLAIN: Look = { exposure: 0, warm: 0, blueHue: 0, sat: 1, hiDesat: 0, vibrance: 0, skin: 0, con: 1, shoulder: 1, toe: 0, lift: 0, sky: 0, greyDesat: 0, greyPull: 0, greyPivot: 1, warmLift: 0, nightToe: 0, fill: 0, fillSlope: 0, fillPivot: 1, fillSat: 0, skyFloor: 0, green: 0, greenTurn: 0, glow: 0, glowWarm: 0 };
 // Measured on a sunny Tokyo drive: median 0.4 stop over grey, sky at code 0.35/0.5/0.65, p99 three stops over grey.
 export const STUDY_LOOK: Look = { ...PLAIN, exposure: -0.05, warm: 0.05, blueHue: 0.08, sat: 0.9, hiDesat: 0.35, shoulder: 0.88, lift: 0.008 };
 /**
@@ -227,6 +283,21 @@ export const VIVID_LOOK: Look = { ...PLAIN, exposure: 0.05, warm: 0.04, blueHue:
  */
 export const DEEP_SKY_LOOK: Look = { ...VIVID_LOOK, blueHue: 0, exposure: 0.08, hiDesat: 0.2, con: 1.02, toe: 0.04, lift: 0.004, sky: 1.2, skyFloor: 0.3, fill: 1.6, fillSlope: 0.6, fillPivot: 0.45, fillSat: 0.25 };
 /**
+ * Dusk, asked for from the last two minutes of a September 2026 evening drive ("bright, vivid, the trees green, the
+ * surroundings bright enough, the sky a proper dusk"). At dusk the camera holds the sky and leaves the ground at 28–40
+ * of 255 with 23 % of the frame under 10 %; foliage records as a dark olive (hue 70°, saturation 0.33) and the
+ * afterglow as a near-white band (saturation 0.06). So the look is deep sky's with a stronger shadow fill, the greens
+ * move (duskGreens), the afterglow move (duskGlow) and a little exposure. Three strengths kept after a side-by-side
+ * (frame · foliage · road · sky saturation · afterglow saturation; DJI's file 92 · 28 · 40 · 0.25 · 0.06): bright (this
+ * one) 123 · 66 · 81 · 0.55 · 0.22; blue hour 113 · 55 · 69 · 0.62 · 0.19; vivid 138 · 81 · 97 · 0.60 · 0.21 with 0.2 %
+ * clipped in the brightest sky. A warmer "golden" version was dropped: it turned lamp-lit walls yellow.
+ */
+export const DUSK_LOOK: Look = { ...DEEP_SKY_LOOK, exposure: 0.1, con: 1.05, sky: 1.3, fill: 2.1, fillSlope: 0.68, fillPivot: 0.45, fillSat: 0.35, green: 0.8, greenTurn: 0.75, glow: 1.6, glowWarm: 0.8 };
+/** Dusk kept as evening: less lift, the deepest sky, a milder glow, no added warmth. */
+export const DUSK_BLUE_LOOK: Look = { ...DUSK_LOOK, exposure: 0.03, con: 1.07, sky: 1.7, warm: 0, fill: 1.8, fillSlope: 0.62, fillPivot: 0.42, green: 0.7, glow: 1.2, glowWarm: 0.5 };
+/** Dusk at its brightest and most colourful. */
+export const DUSK_VIVID_LOOK: Look = { ...DUSK_LOOK, exposure: 0.2, con: 1.06, sat: 1.18, vibrance: 0.36, sky: 1.6, fill: 2.5, fillSlope: 0.74, fillPivot: 0.48, fillSat: 0.45, green: 1.1, glow: 2.0, glowWarm: 0.9 };
+/**
  * Night, asked for from two renderings of the November 2026 illuminated-maples drive ("sky black, asphalt black with
  * white lines, trees vivid and lit from the bottom up"). In DJI's file the asphalt (luma 102/255, saturation 0.17)
  * and the lamp-lit foliage (85, saturation 0.85) sit at the same brightness, so no tone curve separates them and the
@@ -254,6 +325,9 @@ const LOOKS: Record<MathLutKind | FileLutKind, Look> = {
   "dji-official": PLAIN,
   "dji-official-vivid": VIVID_LOOK,
   "dji-official-vivid-sky": DEEP_SKY_LOOK,
+  "dji-official-dusk": DUSK_LOOK,
+  "dji-official-dusk-blue": DUSK_BLUE_LOOK,
+  "dji-official-dusk-vivid": DUSK_VIVID_LOOK,
   "dji-official-night": NIGHT_LOOK,
   "dji-official-night-balanced": NIGHT_BALANCED_LOOK,
   "dji-official-night-steady": NIGHT_STEADY_LOOK,
@@ -263,6 +337,9 @@ const LOOKS: Record<MathLutKind | FileLutKind, Look> = {
   "dlogm-natural": { ...PLAIN, sat: 0.88, con: 0.94 },
   "dlogm-vivid": VIVID_LOOK,
   "dlogm-vivid-sky": DEEP_SKY_LOOK,
+  "dlogm-dusk": DUSK_LOOK,
+  "dlogm-dusk-blue": DUSK_BLUE_LOOK,
+  "dlogm-dusk-vivid": DUSK_VIVID_LOOK,
   "dlogm-night": NIGHT_LOOK,
   "dlogm-night-balanced": NIGHT_BALANCED_LOOK,
   "dlogm-night-steady": NIGHT_STEADY_LOOK,
@@ -373,9 +450,52 @@ export function shadowFill(rgb: [number, number, number], L: Look): [number, num
   const gain = Math.exp(up), s = gain * (1 + L.fillSat * (up / cap)), y1 = y * gain;
   return [y1 + (rgb[0] - y) * s, y1 + (rgb[1] - y) * s, y1 + (rgb[2] - y) * s];
 }
+const hsvToRgb = (h: number, s: number, v: number): [number, number, number] => {
+  const f = (n: number) => {
+    const k = (n + h / 60) % 6;
+    return v - v * s * Math.max(0, Math.min(k, 4 - k, 1));
+  };
+  return [f(5), f(3), f(1)];
+};
+/**
+ * Foliage at dusk records as a dark olive (hue about 70°). Hues from yellow-green through green gain chroma and
+ * turn towards a leaf green with the luma kept: true greens (from 80–95°) at any brightness, olive and yellow-green
+ * (from 48–68°) only where the picture was dark before the shadow fill (`y0`, the luma then) — leaves at dusk, not a
+ * lamp-lit wall. Greys have no hue to turn and stay grey. Exported for the tests.
+ */
+export function duskGreens(c: [number, number, number], L: Look, y0: number): [number, number, number] {
+  const max = Math.max(c[0], c[1], c[2]), min = Math.min(c[0], c[1], c[2]);
+  if (!(L.green > 0) || !(max > 0)) return c;
+  const h = hueOf(c[0], c[1], c[2]), s = (max - min) / max, y = 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+  const g0 = smoothstep(80, 95, h);
+  const w = (g0 + (1 - g0) * smoothstep(48, 68, h) * (1 - smoothstep(0.26, 0.46, y0))) * (1 - smoothstep(150, 185, h)) * smoothstep(0.04, 0.14, s) * (1 - smoothstep(0.75, 0.95, y));
+  if (w <= 0) return c;
+  const s1 = Math.min(0.92, s * (1 + L.green * w * (1 - s))), h1 = h + (108 - h) * L.greenTurn * w * (1 - smoothstep(95, 110, h));
+  const o = hsvToRgb(h1, s1, max), y1 = 0.2126 * o[0] + 0.7152 * o[1] + 0.0722 * o[2], k = y1 > 0 ? y / y1 : 1;
+  return [o[0] * k, o[1] * k, o[2] * k];
+}
+/**
+ * The afterglow: bright, pale pixels that lean warm or are neutral — the band of sky over the horizon after sunset —
+ * gain chroma and are pushed towards orange, luma kept. The blue sky above, the dark ground and anything already
+ * rich in colour are outside the band; white walls and cars in that brightness warm a little with it. Exported for
+ * the tests.
+ */
+export function duskGlow(c: [number, number, number], L: Look): [number, number, number] {
+  const [r, g, b] = c, max = Math.max(r, g, b);
+  if (!(L.glow > 0) || !(max > 0)) return c;
+  const y = 0.2126 * r + 0.7152 * g + 0.0722 * b, s = (max - Math.min(r, g, b)) / max;
+  const w = smoothstep(0.42, 0.62, y) * smoothstep(-0.02, 0.05, (r - b) / max) * (1 - smoothstep(0.45, 0.8, s)) * (1 - smoothstep(0.93, 1, y));
+  if (w <= 0) return c;
+  const m = 1 + L.glow * w;
+  const o = [y + (r - y) * m + L.glowWarm * w * 0.06, y + (g - y) * m + L.glowWarm * w * 0.005, y + (b - y) * m - L.glowWarm * w * 0.07];
+  const y1 = 0.2126 * o[0] + 0.7152 * o[1] + 0.0722 * o[2], k = y1 > 0 ? y / y1 : 1;
+  return [o[0] * k, o[1] * k, o[2] * k];
+}
 /** A look applied to one display-referred RGB triplet; exported for the tests and for tuning. */
 export function applyLook(rgb: [number, number, number], L: Look): [number, number, number] {
   let [r, g, b] = L.fill ? shadowFill(rgb, L) : rgb;
+  if (L.green) [r, g, b] = duskGreens([r, g, b], L, 0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2]);
+  if (L.glow) [r, g, b] = duskGlow([r, g, b], L);
   if (L.sky) {
     const s = skyBoost([r, g, b], L.sky);
     const w = L.skyFloor ? smoothstep(L.skyFloor, L.skyFloor + 0.2, 0.2126 * r + 0.7152 * g + 0.0722 * b) : 1;
