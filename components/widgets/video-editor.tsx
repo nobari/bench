@@ -2729,6 +2729,8 @@ export function VideoEditorWidget() {
   const templateJsonInput = useRef<HTMLInputElement>(null);
   const relinkInput = useRef<HTMLInputElement>(null);
   const [importReplace, setImportReplace] = useState(false);
+  // When on, importing a template never touches the intro — its scenes, order, look and card are left exactly as they are.
+  const [importKeepIntro, setImportKeepIntro] = useState(false);
   /** The template as the mode sees it: one short alone in Short mode, else the landscape edit (never a short's titles). */
   const templateData = () => (shortMode && activeShort ? shortTemplate(project, activeShort) : videoTemplate(landscape));
   const downloadTemplate = () => {
@@ -2773,7 +2775,9 @@ export function VideoEditorWidget() {
         if (pictures.labels.length) notes.push(`${pictures.labels.length} label${pictures.labels.length === 1 ? "" : "s"}`);
       }
       let makeScenes = 0;
-      if (intro) {
+      if (intro && importKeepIntro) {
+        notes.push("intro left unchanged");
+      } else if (intro) {
         if (!intro.enabled) {
           if (hasIntro(next.clips)) notes.push("intro removed");
           next = { ...next, clips: removeIntro(next.clips) };
@@ -5743,7 +5747,10 @@ export function VideoEditorWidget() {
             {tab === "intro" && (
               <>
                 <div className="sticky top-0 z-10 -mx-3 -mt-3 flex flex-wrap items-center gap-1.5 bg-surface px-3 pt-3 pb-2">
-                  <span className="order-last ml-auto flex items-center gap-1.5">
+                  <span className="order-last ml-auto flex flex-wrap items-center gap-x-2.5 gap-y-1">
+                    <label className="flex items-center gap-1 text-[11.5px] text-muted" title="Importing a template will leave the intro's scenes, order, look and card exactly as they are">
+                      <input type="checkbox" checked={importKeepIntro} onChange={(e) => setImportKeepIntro(e.target.checked)} className="accent-[var(--accent)]" data-import-keep-intro /> keep intro
+                    </label>
                     <button type="button" onClick={downloadTemplate} className={GHOST} title="One JSON for the intro and the titles, ready to hand to an LLM to fill in" data-template-download>
                       <Download size={12} /> Template JSON
                     </button>
@@ -6738,6 +6745,11 @@ export function VideoEditorWidget() {
                     {(project.titles.length > 0 || !!project.labels?.length) && (
                       <label className="flex items-center gap-1 text-[12px] text-muted" title="Otherwise imported titles and labels are added to the current ones">
                         <input type="checkbox" checked={importReplace} onChange={(e) => setImportReplace(e.target.checked)} className="accent-[var(--accent)]" /> replace current
+                      </label>
+                    )}
+                    {hasIntro(project.clips) && (
+                      <label className="flex items-center gap-1 text-[12px] text-muted" title="Importing a template will leave the intro's scenes, order, look and card exactly as they are">
+                        <input type="checkbox" checked={importKeepIntro} onChange={(e) => setImportKeepIntro(e.target.checked)} className="accent-[var(--accent)]" data-import-keep-intro /> keep intro
                       </label>
                     )}
                   </span>

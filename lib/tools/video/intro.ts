@@ -614,9 +614,10 @@ function parts(project: Project): { scenes: Clip[]; main: Clip[]; cardId?: strin
 export function buildIntro(project: Project, moments: Moment[], sceneSeconds = sceneSecondsFor(project)): Clip[] {
   const style = introStyle(project.intro.style);
   const { main, cardId } = parts(project);
-  const ordered = [...moments].sort((a, b) => a.timelineT - b.timelineT);
+  // The scenes keep the moments' own order: the auto-picker already hands them over in timeline order, and an imported
+  // template lists them in the order the user arranged, so re-importing never reshuffles a hand-ordered intro.
   const scenes: Clip[] = [];
-  for (const m of ordered) {
+  for (const m of moments) {
     const source = main.find((c) => c.id === m.clipId);
     if (!source) continue;
     scenes.push(sceneClip(project, source, m.sourceTime, sceneSeconds, style));
