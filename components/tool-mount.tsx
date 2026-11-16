@@ -78,6 +78,7 @@ const WIDGETS: Record<WidgetKey, React.ComponentType<Record<string, unknown>>> =
   transposer: dynamic(() => import("@/components/widgets/transposer").then((m) => m.TransposerWidget), { ssr: false, loading: Skeleton }),
   "audio-units": dynamic(() => import("@/components/widgets/audio-units").then((m) => m.AudioUnitsWidget), { ssr: false, loading: Skeleton }),
   provenance: dynamic(() => import("@/components/widgets/provenance").then((m) => m.ProvenanceWidget), { ssr: false, loading: Skeleton }),
+  "file-metadata": dynamic(() => import("@/components/widgets/file-metadata").then((m) => m.FileMetadataWidget), { ssr: false, loading: Skeleton }),
   "base64-image": dynamic(() => import("@/components/widgets/base64-image").then((m) => m.Base64ImageWidget), { ssr: false, loading: Skeleton }),
   "image-converter": dynamic(
     () => import("@/components/widgets/image-converter").then((m) => m.ImageConverterWidget),

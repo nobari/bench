@@ -71,6 +71,7 @@ export type WidgetKey =
   | "image-converter"
   | "base64-image"
   | "provenance"
+  | "file-metadata"
   | "audio-converter"
   | "note-frequency"
   | "bpm-calculator"
