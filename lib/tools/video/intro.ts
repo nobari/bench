@@ -437,7 +437,10 @@ export function drawIntroFx(ctx: Ctx, w: number, h: number, f: IntroFrame, proje
     ctx.fillStyle = `rgba(255,255,255,${((1 - f.local / fx.flash) ** 2).toFixed(3)})`;
     ctx.fillRect(0, 0, w, h);
   }
-  if (fx.fadeIn && f.introT < fx.fadeIn) {
+  // An opening reveal (project.opening) handles the first frames itself and must not start on black, so the style's
+  // own fade-from-black is skipped while that reveal is running.
+  const openingCovers = project.opening && project.opening.duration > 0 && f.introT < project.opening.duration;
+  if (fx.fadeIn && f.introT < fx.fadeIn && !openingCovers) {
     ctx.fillStyle = `rgba(0,0,0,${(1 - f.introT / fx.fadeIn).toFixed(3)})`;
     ctx.fillRect(0, 0, w, h);
   }

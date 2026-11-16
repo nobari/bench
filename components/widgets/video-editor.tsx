@@ -3,7 +3,7 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import Link from "next/link";
 import { normalizeObscure } from "@/lib/tools/video/obscure";
-import { AlertTriangle, Camera, ImageIcon, ChevronDown, ChevronRight, ChevronUp, GripVertical, Sparkles, Clapperboard, Crop, Download, FolderOpen, Gauge, Heart, Loader, Maximize2, Minimize2, Music, Pause, Play, Plus, Repeat, Save, Scissors, SkipBack, SkipForward, SlidersHorizontal, Smartphone, Square, StepBack, StepForward, Trash2, Type, Upload, Volume2, VolumeX, Keyboard, Search, Shuffle, X, ZoomIn } from "lucide-react";
+import { AlertTriangle, Camera, ImageIcon, ChevronDown, ChevronRight, ChevronUp, GripVertical, LayoutGrid, List, Sparkles, Clapperboard, Crop, Download, FolderOpen, Gauge, Heart, Loader, Maximize2, Minimize2, Music, Pause, Play, Plus, Repeat, Save, Scissors, SkipBack, SkipForward, SlidersHorizontal, Smartphone, Square, StepBack, StepForward, Trash2, Type, Upload, Volume2, VolumeX, Keyboard, Search, Shuffle, X, ZoomIn } from "lucide-react";
 import { makeRoomForAll, makeRoomForTransition, newShort, timelineDuration as shortTimelineDuration, type EditorMode, type Short } from "@/lib/tools/video/project";
 import { DEFAULT_SHORT_SECONDS, MIN_SHORT_SECONDS, SHORTS_FOLDER, clampShort, seamCandidates, seamScore, shortBytes, shortChecks, shortFileName, shortPostText, shortProject, shortStem, shortTemplate, shortTemplateProject, shortsFromMoments, suggestWindows, titlesIntoShort, viewFor } from "@/lib/tools/video/short-mode";
 import { scoreMoments as scoreShortMoments } from "@/lib/tools/video/intro";
@@ -22,7 +22,7 @@ import { TITLE_PRESETS, applyTitlePreset, copyTitlesToShorts } from "@/lib/tools
 import { beatPeriod, cutToBeats, nearestBeat, punchIns, slowStretch, timelineBeats } from "@/lib/tools/video/beat-tools";
 import { analyseBeats } from "@/lib/tools/video/beats";
 import { decodeMono } from "@/lib/tools/video/engine";
-import { DEFAULT_EXPORT, NEUTRAL_GRADE, NEUTRAL_TRANSFORM, TITLE_ALIGNS, TITLE_FAMILIES, TITLE_FONTS, TITLE_POSITIONS, TITLE_SHADOWS, TITLE_WEIGHTS, TRANSITIONS, addTransitionAt, appendMusic, applyAudioTo, applyGradeTo, applyTransitionToAll, clipAt, crossfades, dbToGain, effectiveMusicEnd, estimateExport, exportRange, fmtTime, musicGainAt, musicLength, newId, newProject, newTitle, orderRecordings, placeClips, planExport, removeRange, reorderMusic, setTransition, splitClip, timelineDuration, titleLanes, transitionAt, transitionWindows, CLIP_SPEEDS, canMergeWithNext, clipLength, clipSpeed, groupOf, sourceTimeAt, mergeWithNext, moveClip, unjoin, updateClip, visibleCuts, type Clip, type MediaRef, type MusicTrack, type Project, type ProxyHeight, type Title, type TitleFont, isFileLutKind, FILE_LUT_KINDS, type FileLutKind, type LutKind, type MathLutKind, type TitleAlign, type TitlePosition, type TitleShadow, type Transition, type TransitionKind, type ExportTags, type IntroSettings, type IntroCard, DEFAULT_CARD, cardSettings, hasCard, reorderClip, parseTime, type SteadyLights, STEADY_FRAMES, clampMusicStart, musicUnused, musicBetween, type FillOrder, type FillSettings, type SongPrefs, describeWhere, nameSome, whereSummary, type MediaWhere, exportFingerprint, SOUND_MODES, SOUND_LABELS, soundLevels, applySoundLevels, soundState, type SoundMode, type SoundLevels, FRAMES, FRAME_LABELS, MAX_REFRAME_ZOOM, MIN_CLIP_SPEED, MAX_CLIP_SPEED, type Frame, type Layout, type ReframeKey, type SoundRegion, type RegionPreset, REGION_PRESETS, MIN_REGION_SECONDS, MAX_REGION_RAMP, regionPreset, newRegion, clampSpan, fitSpan, moveSpan, tidySpans, cameraGainAt, regionMusicGain, type Span, type Zoom, DEFAULT_ZOOM, MAX_ZOOM_EASE, newZoom, zoomAt, zoomLabel, describeZooms } from "@/lib/tools/video/project";
+import { DEFAULT_EXPORT, NEUTRAL_GRADE, NEUTRAL_TRANSFORM, TITLE_ALIGNS, TITLE_FAMILIES, TITLE_FONTS, TITLE_POSITIONS, TITLE_SHADOWS, TITLE_WEIGHTS, TRANSITIONS, addTransitionAt, appendMusic, applyAudioTo, applyGradeTo, applyTransitionToAll, clipAt, crossfades, dbToGain, effectiveMusicEnd, estimateExport, exportRange, fmtTime, musicGainAt, musicLength, newId, newProject, newTitle, orderRecordings, placeClips, planExport, removeRange, reorderMusic, setTransition, splitClip, timelineDuration, titleLanes, transitionAt, transitionWindows, CLIP_SPEEDS, canMergeWithNext, clipLength, clipSpeed, groupOf, sourceTimeAt, mergeWithNext, moveClip, unjoin, updateClip, visibleCuts, type Clip, type MediaRef, type MusicTrack, type Project, type ProxyHeight, type Title, type TitleFont, isFileLutKind, FILE_LUT_KINDS, type FileLutKind, type LutKind, type MathLutKind, type TitleAlign, type TitlePosition, type TitleShadow, type Transition, type TransitionKind, type ExportTags, type IntroSettings, type IntroCard, DEFAULT_CARD, cardSettings, hasCard, reorderClip, parseTime, type SteadyLights, STEADY_FRAMES, clampMusicStart, musicUnused, musicBetween, type FillOrder, type FillSettings, type SongPrefs, describeWhere, nameSome, whereSummary, type MediaWhere, exportFingerprint, SOUND_MODES, SOUND_LABELS, soundLevels, applySoundLevels, soundState, type SoundMode, type SoundLevels, FRAMES, FRAME_LABELS, MAX_REFRAME_ZOOM, MIN_CLIP_SPEED, MAX_CLIP_SPEED, type Frame, type Layout, type ReframeKey, type SoundRegion, type RegionPreset, REGION_PRESETS, MIN_REGION_SECONDS, MAX_REGION_RAMP, regionPreset, newRegion, clampSpan, fitSpan, moveSpan, tidySpans, cameraGainAt, regionMusicGain, type Span, type Zoom, DEFAULT_ZOOM, MAX_ZOOM_EASE, newZoom, zoomAt, zoomLabel, describeZooms, OPENINGS, DEFAULT_OPENING, type OpeningKind } from "@/lib/tools/video/project";
 import { gainToReach, YOUTUBE_LUFS, type Loudness } from "@/lib/tools/video/loudness";
 import { drawTransition } from "@/lib/tools/video/transitions";
 import { buildDlogLut, deriveLut, fetchOfficialLut, lutToCube, parseCube, type Lut3D } from "@/lib/tools/video/lut";
@@ -442,6 +442,14 @@ export function VideoEditorWidget() {
   const [introScan, setIntroScan] = useState(true);
   // Drag-and-drop reordering of intro scenes: which scene is being dragged and where it would drop.
   const [sceneDrag, setSceneDrag] = useState<{ id: string; overId: string | null; after: boolean } | null>(null);
+  // Intro scenes shown as a list (with details) or a compact grid of thumbnails; remembered per browser.
+  const [introSceneView, setIntroSceneView] = useState<"list" | "grid">(() => {
+    try {
+      return localStorage.getItem("bench:introSceneView") === "grid" ? "grid" : "list";
+    } catch {
+      return "list";
+    }
+  });
   const stopAtRef = useRef<number | null>(null);
   const fxScratchRef = useRef<{ a: OffscreenCanvas; b: OffscreenCanvas; w: number; h: number } | null>(null);
   const projectRef = useRef<Project | null>(null);
@@ -3062,6 +3070,51 @@ export function VideoEditorWidget() {
     const beforeId = idx < 0 ? null : d.after ? scenes[idx + 1]?.id ?? null : scenes[idx].id;
     applyIntro((p) => reorderScene(p, d.id, beforeId));
   };
+  // Shared drag wiring so the list (reads top/bottom) and the grid (reads left/right) reorder the same way.
+  const sceneDragStart = (id: string) => ({
+    draggable: true,
+    onDragStart: (e: React.DragEvent) => {
+      e.dataTransfer.effectAllowed = "move";
+      e.dataTransfer.setData("text/plain", id);
+      setSceneDrag({ id, overId: null, after: false });
+    },
+    onDragEnd: () => setSceneDrag(null),
+  });
+  const sceneDropTarget = (id: string, isCard: boolean, axis: "x" | "y") => ({
+    onDragOver: (e: React.DragEvent) => {
+      if (!sceneDrag || sceneDrag.id === id) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "move";
+      const r = e.currentTarget.getBoundingClientRect();
+      const after = isCard ? false : axis === "x" ? e.clientX > r.left + r.width / 2 : e.clientY > r.top + r.height / 2;
+      if (sceneDrag.overId !== id || sceneDrag.after !== after) setSceneDrag({ ...sceneDrag, overId: id, after });
+    },
+    onDrop: (e: React.DragEvent) => {
+      e.preventDefault();
+      dropScene();
+    },
+  });
+  const setIntroView = (v: "list" | "grid") => {
+    setIntroSceneView(v);
+    try {
+      localStorage.setItem("bench:introSceneView", v);
+    } catch {
+      /* private mode */
+    }
+  };
+  // The opening reveal (project.opening): pick a shape or clear it; the duration stays when switching shapes.
+  const setOpeningKind = (kind: OpeningKind | "none") =>
+    setProject((p) => {
+      if (kind === "none") {
+        if (!p.opening) return p;
+        const next = { ...p };
+        delete next.opening;
+        return next;
+      }
+      return { ...p, opening: { kind, duration: p.opening?.duration ?? DEFAULT_OPENING.duration } };
+    });
+  const setOpeningDuration = (d: number) =>
+    setProject((p) => (p.opening ? { ...p, opening: { ...p.opening, duration: Math.min(5, Math.max(0.1, d || DEFAULT_OPENING.duration)) } } : p));
   const setCard = (patch: Partial<IntroCard>) => setIntro({ card: { ...project.intro.card, ...patch } });
   const introCard = cardSettings(project.intro.card);
   const stopMin = project.stops?.minSeconds ?? stopDefaults.minSeconds;
@@ -5728,6 +5781,31 @@ export function VideoEditorWidget() {
                     </>
                   )}
                 </div>
+                {/* Opening reveal — applies to the very first frame, whether or not there is an intro. */}
+                <div className="space-y-1 rounded-[var(--radius-sm)] border border-edge p-2 text-[12px] text-muted" data-opening data-opening-kind={project.opening?.kind ?? "none"}>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="readout">Opening</span>
+                    <select value={project.opening?.kind ?? "none"} onChange={(e) => setOpeningKind(e.target.value as OpeningKind | "none")} className={cn(SEL, "h-7 text-[12px]")} aria-label="Opening reveal">
+                      <option value="none">None (straight to the first frame)</option>
+                      {OPENINGS.map((o) => (
+                        <option key={o.kind} value={o.kind}>
+                          {o.name}
+                        </option>
+                      ))}
+                    </select>
+                    {project.opening && (
+                      <label className="flex items-center gap-1">
+                        over
+                        <input type="number" min={0.1} max={5} step={0.1} value={Number(project.opening.duration.toFixed(2))} onChange={(e) => setOpeningDuration(Number(e.target.value))} className={cn(INPUT, "h-7 w-16 font-mono")} aria-label="Opening seconds" /> s
+                      </label>
+                    )}
+                  </div>
+                  <p className="text-faint">
+                    {project.opening
+                      ? `${OPENINGS.find((o) => o.kind === project.opening!.kind)?.hint} The first frame already shows the picture — it never opens on black.`
+                      : "The video opens straight on the first frame. Pick a reveal to have a shape open out over it — it never starts on black."}
+                  </p>
+                </div>
                 {!introReg && (
                   <p className="text-muted">
                     A cold open: a few of the video’s liveliest moments cut together in a look, ending on a title card, before the
@@ -5783,93 +5861,133 @@ export function VideoEditorWidget() {
                     <p className="text-[12px] text-faint" data-intro-summary>
                       {describeIntro(project)}. Titles and the export range moved with the main video; music stays where it is and plays under the intro.
                     </p>
-                    <div className="space-y-1" data-intro-scenes>
-                      {[...introReg.scenes, ...(introReg.card ? [introReg.card] : [])].map((c, i) => {
-                        const isCard = c.introRole === "card";
-                        const thumb = thumbs.get(c.id);
-                        const dragging = sceneDrag?.id === c.id;
-                        const dropHere = sceneDrag && sceneDrag.id !== c.id && sceneDrag.overId === c.id;
-                        return (
-                          <div
-                            key={c.id}
-                            className={cn(
-                              "flex items-center gap-1.5 rounded-[var(--radius-sm)] border border-edge p-1 transition-shadow",
-                              dragging && "opacity-40",
-                              dropHere && (sceneDrag!.after ? "shadow-[inset_0_-2px_0_0_var(--accent)]" : "shadow-[inset_0_2px_0_0_var(--accent)]"),
-                            )}
-                            data-intro-scene={isCard ? "card" : i}
-                            data-scene-id={c.id}
-                            onDragOver={(e) => {
-                              if (!sceneDrag || sceneDrag.id === c.id) return;
-                              e.preventDefault();
-                              e.dataTransfer.dropEffect = "move";
-                              const r = e.currentTarget.getBoundingClientRect();
-                              const after = isCard ? false : e.clientY > r.top + r.height / 2;
-                              if (sceneDrag.overId !== c.id || sceneDrag.after !== after) setSceneDrag({ ...sceneDrag, overId: c.id, after });
-                            }}
-                            onDrop={(e) => {
-                              e.preventDefault();
-                              dropScene();
-                            }}
-                          >
-                            {!isCard ? (
-                              <span
-                                draggable
-                                onDragStart={(e) => {
-                                  e.dataTransfer.effectAllowed = "move";
-                                  e.dataTransfer.setData("text/plain", c.id);
-                                  setSceneDrag({ id: c.id, overId: null, after: false });
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="readout">Scenes</span>
+                      <div className="flex gap-0.5" role="group" aria-label="Scene view">
+                        <button type="button" aria-pressed={introSceneView === "list"} onClick={() => setIntroView("list")} className={cn("rounded-[var(--radius-sm)] border p-1", introSceneView === "list" ? "border-accent text-accent" : "border-edge text-faint hover:text-ink")} title="List view" aria-label="List view" data-scene-view="list">
+                          <List size={14} />
+                        </button>
+                        <button type="button" aria-pressed={introSceneView === "grid"} onClick={() => setIntroView("grid")} className={cn("rounded-[var(--radius-sm)] border p-1", introSceneView === "grid" ? "border-accent text-accent" : "border-edge text-faint hover:text-ink")} title="Grid view — thumbnails only, easier to reorder many" aria-label="Grid view" data-scene-view="grid">
+                          <LayoutGrid size={14} />
+                        </button>
+                      </div>
+                    </div>
+                    {introSceneView === "list" ? (
+                      <div className="space-y-1" data-intro-scenes data-view="list">
+                        {[...introReg.scenes, ...(introReg.card ? [introReg.card] : [])].map((c, i) => {
+                          const isCard = c.introRole === "card";
+                          const thumb = thumbs.get(c.id);
+                          const dragging = sceneDrag?.id === c.id;
+                          const dropHere = sceneDrag && sceneDrag.id !== c.id && sceneDrag.overId === c.id;
+                          return (
+                            <div
+                              key={c.id}
+                              className={cn(
+                                "flex items-center gap-1.5 rounded-[var(--radius-sm)] border border-edge p-1 transition-shadow",
+                                dragging && "opacity-40",
+                                dropHere && (sceneDrag!.after ? "shadow-[inset_0_-2px_0_0_var(--accent)]" : "shadow-[inset_0_2px_0_0_var(--accent)]"),
+                              )}
+                              data-intro-scene={isCard ? "card" : i}
+                              data-scene-id={c.id}
+                              {...sceneDropTarget(c.id, isCard, "y")}
+                            >
+                              {!isCard ? (
+                                <span {...sceneDragStart(c.id)} className="shrink-0 cursor-grab touch-none px-0.5 text-faint hover:text-ink active:cursor-grabbing" title="Drag to reorder" aria-label={`Drag scene ${i + 1} to reorder`} data-scene-handle={i}>
+                                  <GripVertical size={15} />
+                                </span>
+                              ) : (
+                                <span className="w-[19px] shrink-0" aria-hidden />
+                              )}
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setPlayhead(c.start + Math.min(0.3, (c.end - c.start) / 2));
+                                  setSeekToken((x) => x + 1);
                                 }}
-                                onDragEnd={() => setSceneDrag(null)}
-                                className="shrink-0 cursor-grab touch-none px-0.5 text-faint hover:text-ink active:cursor-grabbing"
-                                title="Drag to reorder"
-                                aria-label={`Drag scene ${i + 1} to reorder`}
-                                data-scene-handle={i}
+                                className="shrink-0 overflow-hidden rounded-[3px] bg-black"
+                                style={{ width: 96, height: 54 }}
+                                title="Show it in the preview"
                               >
-                                <GripVertical size={15} />
-                              </span>
-                            ) : (
-                              <span className="w-[19px] shrink-0" aria-hidden />
-                            )}
+                                {/* eslint-disable-next-line @next/next/no-img-element -- a short-lived object URL, not an asset */}
+                                {thumb ? <img src={thumb} alt="" width={96} height={54} className="h-full w-full object-cover" /> : <span className="flex h-full w-full items-center justify-center text-[10px] text-white/50">…</span>}
+                              </button>
+                              <div className="min-w-0 flex-1 text-[12px]">
+                                <div className="truncate text-ink">
+                                  {isCard ? "Title card" : `Scene ${i + 1}`} <span className="text-faint">· {project.media[c.media]?.name} at {fmtTime(c.in)}</span>
+                                </div>
+                                <label className="flex items-center gap-1 text-muted">
+                                  <input type="number" min={0.3} max={isCard ? 10 : 6} step={0.1} value={Number((c.end - c.start).toFixed(2))} onChange={(e) => applyIntro((p) => setSceneSeconds(p, c.id, Number(e.target.value) || 1))} className={cn(INPUT, "h-6 w-16 font-mono text-[11.5px]")} aria-label={isCard ? "Card seconds" : `Scene ${i + 1} seconds`} /> s{clipSpeed(c) !== 1 && <span className="text-faint">· {clipSpeed(c)}×</span>}
+                                </label>
+                              </div>
+                              {!isCard && (
+                                <>
+                                  <button type="button" onClick={() => applyIntro((p) => moveScene(p, c.id, -1))} disabled={i === 0} className="text-faint hover:text-ink disabled:opacity-30" aria-label="Move earlier">
+                                    <ChevronUp size={14} />
+                                  </button>
+                                  <button type="button" onClick={() => applyIntro((p) => moveScene(p, c.id, 1))} disabled={i === introReg.scenes.length - 1} className="text-faint hover:text-ink disabled:opacity-30" aria-label="Move later">
+                                    <ChevronDown size={14} />
+                                  </button>
+                                </>
+                              )}
+                              <button type="button" onClick={() => (isCard ? setCard({ enabled: false }) : applyIntro((p) => removeScene(p, c.id)))} className="text-faint hover:text-danger" aria-label={isCard ? "Remove the title card" : `Remove scene ${i + 1}`}>
+                                <Trash2 size={13} />
+                              </button>
+                            </div>
+                          );
+                        })}
+                        {introReg.scenes.length > 1 && <p className="px-1 text-[11px] text-faint">Drag a scene by its handle to reorder, or use the ↑↓ arrows.</p>}
+                      </div>
+                    ) : (
+                      <div className="grid grid-cols-3 gap-1.5 sm:grid-cols-4" data-intro-scenes data-view="grid">
+                        {[...introReg.scenes, ...(introReg.card ? [introReg.card] : [])].map((c, i) => {
+                          const isCard = c.introRole === "card";
+                          const thumb = thumbs.get(c.id);
+                          const dragging = sceneDrag?.id === c.id;
+                          const dropHere = sceneDrag && sceneDrag.id !== c.id && sceneDrag.overId === c.id;
+                          return (
                             <button
+                              key={c.id}
                               type="button"
+                              {...(isCard ? {} : sceneDragStart(c.id))}
+                              {...sceneDropTarget(c.id, isCard, "x")}
                               onClick={() => {
                                 setPlayhead(c.start + Math.min(0.3, (c.end - c.start) / 2));
                                 setSeekToken((x) => x + 1);
                               }}
-                              className="shrink-0 overflow-hidden rounded-[3px] bg-black"
-                              style={{ width: 96, height: 54 }}
-                              title="Show it in the preview"
+                              className={cn(
+                                "group relative aspect-video overflow-hidden rounded-[var(--radius-sm)] border bg-black transition-shadow",
+                                isCard ? "border-dashed border-edge" : "cursor-grab border-edge active:cursor-grabbing",
+                                dragging && "opacity-40",
+                                dropHere && (sceneDrag!.after ? "shadow-[inset_-3px_0_0_0_var(--accent)]" : "shadow-[inset_3px_0_0_0_var(--accent)]"),
+                              )}
+                              data-intro-scene={isCard ? "card" : i}
+                              data-scene-id={c.id}
+                              title={isCard ? "Title card (always last)" : `Scene ${i + 1} — drag to reorder, click to preview`}
                             >
                               {/* eslint-disable-next-line @next/next/no-img-element -- a short-lived object URL, not an asset */}
-                              {thumb ? <img src={thumb} alt="" width={96} height={54} className="h-full w-full object-cover" /> : <span className="flex h-full w-full items-center justify-center text-[10px] text-white/50">…</span>}
+                              {thumb ? <img src={thumb} alt="" draggable={false} className="pointer-events-none h-full w-full object-cover" /> : <span className="flex h-full w-full items-center justify-center text-[10px] text-white/50">…</span>}
+                              {!isCard && <span className="absolute left-0.5 top-0.5 rounded bg-black/60 px-1 text-[10px] font-medium tabular text-white">{i + 1}</span>}
+                              {isCard && <span className="absolute inset-x-0 bottom-0 bg-black/55 py-0.5 text-center text-[10px] text-white">Card</span>}
+                              {!isCard && (
+                                <span
+                                  role="button"
+                                  tabIndex={0}
+                                  aria-label={`Remove scene ${i + 1}`}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    applyIntro((p) => removeScene(p, c.id));
+                                  }}
+                                  className="absolute right-0.5 top-0.5 hidden rounded bg-black/60 p-0.5 text-white hover:text-danger group-hover:block"
+                                >
+                                  <X size={11} />
+                                </span>
+                              )}
                             </button>
-                            <div className="min-w-0 flex-1 text-[12px]">
-                              <div className="truncate text-ink">
-                                {isCard ? "Title card" : `Scene ${i + 1}`} <span className="text-faint">· {project.media[c.media]?.name} at {fmtTime(c.in)}</span>
-                              </div>
-                              <label className="flex items-center gap-1 text-muted">
-                                <input type="number" min={0.3} max={isCard ? 10 : 6} step={0.1} value={Number((c.end - c.start).toFixed(2))} onChange={(e) => applyIntro((p) => setSceneSeconds(p, c.id, Number(e.target.value) || 1))} className={cn(INPUT, "h-6 w-16 font-mono text-[11.5px]")} aria-label={isCard ? "Card seconds" : `Scene ${i + 1} seconds`} /> s{clipSpeed(c) !== 1 && <span className="text-faint">· {clipSpeed(c)}×</span>}
-                              </label>
-                            </div>
-                            {!isCard && (
-                              <>
-                                <button type="button" onClick={() => applyIntro((p) => moveScene(p, c.id, -1))} disabled={i === 0} className="text-faint hover:text-ink disabled:opacity-30" aria-label="Move earlier">
-                                  <ChevronUp size={14} />
-                                </button>
-                                <button type="button" onClick={() => applyIntro((p) => moveScene(p, c.id, 1))} disabled={i === introReg.scenes.length - 1} className="text-faint hover:text-ink disabled:opacity-30" aria-label="Move later">
-                                  <ChevronDown size={14} />
-                                </button>
-                              </>
-                            )}
-                            <button type="button" onClick={() => (isCard ? setCard({ enabled: false }) : applyIntro((p) => removeScene(p, c.id)))} className="text-faint hover:text-danger" aria-label={isCard ? "Remove the title card" : `Remove scene ${i + 1}`}>
-                              <Trash2 size={13} />
-                            </button>
-                          </div>
-                        );
-                      })}
-                      {introReg.scenes.length > 1 && <p className="px-1 text-[11px] text-faint">Drag a scene by its handle to reorder, or use the ↑↓ arrows.</p>}
-                    </div>
+                          );
+                        })}
+                        {introReg.scenes.length > 1 && <p className="col-span-full px-0.5 text-[11px] text-faint">Drag a thumbnail to reorder; click to preview it.</p>}
+                      </div>
+                    )}
                     <div className="space-y-1.5 rounded-[var(--radius-sm)] border border-edge p-2 text-[12px] text-muted" data-intro-card>
                       <div className="flex items-center justify-between gap-2">
                         <label className="flex items-center gap-1.5 font-medium text-ink">

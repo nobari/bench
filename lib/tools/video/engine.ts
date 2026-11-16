@@ -50,6 +50,7 @@ import {
   musicGainAt,
   regionMusicGain,
   zoomAt,
+  openingStart,
   type Punch,
   placeClips,
   planExport,
@@ -74,7 +75,7 @@ import { cutAt, cutBySkips, mergeSkips } from "./skips";
 import { splitWords, wordTimes } from "./title-tools";
 import { applyEntrance, drawLabels, type LabelArtMap } from "./label-art";
 import { even, framed, framePanes, layoutBackdrop, outputSize, pictureAspect, transformAt } from "./reframe";
-import { drawTransition } from "./transitions";
+import { drawOpening, drawTransition } from "./transitions";
 import {
   drawIntroFx,
   introFrameAt,
@@ -964,6 +965,10 @@ export function drawOverlays(
   logo: ImageBitmap | null,
   labelArt?: LabelArtMap | null,
 ) {
+  // The opening reveal sits over the first frames, before the titles so a title that starts early draws on top of it.
+  if (project.opening && project.opening.duration > 0 && t >= 0 && t < project.opening.duration) {
+    drawOpening(ctx, w, h, project.opening.kind, t / project.opening.duration, openingStart(project.opening.kind));
+  }
   for (const title of project.titles) {
     const phase = overlayPhase(title, t);
     if (!phase) continue;

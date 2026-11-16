@@ -1,4 +1,4 @@
-import type { TransitionKind } from "./project";
+import type { OpeningKind, TransitionKind } from "./project";
 
 type Ctx = CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
 type Frame = CanvasImageSource;
@@ -34,6 +34,50 @@ export function incomingShare(kind: TransitionKind, p: number): number {
     default:
       return p < 0.5 ? 0 : 1;
   }
+}
+
+/**
+ * Reveal the opening of the video: paint black only over the part of the frame the shape has not yet uncovered, so the
+ * picture already drawn on `ctx` shows through the opening. `p` is raw progress 0…1 across the reveal's duration;
+ * `start` is the fraction already shown at the first frame (never 0), so the opening never begins on a black frame.
+ */
+export function drawOpening(ctx: Ctx, w: number, h: number, kind: OpeningKind, p: number, start: number) {
+  const cov = start + (1 - start) * ease(p); // start … 1 — how much of the frame is uncovered
+  if (cov >= 1) return;
+  ctx.save();
+  ctx.globalAlpha = 1;
+  ctx.globalCompositeOperation = "source-over";
+  ctx.filter = "none";
+  ctx.fillStyle = "#000";
+  if (kind === "box") {
+    const bw = w * cov, bh = h * cov, x = (w - bw) / 2, y = (h - bh) / 2;
+    ctx.fillRect(0, 0, w, y);
+    ctx.fillRect(0, y + bh, w, h - y - bh);
+    ctx.fillRect(0, y, x, bh);
+    ctx.fillRect(x + bw, y, w - x - bw, bh);
+  } else if (kind === "curtain") {
+    const bw = w * cov, x = (w - bw) / 2;
+    ctx.fillRect(0, 0, x, h);
+    ctx.fillRect(x + bw, 0, w - x - bw, h);
+  } else if (kind === "barn") {
+    const bh = h * cov, y = (h - bh) / 2;
+    ctx.fillRect(0, 0, w, y);
+    ctx.fillRect(0, y + bh, w, h - y - bh);
+  } else if (kind === "iris") {
+    const r = (cov * Math.hypot(w, h)) / 2;
+    ctx.beginPath();
+    ctx.rect(0, 0, w, h);
+    ctx.arc(w / 2, h / 2, r, 0, Math.PI * 2, true); // reverse winding → a hole over the circle
+    ctx.fill("evenodd");
+  } else if (kind === "blinds") {
+    const n = 6, band = h / n, slit = band * cov, edge = (band - slit) / 2;
+    for (let i = 0; i < n; i++) {
+      const top = i * band;
+      ctx.fillRect(0, top, w, edge);
+      ctx.fillRect(0, top + edge + slit, w, edge);
+    }
+  }
+  ctx.restore();
 }
 
 function drawScaled(ctx: Ctx, img: Frame, w: number, h: number, s: number) {

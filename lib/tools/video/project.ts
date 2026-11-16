@@ -1209,6 +1209,28 @@ export function exportTags(p: Project, encoder: string): { title: string; artist
   return out;
 }
 
+/* ───────────────────────── opening reveal ───────────────────────── */
+
+/** A shape that opens out over the very first frames of the finished video; it starts already showing the picture. */
+export type OpeningKind = "box" | "iris" | "curtain" | "barn" | "blinds";
+export interface Opening {
+  kind: OpeningKind;
+  /** Seconds the reveal takes, from the start of the video. */
+  duration: number;
+}
+/** The reveals the menu offers; `start` is how much of the picture already shows at the first frame (never 0 — no black start). */
+export const OPENINGS: { kind: OpeningKind; name: string; hint: string; start: number }[] = [
+  { kind: "box", name: "Expanding box", hint: "A centred rectangle grows from half-size out to the whole frame.", start: 0.5 },
+  { kind: "iris", name: "Iris", hint: "A circle opens out from the centre of the frame.", start: 0.42 },
+  { kind: "curtain", name: "Curtain", hint: "Two panels part from the centre to the sides.", start: 0.4 },
+  { kind: "barn", name: "Barn doors", hint: "The frame opens from the middle, upward and downward.", start: 0.4 },
+  { kind: "blinds", name: "Blinds", hint: "Venetian slits widen until the picture is whole.", start: 0.3 },
+];
+export const OPENING_KINDS: OpeningKind[] = OPENINGS.map((o) => o.kind);
+export const DEFAULT_OPENING: Opening = { kind: "box", duration: 0.8 };
+/** How much of the picture the reveal already shows at the first frame (so it never opens on black). */
+export const openingStart = (kind: OpeningKind): number => OPENINGS.find((o) => o.kind === kind)?.start ?? 0.4;
+
 export type TransitionKind = "dissolve" | "dipBlack" | "dipWhite" | "zoom" | "blur" | "wipe" | "push";
 export interface Transition {
   kind: TransitionKind;
@@ -1561,6 +1583,8 @@ export interface Project {
   labels?: Label[];
   /** The art stored in the project for its labels, by key (see LabelArt). */
   art?: Record<string, LabelArt>;
+  /** How the very first frame is revealed — a shape that opens out, never starting on black (see Opening). */
+  opening?: Opening;
 }
 
 /** A readable location for a media file. */
@@ -2195,6 +2219,13 @@ export function deserialize(json: string): Project | null {
     else delete loaded.regions;
     if (zooms) loaded.zooms = zooms;
     else delete loaded.zooms;
+    const rawOpening = p.opening as Partial<Opening> | null | undefined;
+    const opening: Opening | undefined =
+      rawOpening && typeof rawOpening === "object" && OPENING_KINDS.includes(rawOpening.kind as OpeningKind) && typeof rawOpening.duration === "number" && rawOpening.duration > 0
+        ? { kind: rawOpening.kind as OpeningKind, duration: Math.min(5, Math.max(0.1, rawOpening.duration)) }
+        : undefined;
+    if (opening) loaded.opening = opening;
+    else delete loaded.opening;
     // Labels keep only art that is there, and art only what a label uses.
     const art = p.art && typeof p.art === "object" ? Object.fromEntries(Object.entries(p.art).map(([k, a]) => [k, normalizeArt(a)] as const).filter((e): e is [string, LabelArt] => !!e[1])) : {};
     const labels = Array.isArray(p.labels) ? p.labels.map((l) => normalizeLabel(l)).filter((l): l is Label => !!l && (l.art ? !!art[l.art] : !!loaded.media[l.media!])) : [];
