@@ -3002,21 +3002,54 @@ export function VideoEditorWidget() {
     return { perWindow: 1, hint: "Without proxies, 8K recordings are too slow to scan, so the scenes are spaced evenly across the footage. Render proxies (in the preview's size menu) and make the intro again to pick the lively moments." };
   }, [placed, project.proxies, project.media]);
   /** Replace the clips through an intro operation; titles and the export range move with the drive. */
+  // When the intro grows or shrinks, the footage after it slides along the timeline. If the playhead is in that main
+  // video, move it by the same amount so it stays locked to the same frame — otherwise "Use this moment" and retiming
+  // a scene would appear to step playback backwards. A playhead inside the intro is left where it is.
+  const keepFootageUnderPlayhead = (oldIntroEnd: number, delta: number) => {
+    if (!delta) return;
+    const ph = playheadRef.current;
+    if (ph >= oldIntroEnd - 1e-3) {
+      setPlayhead(Math.max(0, Math.min(durationRef.current + delta, ph + delta)));
+      setSeekToken((x) => x + 1);
+    }
+  };
   const applyIntro = (fn: (p: Project) => Clip[] | null, failure?: string) => {
     const clips = fn(project);
     if (!clips) {
       if (failure) setError(failure);
       return;
     }
-    const delta = introLength(clips) - introLength(project.clips);
+    const oldIntroEnd = introLength(project.clips);
+    const delta = introLength(clips) - oldIntroEnd;
     setProject((p) => shiftAfterIntro({ ...p, clips }, delta));
+    keepFootageUnderPlayhead(oldIntroEnd, delta);
   };
   const setIntro = (patch: Partial<IntroSettings>) => {
     const next: Project = { ...project, intro: { ...project.intro, ...patch } };
     const clips = hasIntro(next.clips) ? restyleIntro(next) : next.clips;
-    const delta = introLength(clips) - introLength(project.clips);
+    const oldIntroEnd = introLength(project.clips);
+    const delta = introLength(clips) - oldIntroEnd;
     setProject(shiftAfterIntro({ ...next, clips }, delta));
+    keepFootageUnderPlayhead(oldIntroEnd, delta);
   };
+  // "Use this moment": lift a scene from the frame under the playhead into the intro (starting one if there is none),
+  // without interrupting playback. The playhead rides along so the picture carries on from the same place.
+  const useThisMoment = () => {
+    const at = playheadRef.current;
+    const clips = addSceneAt(project, at);
+    if (!clips) {
+      setError("Move the playhead into the main video (past the intro) to lift a scene from there.");
+      return;
+    }
+    const oldIntroEnd = introLength(project.clips);
+    const delta = introLength(clips) - oldIntroEnd;
+    setProject((p) => shiftAfterIntro({ ...p, clips }, delta));
+    keepFootageUnderPlayhead(oldIntroEnd, delta);
+    const n = introRegion(placeClips(clips))?.scenes.length ?? 0;
+    setStatus(`Scene ${n} added from ${fmtTime(at)}${playing ? " — playback keeps going" : ""}. Swap, reorder or retime it below.`);
+  };
+  const atIntroEnd = introReg ? introReg.end : 0;
+  const canUseMoment = mainClips(placed).length > 0 && playhead >= atIntroEnd - 1e-3;
   const setCard = (patch: Partial<IntroCard>) => setIntro({ card: { ...project.intro.card, ...patch } });
   const introCard = cardSettings(project.intro.card);
   const stopMin = project.stops?.minSeconds ?? stopDefaults.minSeconds;
@@ -5654,15 +5687,28 @@ export function VideoEditorWidget() {
                     </button>
                   </span>
                   <button type="button" onClick={() => void makeIntro()} disabled={!placed.length || !!job} className={PRIMARY} data-make-intro>
-                    <Sparkles size={14} /> {introReg ? "Make it again" : "Make an intro from this video"}
+                    <Sparkles size={14} /> {introReg ? "Make it again" : "Make an intro from the liveliest moments"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={useThisMoment}
+                    disabled={!canUseMoment}
+                    className={GHOST}
+                    data-add-scene
+                    title={
+                      !mainClips(placed).length
+                        ? "No footage to lift a scene from"
+                        : canUseMoment
+                          ? "Lift a scene from the frame under the playhead into the intro"
+                          : "Move the playhead past the intro, into the main video, to lift a scene"
+                    }
+                  >
+                    + Use this moment
                   </button>
                   {introReg && (
                     <>
                       <button type="button" onClick={previewIntro} className={GHOST} data-preview-intro>
                         <Play size={12} /> Preview intro
-                      </button>
-                      <button type="button" onClick={() => applyIntro((p) => addSceneAt(p, playhead), "Move the playhead past the intro, into the main video, to lift a scene from there.")} className={GHOST} data-add-scene title="Lift a scene from the frame under the playhead">
-                        + Use this moment
                       </button>
                       <button type="button" onClick={() => applyIntro((p) => removeIntro(p.clips))} className={cn(GHOST, "ml-auto hover:border-danger hover:text-danger")} data-remove-intro>
                         <Trash2 size={12} /> Remove intro
@@ -5670,7 +5716,14 @@ export function VideoEditorWidget() {
                     </>
                   )}
                 </div>
-                {!introReg && <p className="text-muted">A cold open: a few of the video’s liveliest moments cut together in a look, ending on a title card, before the video proper starts. One click builds a starter from the footage; then swap scenes, reorder them, retime them or change the look.</p>}
+                {!introReg && (
+                  <p className="text-muted">
+                    A cold open: a few of the video’s liveliest moments cut together in a look, ending on a title card, before the
+                    video proper starts. Two easy ways to build one — press <span className="text-ink">Make an intro</span> for an
+                    automatic starter, or just play the video and tap <span className="text-ink">+ Use this moment</span> at each shot
+                    you want. Then swap scenes, reorder them, retime them or change the look.
+                  </p>
+                )}
                 <div className="grid grid-cols-2 gap-2 text-[12px] text-muted">
                   <label>
                     Scenes

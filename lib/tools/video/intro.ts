@@ -1,5 +1,5 @@
 /**
- * The intro: a handful of short scenes lifted from the drive itself, cut together in one of ten
+ * The intro: a handful of short scenes lifted from the drive itself, cut together in one of fourteen
  * looks and ended on a title card — the cold open YouTube videos put before the content.
  *
  * Scenes are ordinary clips at the head of the timeline tagged with introRole, so the preview,
@@ -11,7 +11,7 @@
 import { TITLE_POSITIONS, cardSettings, clipLength, clipSpeed, fontFamilyCss, hasCard, newId, placeClips, type Clip, type Grade, type PlacedClip, type Project, type TitlePosition, type Transition, type TransitionWindow, HANDLE_MARGIN } from "./project";
 import { incomingShare } from "./transitions";
 
-export type IntroStyleId = "teaser" | "cinematic" | "punch" | "mono" | "pop" | "retro" | "glitch" | "spotlight" | "hyper" | "clean";
+export type IntroStyleId = "teaser" | "cinematic" | "punch" | "mono" | "pop" | "retro" | "glitch" | "spotlight" | "hyper" | "clean" | "kenburns" | "bloom" | "energy" | "vhs";
 
 /** Post effects drawn over the graded frame; every value is a strength, 0 or missing means off. */
 export interface IntroFx {
@@ -31,6 +31,12 @@ export interface IntroFx {
   glitch?: number;
   /** Fade from black at the very start, seconds. */
   fadeIn?: number;
+  /** A slow directional pan across each scene (Ken Burns), as a fraction of the width; direction alternates. */
+  drift?: number;
+  /** A decaying positional shake at each cut, for this many seconds. */
+  shake?: number;
+  /** A warm light-leak glow that drifts across the frame, 0…1. */
+  lightLeak?: number;
 }
 
 /** Added to (exposure, temperature, tint) or multiplied into (contrast, saturation) the clip's grade. */
@@ -72,6 +78,10 @@ export const INTRO_STYLES: IntroStyle[] = [
   { id: "spotlight", name: "Spotlight", hint: "A dark vignette closes in around the centre with a slow zoom; soft dissolves.", sceneSeconds: 3, speed: 1, transition: { kind: "dissolve", duration: 2 }, outro: { kind: "dipBlack", duration: 2 }, look: { ...LOOK, exposure: -0.1, contrast: 1.1 }, fx: { vignette: 0.85, pushIn: 0.12, fadeIn: 1 } },
   { id: "hyper", name: "Hyper-lapse", hint: "Scenes race by at 8× with a speed blur at the cuts.", sceneSeconds: 3, speed: 8, transition: { kind: "blur", duration: 2 }, outro: { kind: "blur", duration: 2 }, look: { ...LOOK, contrast: 1.05, saturation: 1.1 }, fx: { pushIn: 0.04, fadeIn: 0.4 } },
   { id: "clean", name: "Clean", hint: "No effects: the scenes as they are, a dip to black between them, then the title.", sceneSeconds: 3, speed: 1, transition: { kind: "dipBlack", duration: 2 }, outro: { kind: "dipBlack", duration: 2 }, look: { ...LOOK }, fx: { fadeIn: 0.5 } },
+  { id: "kenburns", name: "Ken Burns", hint: "A slow pan drifts across each scene, with a gentle push-in and soft cross dissolves.", sceneSeconds: 3.5, speed: 1, transition: { kind: "dissolve", duration: 2 }, outro: { kind: "dipBlack", duration: 2 }, look: { ...LOOK, temperature: 8, contrast: 1.04, saturation: 1.0 }, fx: { drift: 0.07, pushIn: 0.03, fadeIn: 0.8 } },
+  { id: "bloom", name: "Light leak", hint: "Warm light leaks sweep across the frame over a soft push-in; dreamy dissolves.", sceneSeconds: 3, speed: 1, transition: { kind: "dissolve", duration: 2 }, outro: { kind: "dipBlack", duration: 2 }, look: { ...LOOK, temperature: 18, exposure: 0.05, contrast: 1.02, saturation: 1.08 }, fx: { lightLeak: 0.6, pushIn: 0.06, vignette: 0.2, fadeIn: 0.6 } },
+  { id: "energy", name: "Beat shake", hint: "Each hard cut lands with a camera shake, a punch zoom and a short flash.", sceneSeconds: 2.5, speed: 1, transition: null, outro: { kind: "dipWhite", duration: 2 }, look: { ...LOOK, contrast: 1.18, saturation: 1.25 }, fx: { shake: 0.25, punch: 0.12, flash: 0.1, fadeIn: 0.2 } },
+  { id: "vhs", name: "VHS", hint: "Analogue video: a constant RGB shimmer, heavy grain and a dark vignette; hard cuts.", sceneSeconds: 3, speed: 1, transition: null, outro: { kind: "dipBlack", duration: 2 }, look: { ...LOOK, contrast: 1.08, saturation: 1.15 }, fx: { glitch: 0.18, grain: 0.12, vignette: 0.3, fadeIn: 0.1 } },
 ];
 
 export const DEFAULT_INTRO_STYLE: IntroStyleId = "cinematic";
@@ -252,6 +262,9 @@ export function introZoom(f: IntroFrame | null): number {
   let zoom = 1;
   if (fx.pushIn) zoom *= 1 + fx.pushIn * ease(f.local / Math.max(0.01, f.length));
   if (fx.punch && f.role === "scene") zoom *= 1 + fx.punch * Math.max(0, 1 - f.local / 0.35) ** 2;
+  // Drift and shake move the picture inside the frame; a little base zoom gives them room so no edge shows.
+  if (fx.drift && f.role === "scene") zoom *= 1 + fx.drift;
+  if (fx.shake && f.role === "scene") zoom *= 1.03;
   return zoom;
 }
 
@@ -280,7 +293,20 @@ export function drawIntroFx(ctx: Ctx, w: number, h: number, f: IntroFrame, proje
   const zoom = introZoomAt(f, blend);
   const glitch = fx.glitch && f.role === "scene" && f.local < fx.glitch ? 1 - f.local / fx.glitch : 0;
   const blur = f.role === "card" && card.blur ? Math.min(h * 0.006, 24) * ease(f.local / Math.max(0.01, card.fade * 1.2)) * leave : 0;
-  if (zoom !== 1 || glitch > 0 || blur > 0.3) {
+  // Pan (Ken Burns) and shake slide the zoomed picture within its own headroom.
+  let offX = 0, offY = 0;
+  if (fx.drift && f.role === "scene") {
+    const p = ease(f.local / Math.max(0.01, f.length)) - 0.5; // −0.5 … +0.5 across the scene
+    const dir = f.index % 3;
+    if (dir === 2) offY = -p * fx.drift * h;
+    else offX = (dir === 0 ? -1 : 1) * p * fx.drift * w;
+  }
+  if (fx.shake && f.role === "scene" && f.local < fx.shake) {
+    const s = (1 - f.local / fx.shake) ** 2 * w * 0.012;
+    offX += (hash(frameNo * 7 + 1) - 0.5) * 2 * s;
+    offY += (hash(frameNo * 7 + 2) - 0.5) * 2 * s;
+  }
+  if (zoom !== 1 || glitch > 0 || blur > 0.3 || offX !== 0 || offY !== 0) {
     const a = scratch.a.getContext("2d") as Ctx;
     a.save();
     a.globalCompositeOperation = "source-over";
@@ -289,7 +315,7 @@ export function drawIntroFx(ctx: Ctx, w: number, h: number, f: IntroFrame, proje
     a.clearRect(0, 0, w, h);
     a.drawImage(ctx.canvas, 0, 0, w, h);
     a.restore();
-    const dw = w * zoom, dh = h * zoom, dx = (w - dw) / 2, dy = (h - dh) / 2;
+    const dw = w * zoom, dh = h * zoom, dx = (w - dw) / 2 + offX, dy = (h - dh) / 2 + offY;
     if (glitch > 0) {
       // RGB split: green stays, red and blue slide apart; then a few horizontal slices jump sideways.
       const shift = w * 0.014 * glitch * (0.5 + hash(frameNo * 3 + 1));
@@ -381,6 +407,22 @@ export function drawIntroFx(ctx: Ctx, w: number, h: number, f: IntroFrame, proje
       ctx.fillRect(-192 * 2, -192 * 2, w / s + 192 * 4, h / s + 192 * 4);
       ctx.restore();
     }
+  }
+  if (fx.lightLeak && leave > 0) {
+    // A warm glow that drifts across the frame over the intro; screened on so it only lifts, never darkens.
+    const t = f.introT;
+    const cx = (0.25 + 0.5 * (0.5 + 0.5 * Math.sin(t * 0.8))) * w;
+    const cy = (0.3 + 0.2 * Math.sin(t * 0.6 + 1)) * h;
+    const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, Math.hypot(w, h) * 0.55);
+    const a = fx.lightLeak * leave;
+    g.addColorStop(0, `rgba(255,186,96,${(0.5 * a).toFixed(3)})`);
+    g.addColorStop(0.5, `rgba(255,120,60,${(0.18 * a).toFixed(3)})`);
+    g.addColorStop(1, "rgba(255,120,60,0)");
+    ctx.save();
+    ctx.globalCompositeOperation = "screen";
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, w, h);
+    ctx.restore();
   }
   if (fx.letterbox) {
     // The bars open out as the intro hands over: with the open ending they slide away across the dissolve.
