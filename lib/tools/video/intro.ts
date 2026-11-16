@@ -664,6 +664,19 @@ export function moveScene(project: Project, clipId: string, dir: -1 | 1): Clip[]
   return stampStyle(scenes, main, project, cardId);
 }
 
+/** Move a scene to sit just before another scene (or to the end when `beforeId` is null) — for drag-and-drop reordering. */
+export function reorderScene(project: Project, clipId: string, beforeId: string | null): Clip[] {
+  const { scenes, main, cardId } = parts(project);
+  const i = scenes.findIndex((c) => c.id === clipId);
+  if (i < 0 || beforeId === clipId) return project.clips;
+  const rest = scenes.filter((c) => c.id !== clipId);
+  const at = beforeId === null ? rest.length : rest.findIndex((c) => c.id === beforeId);
+  if (at < 0) return project.clips;
+  const next = [...rest.slice(0, at), scenes[i], ...rest.slice(at)];
+  if (next.every((c, k) => c.id === scenes[k].id)) return project.clips;
+  return stampStyle(next, main, project, cardId);
+}
+
 /** Set a scene's timeline length, keeping its start in the source where the footage allows; the card follows. */
 export function setSceneSeconds(project: Project, clipId: string, seconds: number): Clip[] {
   const { scenes, main, cardId } = parts(project);

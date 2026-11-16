@@ -3,7 +3,7 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import Link from "next/link";
 import { normalizeObscure } from "@/lib/tools/video/obscure";
-import { AlertTriangle, Camera, ImageIcon, ChevronDown, ChevronRight, ChevronUp, Sparkles, Clapperboard, Crop, Download, FolderOpen, Gauge, Heart, Loader, Maximize2, Minimize2, Music, Pause, Play, Plus, Repeat, Save, Scissors, SkipBack, SkipForward, SlidersHorizontal, Smartphone, Square, StepBack, StepForward, Trash2, Type, Upload, Volume2, VolumeX, Keyboard, Search, Shuffle, X, ZoomIn } from "lucide-react";
+import { AlertTriangle, Camera, ImageIcon, ChevronDown, ChevronRight, ChevronUp, GripVertical, Sparkles, Clapperboard, Crop, Download, FolderOpen, Gauge, Heart, Loader, Maximize2, Minimize2, Music, Pause, Play, Plus, Repeat, Save, Scissors, SkipBack, SkipForward, SlidersHorizontal, Smartphone, Square, StepBack, StepForward, Trash2, Type, Upload, Volume2, VolumeX, Keyboard, Search, Shuffle, X, ZoomIn } from "lucide-react";
 import { makeRoomForAll, makeRoomForTransition, newShort, timelineDuration as shortTimelineDuration, type EditorMode, type Short } from "@/lib/tools/video/project";
 import { DEFAULT_SHORT_SECONDS, MIN_SHORT_SECONDS, SHORTS_FOLDER, clampShort, seamCandidates, seamScore, shortBytes, shortChecks, shortFileName, shortPostText, shortProject, shortStem, shortTemplate, shortTemplateProject, shortsFromMoments, suggestWindows, titlesIntoShort, viewFor } from "@/lib/tools/video/short-mode";
 import { scoreMoments as scoreShortMoments } from "@/lib/tools/video/intro";
@@ -28,7 +28,7 @@ import { drawTransition } from "@/lib/tools/video/transitions";
 import { buildDlogLut, deriveLut, fetchOfficialLut, lutToCube, parseCube, type Lut3D } from "@/lib/tools/video/lut";
 import { fmtBytes, fmtDuration, fmtMs, type ExportProgress, type SpeedPriors, type StepProgress } from "@/lib/tools/video/progress";
 import { buildProxy, drawOverlays, encoderSupport, exportProject, fixLevel, FrameComposer, MAX_AUDIBLE_SPEED, measureFile, measureLoudness, MIN_AUDIBLE_SPEED, probe, probeKeyframes, renderFrame, renderSceneThumbs, scanMoments, scanMotion, Steadier, type ExportFault, type ExportManifest, type PartStore, type JoinInfo } from "@/lib/tools/video/engine";
-import { INTRO_STYLES, addSceneAt, buildIntro, describeIntro, drawIntroFx, hasIntro, introCandidates, introFrameAt, introLength, introRegion, introStyle, mainClips, moveScene, pickMoments, removeIntro, removeScene, restyleIntro, sceneSecondsFor, scoreMoments, setSceneSeconds, shiftAfterIntro, styledGrade, sceneFootage, minSceneSeconds, introBlendAt } from "@/lib/tools/video/intro";
+import { INTRO_STYLES, addSceneAt, buildIntro, describeIntro, drawIntroFx, hasIntro, introCandidates, introFrameAt, introLength, introRegion, introStyle, mainClips, moveScene, reorderScene, pickMoments, removeIntro, removeScene, restyleIntro, sceneSecondsFor, scoreMoments, setSceneSeconds, shiftAfterIntro, styledGrade, sceneFootage, minSceneSeconds, introBlendAt } from "@/lib/tools/video/intro";
 import { ProjectStore, hasFileSystemAccess, AUTOSAVE_FILE, FRAMES_DIR, PROJECT_FILE, PROXY_DIR } from "@/lib/tools/video/store";
 import { cn } from "@/lib/utils";
 import { LookPicker } from "./video-look-picker";
@@ -440,6 +440,8 @@ export function VideoEditorWidget() {
   const [thumbs, setThumbs] = useState<Map<string, string>>(() => new Map());
   const [introCount, setIntroCount] = useState(6);
   const [introScan, setIntroScan] = useState(true);
+  // Drag-and-drop reordering of intro scenes: which scene is being dragged and where it would drop.
+  const [sceneDrag, setSceneDrag] = useState<{ id: string; overId: string | null; after: boolean } | null>(null);
   const stopAtRef = useRef<number | null>(null);
   const fxScratchRef = useRef<{ a: OffscreenCanvas; b: OffscreenCanvas; w: number; h: number } | null>(null);
   const projectRef = useRef<Project | null>(null);
@@ -3050,6 +3052,16 @@ export function VideoEditorWidget() {
   };
   const atIntroEnd = introReg ? introReg.end : 0;
   const canUseMoment = mainClips(placed).length > 0 && playhead >= atIntroEnd - 1e-3;
+  // Drop the dragged scene where the indicator shows; dropping on the title card sends it to the end.
+  const dropScene = () => {
+    const d = sceneDrag;
+    setSceneDrag(null);
+    if (!d || d.overId === null || d.overId === d.id) return;
+    const scenes = introReg?.scenes ?? [];
+    const idx = scenes.findIndex((c) => c.id === d.overId);
+    const beforeId = idx < 0 ? null : d.after ? scenes[idx + 1]?.id ?? null : scenes[idx].id;
+    applyIntro((p) => reorderScene(p, d.id, beforeId));
+  };
   const setCard = (patch: Partial<IntroCard>) => setIntro({ card: { ...project.intro.card, ...patch } });
   const introCard = cardSettings(project.intro.card);
   const stopMin = project.stops?.minSeconds ?? stopDefaults.minSeconds;
@@ -5775,8 +5787,50 @@ export function VideoEditorWidget() {
                       {[...introReg.scenes, ...(introReg.card ? [introReg.card] : [])].map((c, i) => {
                         const isCard = c.introRole === "card";
                         const thumb = thumbs.get(c.id);
+                        const dragging = sceneDrag?.id === c.id;
+                        const dropHere = sceneDrag && sceneDrag.id !== c.id && sceneDrag.overId === c.id;
                         return (
-                          <div key={c.id} className="flex items-center gap-2 rounded-[var(--radius-sm)] border border-edge p-1" data-intro-scene={isCard ? "card" : i}>
+                          <div
+                            key={c.id}
+                            className={cn(
+                              "flex items-center gap-1.5 rounded-[var(--radius-sm)] border border-edge p-1 transition-shadow",
+                              dragging && "opacity-40",
+                              dropHere && (sceneDrag!.after ? "shadow-[inset_0_-2px_0_0_var(--accent)]" : "shadow-[inset_0_2px_0_0_var(--accent)]"),
+                            )}
+                            data-intro-scene={isCard ? "card" : i}
+                            data-scene-id={c.id}
+                            onDragOver={(e) => {
+                              if (!sceneDrag || sceneDrag.id === c.id) return;
+                              e.preventDefault();
+                              e.dataTransfer.dropEffect = "move";
+                              const r = e.currentTarget.getBoundingClientRect();
+                              const after = isCard ? false : e.clientY > r.top + r.height / 2;
+                              if (sceneDrag.overId !== c.id || sceneDrag.after !== after) setSceneDrag({ ...sceneDrag, overId: c.id, after });
+                            }}
+                            onDrop={(e) => {
+                              e.preventDefault();
+                              dropScene();
+                            }}
+                          >
+                            {!isCard ? (
+                              <span
+                                draggable
+                                onDragStart={(e) => {
+                                  e.dataTransfer.effectAllowed = "move";
+                                  e.dataTransfer.setData("text/plain", c.id);
+                                  setSceneDrag({ id: c.id, overId: null, after: false });
+                                }}
+                                onDragEnd={() => setSceneDrag(null)}
+                                className="shrink-0 cursor-grab touch-none px-0.5 text-faint hover:text-ink active:cursor-grabbing"
+                                title="Drag to reorder"
+                                aria-label={`Drag scene ${i + 1} to reorder`}
+                                data-scene-handle={i}
+                              >
+                                <GripVertical size={15} />
+                              </span>
+                            ) : (
+                              <span className="w-[19px] shrink-0" aria-hidden />
+                            )}
                             <button
                               type="button"
                               onClick={() => {
@@ -5814,6 +5868,7 @@ export function VideoEditorWidget() {
                           </div>
                         );
                       })}
+                      {introReg.scenes.length > 1 && <p className="px-1 text-[11px] text-faint">Drag a scene by its handle to reorder, or use the ↑↓ arrows.</p>}
                     </div>
                     <div className="space-y-1.5 rounded-[var(--radius-sm)] border border-edge p-2 text-[12px] text-muted" data-intro-card>
                       <div className="flex items-center justify-between gap-2">
