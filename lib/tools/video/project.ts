@@ -150,6 +150,13 @@ export interface MediaRef {
    */
   keyframeTimes?: number[];
   keyframeNote?: string;
+  /**
+   * When the recording was shot, in milliseconds since the Unix epoch (UTC), read from the file's own
+   * container time (moov/mvhd). Used to order clips by recorded time when the name carries no timestamp.
+   * `recordedAtNote` says why none could be read.
+   */
+  recordedAt?: number;
+  recordedAtNote?: string;
 }
 
 export interface Clip {
@@ -1735,6 +1742,57 @@ export function orderRecordings(media: MediaRef[]): MediaRef[] {
   });
 }
 
+/** How to order clips chronologically: by the timestamp in the file name, or by the file's own recorded time. */
+export type ClipOrderBy = "name" | "recorded";
+
+/** Whether a recording has a known time for the chosen ordering. */
+function mediaTimeKnown(m: MediaRef | undefined, by: ClipOrderBy): boolean {
+  if (!m) return false;
+  return by === "recorded" ? typeof m.recordedAt === "number" : recordingKey(m.name).time > 0;
+}
+
+/**
+ * Put the clips in shooting order by the chosen key — the timestamp in each recording's name (the DJI
+ * convention and the like) or its embedded recorded time. The intro clips at the head stay put; among the
+ * rest, split pieces of one recording keep together and move forward (by their in-point), and clips whose
+ * time is unknown hold their current relative order at the end. Returns the same array unchanged when it is
+ * already in that order. A join the new order would break (the clip before is no longer the same footage
+ * ending at the same frame) is dropped, as everywhere else order changes.
+ */
+export function orderClipsBy(clips: Clip[], media: Record<string, MediaRef>, by: ClipOrderBy): Clip[] {
+  const intro = clips.filter((c) => c.introRole);
+  const main = clips.filter((c) => !c.introRole);
+  const idx = new Map(main.map((c, i) => [c.id, i]));
+  const keyOf = (c: Clip) => {
+    const m = media[c.media];
+    if (by === "recorded") {
+      const r = m && typeof m.recordedAt === "number" ? m.recordedAt : null;
+      return { known: r != null, time: r ?? 0, seq: 0, chapter: 0 };
+    }
+    const k = m ? recordingKey(m.name) : { time: 0, seq: 0, chapter: 0 };
+    return { known: k.time > 0, ...k };
+  };
+  const sorted = [...main].sort((a, b) => {
+    const ka = keyOf(a), kb = keyOf(b);
+    if (ka.known !== kb.known) return ka.known ? -1 : 1; // unknown times sink to the end
+    if (!ka.known) return idx.get(a.id)! - idx.get(b.id)!; // both unknown: keep their order
+    return ka.time - kb.time || ka.seq - kb.seq || ka.chapter - kb.chapter || a.in - b.in || idx.get(a.id)! - idx.get(b.id)!;
+  });
+  const out = [...intro, ...sorted];
+  if (out.every((c, k) => c.id === clips[k].id)) return clips;
+  const prevBefore = new Map(clips.map((c, k) => [c.id, clips[k - 1]?.id ?? null]));
+  return out.map((c, k) => (c.joinedToPrevious && prevBefore.get(c.id) !== (out[k - 1]?.id ?? null) ? unjoin([c], c.id)[0] : c));
+}
+
+/** What ordering the clips by `by` would do: how many have a known time, and whether they are already in order. */
+export function clipOrderReport(clips: Clip[], media: Record<string, MediaRef>, by: ClipOrderBy): { total: number; known: number; moved: number; inOrder: boolean } {
+  const main = clips.filter((c) => !c.introRole);
+  const known = main.filter((c) => mediaTimeKnown(media[c.media], by)).length;
+  const sorted = orderClipsBy(clips, media, by);
+  const moved = sorted === clips ? 0 : sorted.filter((c, k) => c.id !== clips[k].id).length;
+  return { total: main.length, known, moved, inOrder: moved === 0 };
+}
+
 /** Swap an item with its neighbour — reordering clips changes playback order. */
 export function moveItem<T extends { id: string }>(list: T[], id: string, dir: -1 | 1): T[] {
   const i = list.findIndex((x) => x.id === id), j = i + dir;
@@ -2131,11 +2189,13 @@ export function exportFingerprint(p: Project): string {
     export: exportRest,
     media: Object.fromEntries(
       Object.entries(media).map(([id, m]) => {
-        const { keyframeTimes, keyframeNote, rotation, where, ...keep } = m;
+        const { keyframeTimes, keyframeNote, rotation, where, recordedAt, recordedAtNote, ...keep } = m;
         void keyframeTimes;
         void keyframeNote;
         void rotation;
         void where;
+        void recordedAt;
+        void recordedAtNote;
         return [id, keep];
       }),
     ),

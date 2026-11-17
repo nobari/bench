@@ -3,7 +3,7 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import Link from "next/link";
 import { normalizeObscure } from "@/lib/tools/video/obscure";
-import { AlertTriangle, Camera, ImageIcon, ChevronDown, ChevronRight, ChevronUp, GripVertical, LayoutGrid, List, Sparkles, Clapperboard, Crop, Download, FolderOpen, Gauge, Heart, Loader, Maximize2, Minimize2, Music, Pause, Play, Plus, Repeat, Save, Scissors, SkipBack, SkipForward, SlidersHorizontal, Smartphone, Square, StepBack, StepForward, Trash2, Type, Upload, Volume2, VolumeX, Keyboard, Search, Shuffle, X, ZoomIn } from "lucide-react";
+import { AlertTriangle, ArrowUpDown, Camera, Clock, FileText, ImageIcon, ChevronDown, ChevronRight, ChevronUp, GripVertical, LayoutGrid, List, Sparkles, Clapperboard, Crop, Download, FolderOpen, Gauge, Heart, Loader, Maximize2, Minimize2, Music, Pause, Play, Plus, Repeat, Save, Scissors, SkipBack, SkipForward, SlidersHorizontal, Smartphone, Square, StepBack, StepForward, Trash2, Type, Upload, Volume2, VolumeX, Keyboard, Search, Shuffle, X, ZoomIn } from "lucide-react";
 import { makeRoomForAll, makeRoomForTransition, newShort, timelineDuration as shortTimelineDuration, type EditorMode, type Short } from "@/lib/tools/video/project";
 import { DEFAULT_SHORT_SECONDS, MIN_SHORT_SECONDS, SHORTS_FOLDER, clampShort, seamCandidates, seamScore, shortBytes, shortChecks, shortFileName, shortPostText, shortProject, shortStem, shortTemplate, shortTemplateProject, shortsFromMoments, suggestWindows, titlesIntoShort, viewFor } from "@/lib/tools/video/short-mode";
 import { scoreMoments as scoreShortMoments } from "@/lib/tools/video/intro";
@@ -22,7 +22,8 @@ import { TITLE_PRESETS, applyTitlePreset, copyTitlesToShorts } from "@/lib/tools
 import { beatPeriod, cutToBeats, nearestBeat, punchIns, slowStretch, timelineBeats } from "@/lib/tools/video/beat-tools";
 import { analyseBeats } from "@/lib/tools/video/beats";
 import { decodeMono } from "@/lib/tools/video/engine";
-import { DEFAULT_EXPORT, NEUTRAL_GRADE, NEUTRAL_TRANSFORM, TITLE_ALIGNS, TITLE_FAMILIES, TITLE_FONTS, TITLE_POSITIONS, TITLE_SHADOWS, TITLE_WEIGHTS, TRANSITIONS, addTransitionAt, appendMusic, applyAudioTo, applyGradeTo, applyTransitionToAll, clipAt, crossfades, dbToGain, effectiveMusicEnd, estimateExport, exportRange, fmtTime, musicGainAt, musicLength, newId, newProject, newTitle, orderRecordings, placeClips, planExport, removeRange, reorderMusic, setTransition, splitClip, timelineDuration, titleLanes, transitionAt, transitionWindows, CLIP_SPEEDS, canMergeWithNext, clipLength, clipSpeed, groupOf, sourceTimeAt, mergeWithNext, moveClip, unjoin, updateClip, visibleCuts, type Clip, type MediaRef, type MusicTrack, type Project, type ProxyHeight, type Title, type TitleFont, isFileLutKind, FILE_LUT_KINDS, type FileLutKind, type LutKind, type MathLutKind, type TitleAlign, type TitlePosition, type TitleShadow, type Transition, type TransitionKind, type ExportTags, type IntroSettings, type IntroCard, DEFAULT_CARD, cardSettings, hasCard, reorderClip, parseTime, type SteadyLights, STEADY_FRAMES, clampMusicStart, musicUnused, musicBetween, type FillOrder, type FillSettings, type SongPrefs, describeWhere, nameSome, whereSummary, type MediaWhere, exportFingerprint, SOUND_MODES, SOUND_LABELS, soundLevels, applySoundLevels, soundState, type SoundMode, type SoundLevels, FRAMES, FRAME_LABELS, MAX_REFRAME_ZOOM, MIN_CLIP_SPEED, MAX_CLIP_SPEED, type Frame, type Layout, type ReframeKey, type SoundRegion, type RegionPreset, REGION_PRESETS, MIN_REGION_SECONDS, MAX_REGION_RAMP, regionPreset, newRegion, clampSpan, fitSpan, moveSpan, tidySpans, cameraGainAt, regionMusicGain, type Span, type Zoom, DEFAULT_ZOOM, MAX_ZOOM_EASE, newZoom, zoomAt, zoomLabel, describeZooms, OPENINGS, DEFAULT_OPENING, type OpeningKind } from "@/lib/tools/video/project";
+import { DEFAULT_EXPORT, NEUTRAL_GRADE, NEUTRAL_TRANSFORM, TITLE_ALIGNS, TITLE_FAMILIES, TITLE_FONTS, TITLE_POSITIONS, TITLE_SHADOWS, TITLE_WEIGHTS, TRANSITIONS, addTransitionAt, appendMusic, applyAudioTo, applyGradeTo, applyTransitionToAll, clipAt, crossfades, dbToGain, effectiveMusicEnd, estimateExport, exportRange, fmtTime, musicGainAt, musicLength, newId, newProject, newTitle, orderRecordings, placeClips, planExport, removeRange, reorderMusic, setTransition, splitClip, timelineDuration, titleLanes, transitionAt, transitionWindows, CLIP_SPEEDS, canMergeWithNext, clipLength, clipSpeed, groupOf, sourceTimeAt, mergeWithNext, moveClip, unjoin, updateClip, visibleCuts, type Clip, type MediaRef, type MusicTrack, type Project, type ProxyHeight, type Title, type TitleFont, isFileLutKind, FILE_LUT_KINDS, type FileLutKind, type LutKind, type MathLutKind, type TitleAlign, type TitlePosition, type TitleShadow, type Transition, type TransitionKind, type ExportTags, type IntroSettings, type IntroCard, DEFAULT_CARD, cardSettings, hasCard, reorderClip, parseTime, type SteadyLights, STEADY_FRAMES, clampMusicStart, musicUnused, musicBetween, type FillOrder, type FillSettings, type SongPrefs, describeWhere, nameSome, whereSummary, type MediaWhere, exportFingerprint, SOUND_MODES, SOUND_LABELS, soundLevels, applySoundLevels, soundState, type SoundMode, type SoundLevels, FRAMES, FRAME_LABELS, MAX_REFRAME_ZOOM, MIN_CLIP_SPEED, MAX_CLIP_SPEED, type Frame, type Layout, type ReframeKey, type SoundRegion, type RegionPreset, REGION_PRESETS, MIN_REGION_SECONDS, MAX_REGION_RAMP, regionPreset, newRegion, clampSpan, fitSpan, moveSpan, tidySpans, cameraGainAt, regionMusicGain, type Span, type Zoom, DEFAULT_ZOOM, MAX_ZOOM_EASE, newZoom, zoomAt, zoomLabel, describeZooms, OPENINGS, DEFAULT_OPENING, type OpeningKind, orderClipsBy, clipOrderReport, recordingKey, type ClipOrderBy } from "@/lib/tools/video/project";
+import { readRecordedAt } from "@/lib/tools/video/recorded-at";
 import { gainToReach, YOUTUBE_LUFS, type Loudness } from "@/lib/tools/video/loudness";
 import { drawTransition } from "@/lib/tools/video/transitions";
 import { buildDlogLut, deriveLut, fetchOfficialLut, lutToCube, parseCube, type Lut3D } from "@/lib/tools/video/lut";
@@ -1869,6 +1870,54 @@ export function VideoEditorWidget() {
   const fillKeyframesRef = useRef(fillKeyframes);
   fillKeyframesRef.current = fillKeyframes;
 
+  // The recorded time (each file's own container creation time) read in the background, so clips can be ordered
+  // by when they were shot. No undo step: it only records a fact about the file. A file that is not connected
+  // right now is left for a later pass. Reads only the moov atom, so it is cheap even on 8K originals.
+  const recordedFill = useRef<Set<string>>(new Set());
+  const recordedRunning = useRef(false);
+  const [recordedBusy, setRecordedBusy] = useState(false);
+  const fillRecordedAt = async (p: Project) => {
+    if (recordedRunning.current) return; // one pass at a time — the effect re-fires on every media patch
+    const patchMedia = (id: string, patch: Partial<MediaRef>) =>
+      setProjectState((q) => {
+        if (!q.media[id]) return q;
+        const next = { ...q, media: { ...q.media, [id]: { ...q.media[id], ...patch } } };
+        store.autosave(next);
+        return next;
+      });
+    const todo = Object.values(p.media).filter((m) => typeof m.recordedAt !== "number" && !m.recordedAtNote && !recordedFill.current.has(m.id));
+    if (!todo.length) return;
+    recordedRunning.current = true;
+    setRecordedBusy(true);
+    try {
+      for (const m of todo) {
+        recordedFill.current.add(m.id);
+        const f = await store.getFile(m.id);
+        if (!f) {
+          recordedFill.current.delete(m.id); // not connected now — try again on the next pass
+          continue;
+        }
+        try {
+          const t = await readRecordedAt(f);
+          patchMedia(m.id, t != null ? { recordedAt: t } : { recordedAtNote: "no recorded time in the file" });
+        } catch (e) {
+          patchMedia(m.id, { recordedAtNote: e instanceof Error ? e.message : "the recorded time could not be read" });
+        }
+      }
+    } finally {
+      recordedRunning.current = false;
+      setRecordedBusy(false);
+    }
+  };
+  const fillRecordedAtRef = useRef(fillRecordedAt);
+  fillRecordedAtRef.current = fillRecordedAt;
+  // Read recorded times lazily, only once the Trim tab (where ordering lives) is open.
+  useEffect(() => {
+    if (tab !== "trim") return;
+    const p = projectRef.current;
+    if (p) queueMicrotask(() => void fillRecordedAtRef.current(p));
+  }, [tab, filesVersion, project.media]);
+
   const makeProxy = async (m: MediaRef, file: File, height: ProxyHeight, force = false) => {
     if (!height) {
       proxyUrls.current.delete(m.id);
@@ -2388,6 +2437,25 @@ export function VideoEditorWidget() {
 
   // Grade, crop and audio changes reach every clip of a joined run, so a hidden cut stays invisible.
   const update = (id: string, patch: Partial<Clip>) => setProject((p) => ({ ...p, clips: updateClip(p.clips, id, patch) }));
+  /** Put the clips in shooting order by the chosen key, and report how many moved. */
+  const orderClips = (by: ClipOrderBy) => {
+    const rep = clipOrderReport(project.clips, project.media, by);
+    const which = by === "recorded" ? "recorded" : "file-name";
+    if (rep.inOrder) {
+      setStatus(rep.known ? `Already in ${which} order` : `No clip has a ${by === "recorded" ? "recorded time" : "date in its name"} to order by`);
+      return;
+    }
+    setProject((p) => ({ ...p, clips: orderClipsBy(p.clips, p.media, by) }));
+    const tail = rep.known < rep.total ? ` · ${rep.total - rep.known} with no ${by === "recorded" ? "recorded time" : "date in the name"} left at the end` : "";
+    setStatus(`${rep.moved} clip${rep.moved === 1 ? "" : "s"} moved into ${which} order${tail}`);
+  };
+  const nameOrder = useMemo(() => clipOrderReport(project.clips, project.media, "name"), [project.clips, project.media]);
+  const recordedOrder = useMemo(() => clipOrderReport(project.clips, project.media, "recorded"), [project.clips, project.media]);
+  /** A recording's wall-clock as yyyy-mm-dd hh:mm; read with UTC getters so the camera's own clock shows unshifted. */
+  const fmtStamp = (ms: number) => {
+    const d = new Date(ms), p = (n: number) => String(n).padStart(2, "0");
+    return `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())} ${p(d.getUTCHours())}:${p(d.getUTCMinutes())}`;
+  };
   const mergeKind = current ? canMergeWithNext(project.clips, current.id) : null;
   const currentRun = current ? groupOf(project.clips, current.id) : [];
   const selectedRun = useMemo(() => new Set(selected ? groupOf(project.clips, selected) : []), [project.clips, selected]);
@@ -5740,6 +5808,57 @@ export function VideoEditorWidget() {
                       Out (s)
                       <input type="number" step={0.01} value={current.out} onChange={(e) => update(current.id, { out: Math.min(project.media[current.media]?.duration ?? current.out, Math.max(current.in + 0.1, Number(e.target.value))) })} className={cn(INPUT, "mt-1 font-mono")} />
                     </label>
+                  </div>
+                )}
+                {placed.some((c) => !c.introRole) && (
+                  <div className="space-y-2 rounded-[var(--radius-sm)] border border-edge p-2" data-reorder>
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="flex items-center gap-1.5 font-medium text-ink">
+                        <ArrowUpDown size={13} /> Order clips
+                      </span>
+                      <span className="text-[12px] text-faint tabular">{placed.filter((c) => !c.introRole).length} clips</span>
+                    </div>
+                    <p className="text-[12px] text-faint">
+                      Put the recordings back in the order they were shot — by the date and time in the file name (DJI, GoPro, Pixel and the like) or by the time stored inside each file. Split pieces of one recording stay together; anything with no known time stays at the end. ⌘Z undoes it.
+                    </p>
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <button type="button" onClick={() => orderClips("name")} disabled={!nameOrder.known} className={GHOST} title="Order by the timestamp in each file's name" data-order-name>
+                        <FileText size={13} /> By file name {nameOrder.known ? (nameOrder.inOrder ? "· in order" : `· ${nameOrder.moved} to move`) : "· none named"}
+                      </button>
+                      <button type="button" onClick={() => orderClips("recorded")} disabled={!recordedOrder.known || recordedBusy} className={GHOST} title="Order by the recorded time stored inside each file" data-order-recorded>
+                        <Clock size={13} /> By recorded time {recordedBusy ? "· reading…" : recordedOrder.known ? (recordedOrder.inOrder ? "· in order" : `· ${recordedOrder.moved} to move`) : "· not read yet"}
+                      </button>
+                    </div>
+                    <ul className="max-h-60 space-y-0.5 overflow-y-auto" data-clip-meta-list>
+                      {placed.filter((c) => !c.introRole).map((c, i) => {
+                        const m = project.media[c.media];
+                        const nameT = m ? recordingKey(m.name).time : 0;
+                        const recT = m?.recordedAt;
+                        const sel = c.id === selected;
+                        const sizeStr = m ? (m.size >= 1e9 ? `${(m.size / 1e9).toFixed(2)} GB` : `${Math.round(m.size / 1e6)} MB`) : "";
+                        return (
+                          <li key={c.id} className={cn("rounded-[3px] border px-1.5 py-1", sel ? "border-accent bg-accent/10" : "border-transparent hover:border-edge")} data-clip-row data-clip-id={c.id}>
+                            <button type="button" onClick={() => { setSelected(c.id); stepTo(c.start + 0.001); }} className="flex w-full items-center gap-2 text-left text-[12.5px]">
+                              <span className="font-mono text-faint tabular">{String(i + 1).padStart(2, "0")}</span>
+                              <span className="truncate text-ink">{m?.name ?? c.media}</span>
+                              <span className="ml-auto font-mono text-faint tabular">{fmtTime(clipLength(c))}</span>
+                            </button>
+                            <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 pl-6 font-mono text-[11px] text-faint tabular">
+                              <span title="Date and time in the file name" className="flex items-center gap-1" data-clip-name-time={nameT || ""}>
+                                <FileText size={11} /> {nameT ? fmtStamp(nameT) : "—"}
+                              </span>
+                              <span title="Recorded time stored inside the file" className="flex items-center gap-1" data-clip-rec-time={recT ?? ""}>
+                                <Clock size={11} /> {recT != null ? fmtStamp(recT) : m?.recordedAtNote ? "none" : "…"}
+                              </span>
+                              {m?.width && m?.height ? <span>{m.width}×{m.height}</span> : null}
+                              {m?.fps ? <span>{Math.round(m.fps)} fps</span> : null}
+                              {m?.codec ? <span className="uppercase">{m.codec}</span> : null}
+                              {sizeStr ? <span>{sizeStr}</span> : null}
+                            </div>
+                          </li>
+                        );
+                      })}
+                    </ul>
                   </div>
                 )}
               </>
