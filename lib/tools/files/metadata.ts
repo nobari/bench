@@ -324,6 +324,7 @@ export function readExif(tiff: Uint8Array): ExifResult {
   const fmtRat = (r: Rat) => (r.den === 0 ? "0" : trimNum(r.num / r.den));
   const gpsRats: Record<number, Rat[]> = {};
   const gpsStr: Record<number, string> = {};
+  const gpsNum: Record<number, number[]> = {};
 
   const readIfd = (ifd: number, which: "ifd0" | "exif" | "gps", depth: number) => {
     if (ifd < 8 || ifd + 2 > tiff.length || depth > 3) return;
@@ -349,6 +350,7 @@ export function readExif(tiff: Uint8Array): ExifResult {
       if (which === "gps") {
         if (rats.length) gpsRats[tag] = rats;
         if (strings.length) gpsStr[tag] = strings[0];
+        if (nums.length) gpsNum[tag] = nums;
       }
       const dict = which === "gps" ? GPS_TAGS : which === "exif" ? EXIF_TAGS : IFD0_TAGS;
       const name = dict[tag];
@@ -366,7 +368,7 @@ export function readExif(tiff: Uint8Array): ExifResult {
   };
 
   readIfd(r32(4), "ifd0", 0);
-  out.fix = gpsFix(gpsRats, gpsStr);
+  out.fix = gpsFix(gpsRats, gpsStr, gpsNum);
   return out;
 }
 
@@ -389,7 +391,7 @@ function trimNum(n: number): string {
 }
 
 /** Turn the GPS sub-IFD rationals into a decimal fix. */
-function gpsFix(rats: Record<number, Rat[]>, strs: Record<number, string>): GpsFix | null {
+function gpsFix(rats: Record<number, Rat[]>, strs: Record<number, string>, nums: Record<number, number[]> = {}): GpsFix | null {
   const dms = (parts: Rat[] | undefined): number | null => {
     if (!parts || parts.length < 3) return null;
     const [d, m, s] = parts.map((r) => (r.den === 0 ? 0 : r.num / r.den));
@@ -404,7 +406,9 @@ function gpsFix(rats: Record<number, Rat[]>, strs: Record<number, string>): GpsF
   const lon = lonRef.startsWith("W") ? -lonMag : lonMag;
   if (!isFinite(lat) || !isFinite(lon) || (lat === 0 && lon === 0)) return null;
   const altR = rats[0x0006]?.[0];
-  const altitude = altR && altR.den !== 0 ? altR.num / altR.den : undefined;
+  let altitude = altR && altR.den !== 0 ? altR.num / altR.den : undefined;
+  // GPSAltitudeRef: 1 means below sea level, so the stored magnitude is negated.
+  if (altitude != null && nums[0x0005]?.[0] === 1) altitude = -altitude;
   const latS = lat.toFixed(6);
   const lonS = lon.toFixed(6);
   return {
@@ -525,6 +529,15 @@ export function readBmff(b: Uint8Array): BmffMeta {
       }
     } else if (type === "ilst") {
       readIlst(b, body, bodyEnd, keys, meta);
+    } else if (path.endsWith("/udta") && type.charCodeAt(0) === 0xa9) {
+      // QuickTime udta ©-atoms: a (u16 length, u16 language, text) entry. ©xyz carries the ISO-6709 location.
+      const label = UDTA_ATOMS[type];
+      if (label && bodyEnd - body >= 4) {
+        const len = u16be(b, body);
+        const text = len > 0 && body + 4 + len <= bodyEnd ? tdUtf8.decode(b.subarray(body + 4, body + 4 + len)).replace(/\0+$/g, "").trim() : tdUtf8.decode(b.subarray(body, bodyEnd)).replace(/\0+$/g, "").trim();
+        if (text && meta.tags[label] == null) meta.tags[label] = text;
+        if (type === "©xyz" && text) meta.fix = parseIso6709(text) ?? meta.fix;
+      }
     }
   };
 
@@ -538,6 +551,15 @@ export function readBmff(b: Uint8Array): BmffMeta {
 }
 
 const CONTAINER = new Set(["moov", "trak", "mdia", "minf", "stbl", "udta", "edts", "mvex", "moof", "traf"]);
+
+/** QuickTime udta ©-atoms we surface (the © is U+00A9). ©xyz is the ISO-6709 location DJI/Android write. */
+const UDTA_ATOMS: Record<string, string> = {
+  "©xyz": "Location",
+  "©nam": "Title",
+  "©ART": "Artist",
+  "©cmt": "Comment",
+  "©day": "Date",
+};
 
 function readIlst(b: Uint8Array, start: number, stop: number, keys: string[], meta: BmffMeta) {
   let o = start;
@@ -764,9 +786,10 @@ export function pdfGroups(pdf: PdfMeta): MetaGroup[] {
 export async function readAll(
   input: { name: string; size: number; type: string; lastModified: number | null },
   bytes: Uint8Array,
+  opts?: { sha256?: string },
 ): Promise<MetaReport> {
   const sniff = sniffType(bytes, input.name);
-  const [located, sha256] = await Promise.all([safeScan(bytes), sha256Hex(bytes)]);
+  const [located, sha256] = await Promise.all([safeScan(bytes), opts?.sha256 ? Promise.resolve(opts.sha256) : sha256Hex(bytes)]);
   const groups: MetaGroup[] = [];
   let gps: GpsFix | null = null;
 
