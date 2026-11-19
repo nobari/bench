@@ -96,7 +96,7 @@ export function videoTemplate(p: Project): Record<string, unknown> {
     project,
     instructions: [
       "This one file describes the intro, the titles and the labels (pictures) of a video. Fill it in, save it, and import it in the Intro or Titles tab of the Bench video editor (Import JSON): every part the file carries is applied at once.",
-      "intro: set enabled to false for no intro. style is the id of one of options.introStyles (each lists its name and look). scenes (1–20) is how many moments are lifted from the footage when moments is empty — the editor then picks lively ones itself. sceneSeconds is seconds per scene (null = the style's own; never shorter than the style's transition plus 0.3 s). card ends the intro: enabled (false = no card), text (empty = the project name), subtitle, seconds (0 = no card), position (tl tc tr ml mc mr bl bc br), font (sans, serif, mono, rounded or a font family name), color (#rrggbb), size (title height as a fraction of the frame height, 0.04–0.2), dim (how dark the footage goes under the title, 0–0.9), blur (true softens the footage), caps (true sets the subtitle in spaced capitals) and fade (seconds the title takes to rise in). outro is how the intro hands over to the video: look (the look's own transition) or open (the title fades and the letterbox bars slide away over a dissolve into the video). keepAudio keeps the scenes' own sound instead of playing them quiet under the music. moments, optional, names the exact moments to use, in order: file is one of project.clips files and at is seconds into that recording.",
+      "intro: set enabled to false for no intro. style is the id of one of options.introStyles (each lists its name and look). scenes (1 or more, no upper limit) is how many moments are lifted from the footage when moments is empty — the editor then picks lively ones itself. sceneSeconds is seconds per scene (null = the style's own; never shorter than the style's transition plus 0.3 s). card ends the intro: enabled (false = no card), text (empty = the project name), subtitle, seconds (0 = no card), position (tl tc tr ml mc mr bl bc br), font (sans, serif, mono, rounded or a font family name), color (#rrggbb), size (title height as a fraction of the frame height, 0.04–0.2), dim (how dark the footage goes under the title, 0–0.9), blur (true softens the footage), caps (true sets the subtitle in spaced capitals) and fade (seconds the title takes to rise in). outro is how the intro hands over to the video: look (the look's own transition) or open (the title fades and the letterbox bars slide away over a dissolve into the video). keepAudio keeps the scenes' own sound instead of playing them quiet under the music. moments, optional, names the exact moments to use, in order: file is one of project.clips files and at is seconds into that recording.",
       "Avoid jumps: a cross dissolve shows the outgoing clip past its end and the incoming clip before its start, so each side of a cut needs its half of the transition plus a margin of handleMarginSeconds inside the recording. Pick every moment's at inside that clip's momentRange (recording seconds): it already leaves the handles and the margin on both sides of the scene; outside it the scene is moved or shortened, and a scene with no room would freeze. Likewise keep a title's start and end at least transitionSeconds / 2 + handleMarginSeconds away from a cut between clips (clips lists start and end on the timeline) unless the title spans the cut entirely.",
       ...base.instructions.slice(1, -1),
       LABELS_INSTRUCTION,
@@ -105,7 +105,7 @@ export function videoTemplate(p: Project): Record<string, unknown> {
     options: {
       ...base.options,
       introStyles: INTRO_STYLES.map((s) => ({ id: s.id, name: s.name, look: s.hint, sceneSeconds: s.sceneSeconds })),
-      introScenesRange: [1, 20],
+      introScenesRange: [1, null],
       introSceneSecondsRange: [0.5, 10],
       introCardSecondsRange: [0, 10],
       introCardPositions: TITLE_POSITIONS,
@@ -185,9 +185,9 @@ function parseIntro(raw: unknown, p: Project, warnings: string[]): IntroImport {
   }
   const keepAudio = typeof r.keepAudio === "boolean" ? r.keepAudio : p.intro.keepAudio;
   let scenes = Math.round(num(r.scenes) ?? 6);
-  if (scenes < 1 || scenes > 20) {
-    warnings.push(`intro: scenes ${scenes} is outside 1–20, clamped`);
-    scenes = Math.max(1, Math.min(20, scenes));
+  if (scenes < 1) {
+    warnings.push(`intro: scenes ${scenes} is below 1, raised to 1`);
+    scenes = 1;
   }
   const moments: Moment[] = [];
   if (Array.isArray(r.moments)) {
